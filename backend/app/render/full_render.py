@@ -1,11 +1,15 @@
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from app.models.scene import TemplateName
+
+RENDER_TIMEOUT_SECONDS = 120
 
 
 def render_scene_to_mp4(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
@@ -17,18 +21,29 @@ def render_scene_thumbnail(template: TemplateName, params: BaseModel, output_pat
 
 
 def _run_render_worker(template: TemplateName, params: BaseModel, output_path: Path, mode: str) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    params_json_path = output_path.with_suffix(".params.json")
-    params_json_path.write_text(json.dumps(params.model_dump(mode="json")))
+    scratch_dir = tempfile.mkdtemp()
+    try:
+        params_json_path = Path(scratch_dir) / "params.json"
+        params_json_path.write_text(json.dumps(params.model_dump(mode="json")))
 
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "app.render.render_worker",
-            template.value, str(params_json_path), str(output_path), mode,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Render subprocess failed:\n{result.stdout}\n{result.stderr}")
-    return output_path
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "app.render.render_worker",
+                    template.value, str(params_json_path), str(output_path), mode, scratch_dir,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=RENDER_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Render subprocess timed out after {RENDER_TIMEOUT_SECONDS}s:\n"
+                f"{exc.stdout or ''}\n{exc.stderr or ''}"
+            ) from exc
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Render subprocess failed:\n{result.stdout}\n{result.stderr}")
+        return output_path
+    finally:
+        shutil.rmtree(scratch_dir, ignore_errors=True)

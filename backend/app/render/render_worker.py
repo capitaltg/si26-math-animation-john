@@ -4,9 +4,14 @@ from pathlib import Path
 
 from app.templates.registry import get_template
 
+VALID_MODES = {"full", "thumbnail"}
+
 
 def main() -> None:
-    template_name, params_json_path, output_path_str, mode = sys.argv[1:5]
+    template_name, params_json_path, output_path_str, mode, scratch_dir_str = sys.argv[1:6]
+    if mode not in VALID_MODES:
+        raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
+
     params_data = json.loads(Path(params_json_path).read_text())
     scene_cls, params_cls = get_template(template_name)
     params = params_cls.model_validate(params_data)
@@ -15,7 +20,7 @@ def main() -> None:
 
     output_path = Path(output_path_str)
     overrides = {
-        "media_dir": str(output_path.parent),
+        "media_dir": scratch_dir_str,
         "output_file": output_path.stem,
         "disable_caching": True,
     }
@@ -31,9 +36,13 @@ def main() -> None:
         scene.render()
 
     ext = "png" if mode == "thumbnail" else "mp4"
-    matches = list(output_path.parent.rglob(f"{output_path.stem}.{ext}"))
-    if not matches:
-        raise RuntimeError(f"Manim did not produce the expected {ext} file for {output_path.stem}")
+    matches = list(Path(scratch_dir_str).rglob(f"{output_path.stem}.{ext}"))
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 {ext} file for {output_path.stem}, found {len(matches)}: {matches}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     matches[0].replace(output_path)
 
 
