@@ -5,14 +5,22 @@ from app.templates.number_line.params import NumberLineParams, NumberLineStep
 
 
 def test_render_number_line_scene_produces_mp4(tmp_path):
-    params = NumberLineParams(start=2, steps=[NumberLineStep(operation="add", amount=3)])
+    params = NumberLineParams(
+        start=2,
+        steps=[
+            NumberLineStep(operation="add", amount=3),
+            NumberLineStep(operation="subtract", amount=1),
+        ],
+    )
     output_path = tmp_path / "scene.mp4"
+    output_path.write_bytes(b"stale destination")
 
     result_path = render_scene_to_mp4(TemplateName.NUMBER_LINE, params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+    assert output_path.read_bytes() != b"stale destination"
 
 
 def test_render_array_grid_scene_produces_thumbnail(tmp_path):

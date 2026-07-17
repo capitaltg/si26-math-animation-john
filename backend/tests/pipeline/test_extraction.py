@@ -8,10 +8,15 @@ def test_extract_params_validates_against_the_template_schema(mock_call):
 
     mock_call.return_value = {
         "start": 4,
-        "steps": [{"operation": "add", "amount": 3}],
+        "steps": [
+            {"operation": "add", "amount": 3},
+            {"operation": "subtract", "amount": 2},
+        ],
     }
 
-    params = extract_params("Sarah has 4 apples and buys 3 more.", NumberLineParams)
+    params = extract_params(
+        "Sarah has 4 apples, buys 3 more, then gives 2 away.", NumberLineParams
+    )
 
     assert isinstance(params, NumberLineParams)
     assert params.start == 4

@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 
@@ -21,3 +23,18 @@ def test_scene_defaults_to_pending_review():
 def test_scene_accepts_a_template_name():
     scene = Scene(scene_id="s2", grade_level=3, template=TemplateName.NUMBER_LINE)
     assert scene.template == TemplateName.NUMBER_LINE
+
+
+def test_scene_round_trip_retains_manual_source_and_stated_answer():
+    scene = Scene(
+        scene_id="s3",
+        grade_level=4,
+        manual_source_text="Three halves plus two halves equals five halves.",
+        stated_answer="5/2",
+    )
+
+    restored = Scene.model_validate_json(scene.model_dump_json())
+
+    assert restored.manual_source_text == scene.manual_source_text
+    assert scene.stated_answer == Fraction(5, 2)
+    assert restored.stated_answer == Fraction(5, 2)

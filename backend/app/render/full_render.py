@@ -22,6 +22,7 @@ def render_scene_thumbnail(template: TemplateName, params: BaseModel, output_pat
 
 
 def _run_render_worker(template: TemplateName, params: BaseModel, output_path: Path, mode: str) -> Path:
+    output_path.unlink(missing_ok=True)
     scratch_dir = tempfile.mkdtemp()
     try:
         params_json_path = Path(scratch_dir) / "params.json"

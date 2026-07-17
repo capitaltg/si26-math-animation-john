@@ -36,7 +36,12 @@ def main() -> None:
         scene.render()
 
     ext = "png" if mode == "thumbnail" else "mp4"
-    matches = list(Path(scratch_dir_str).rglob(f"{output_path.stem}.{ext}"))
+    destination = output_path.resolve()
+    matches = [
+        path
+        for path in Path(scratch_dir_str).rglob(f"{output_path.stem}.{ext}")
+        if path.resolve() != destination
+    ]
     if len(matches) != 1:
         raise RuntimeError(
             f"Expected exactly 1 {ext} file for {output_path.stem}, found {len(matches)}: {matches}"

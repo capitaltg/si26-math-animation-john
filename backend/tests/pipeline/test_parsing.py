@@ -1,4 +1,5 @@
 from pptx import Presentation
+from pptx.util import Inches
 
 
 def _build_sample_pptx(path):
@@ -9,6 +10,18 @@ def _build_sample_pptx(path):
     slide1.shapes.title.text = "Warm Up"
     slide1.placeholders[1].text = "Sarah has 4 apples and buys 3 more. How many now?"
     slide1.notes_slide.notes_text_frame.text = "Remind students this is simple addition."
+
+    table = slide1.shapes.add_table(
+        1, 1, Inches(1), Inches(4), Inches(4), Inches(1)
+    ).table
+    table.cell(0, 0).text = "Table problem: 6 groups of 4"
+
+    group = slide1.shapes.add_group_shape()
+    nested_group = group.shapes.add_group_shape()
+    grouped_text = nested_group.shapes.add_textbox(
+        Inches(1), Inches(5), Inches(4), Inches(1)
+    )
+    grouped_text.text_frame.text = "Grouped problem: 9 minus 2"
 
     slide2 = presentation.slides.add_slide(layout)
     slide2.shapes.title.text = "Agenda"
@@ -28,6 +41,8 @@ def test_extract_slide_texts_includes_body_and_notes(tmp_path):
     assert len(texts) == 2
     assert "Sarah has 4 apples" in texts[0]
     assert "simple addition" in texts[0]
+    assert "Table problem: 6 groups of 4" in texts[0]
+    assert "Grouped problem: 9 minus 2" in texts[0]
     assert "3.OA.A.1" in texts[1]
 
 
