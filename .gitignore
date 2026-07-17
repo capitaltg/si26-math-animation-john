@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+
+# Env / secrets
+.env
+
+# Test / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Manim / render output
+media/
+backend/scripts/_benchmark_output/
+eval/fixtures/*.pptx
+
+# SDD scratch (not committed)
+.superpowers/
+
+# OS
+.DS_Store
