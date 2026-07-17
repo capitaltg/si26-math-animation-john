@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.models.scene import TemplateName
 
 RENDER_TIMEOUT_SECONDS = 120
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 def render_scene_to_mp4(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
@@ -35,6 +36,7 @@ def _run_render_worker(template: TemplateName, params: BaseModel, output_path: P
                 capture_output=True,
                 text=True,
                 timeout=RENDER_TIMEOUT_SECONDS,
+                cwd=str(BACKEND_ROOT),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(

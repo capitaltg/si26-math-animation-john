@@ -23,8 +23,8 @@ class _DiscoveryResult(BaseModel):
     candidates: list[_DiscoveredItem]
 
 
-def discover_candidates(slide_texts: list[str]) -> list[Candidate]:
-    numbered = "\n".join(f"[slide {i}] {text}" for i, text in enumerate(slide_texts))
+def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:
+    numbered = "\n".join(f"[slide {start_index + i}] {text}" for i, text in enumerate(slide_texts))
     schema = _DiscoveryResult.model_json_schema()
     result = call_with_tool(
         system_prompt=_DISCOVERY_SYSTEM_PROMPT,
@@ -46,6 +46,7 @@ def discover_candidates(slide_texts: list[str]) -> list[Candidate]:
 
 def discover_candidates_for_document(slide_texts: list[str], chunk_size: int = 25) -> list[Candidate]:
     all_candidates: list[Candidate] = []
-    for chunk in chunk_slide_texts(slide_texts, chunk_size=chunk_size):
-        all_candidates.extend(discover_candidates(chunk))
+    for chunk_index, chunk in enumerate(chunk_slide_texts(slide_texts, chunk_size=chunk_size)):
+        start_index = chunk_index * chunk_size
+        all_candidates.extend(discover_candidates(chunk, start_index=start_index))
     return all_candidates
