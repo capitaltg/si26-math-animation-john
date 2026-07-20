@@ -8,7 +8,16 @@ from app.config import get_settings
 @lru_cache
 def get_bedrock_client():
     settings = get_settings()
-    return boto3.client("bedrock-runtime", region_name=settings.aws_region)
+    client_kwargs = {"region_name": settings.aws_region}
+    for setting_name, client_name in (
+        ("aws_access_key_id", "aws_access_key_id"),
+        ("aws_secret_access_key", "aws_secret_access_key"),
+        ("aws_session_token", "aws_session_token"),
+    ):
+        value = getattr(settings, setting_name)
+        if value:
+            client_kwargs[client_name] = value
+    return boto3.client("bedrock-runtime", **client_kwargs)
 
 
 def call_with_tool(system_prompt: str, user_message: str, tool_name: str, tool_schema: dict) -> dict:

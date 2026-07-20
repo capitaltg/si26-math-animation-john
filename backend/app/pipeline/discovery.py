@@ -9,7 +9,8 @@ from app.pipeline.parsing import chunk_slide_texts
 _DISCOVERY_SYSTEM_PROMPT = (
     "You find candidate K-8 math example problems in slide text. Only flag text that "
     "states a concrete solvable math problem with numbers — ignore dates, page numbers, "
-    "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem."
+    "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem. "
+    "Do not state a computed answer or include the final answer in one_line_summary."
 )
 
 

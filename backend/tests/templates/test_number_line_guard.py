@@ -43,14 +43,12 @@ def test_non_positive_step_amount_is_rejected(amount):
 
     with pytest.raises(ValidationError):
         NumberLineParams(
-            start=2,
+            start=10,
             steps=[
                 NumberLineStep(operation="add", amount=amount),
                 NumberLineStep(operation="subtract", amount=1),
             ],
         )
-
-
 def test_schema_exposes_step_constraints_to_bedrock():
     from app.templates.number_line.params import NumberLineParams
 

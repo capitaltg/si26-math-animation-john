@@ -17,6 +17,7 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
     assert candidates[0].source_excerpt == "4 + 3"
     assert candidates[0].slide_index == 0
     assert candidates[0].candidate_id
+    assert "computed answer" in mock_call.call_args.kwargs["system_prompt"]
 
 
 @patch("app.pipeline.discovery.call_with_tool")

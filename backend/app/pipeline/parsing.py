@@ -11,9 +11,9 @@ def _extract_shape_text(shape) -> list[str]:
             for child in shape.shapes
             for text in _extract_shape_text(child)
         ]
-    if shape.has_table:
+    if getattr(shape, "has_table", False):
         return [cell.text for row in shape.table.rows for cell in row.cells]
-    if shape.has_text_frame:
+    if getattr(shape, "has_text_frame", False):
         return [shape.text_frame.text]
     return []
 

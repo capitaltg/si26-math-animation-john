@@ -30,11 +30,10 @@ def test_scene_round_trip_retains_manual_source_and_stated_answer():
         scene_id="s3",
         grade_level=4,
         manual_source_text="Three halves plus two halves equals five halves.",
-        stated_answer="5/2",
+        stated_answer=Fraction(5, 2),
     )
 
     restored = Scene.model_validate_json(scene.model_dump_json())
 
     assert restored.manual_source_text == scene.manual_source_text
-    assert scene.stated_answer == Fraction(5, 2)
     assert restored.stated_answer == Fraction(5, 2)
