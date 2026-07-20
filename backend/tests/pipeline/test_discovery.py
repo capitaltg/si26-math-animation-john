@@ -165,3 +165,15 @@ def test_grounding_rejects_changed_reordered_or_empty_content(
     )
 
     assert not _is_grounded(item, [slide_text], start_index=0)
+
+
+def test_grounding_rejects_omitted_standalone_division_operator():
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Use 6 / 3 = 2.",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert not _is_grounded(item, ["Use 6 3 = 2."], start_index=0)
