@@ -148,10 +148,17 @@ def test_discover_candidates_accepts_ordered_noncontiguous_slide_tokens(mock_cal
     [
         ("Use 10 + 2 = 12.", "Use 10 - 2 = 12."),
         ("Mary swims 1/8 mile each day for 12 days.", "Mary swims 1/8 mile each day for 13 days."),
+        ("Measure 3.25 cups of flour.", "Measure 3.15 cups of flour."),
         ("6 spring rolls will serve 3 people.", "3 people will serve 6 spring rolls."),
         ("Complete the table with 6 and 3.", "[blank] | [blank]"),
     ],
-    ids=["changed-operator", "changed-number", "reordered", "placeholder-only"],
+    ids=[
+        "changed-operator",
+        "changed-integer",
+        "changed-conventional-decimal",
+        "reordered",
+        "placeholder-only",
+    ],
 )
 def test_grounding_rejects_changed_reordered_or_empty_content(
     slide_text, source_excerpt
@@ -177,3 +184,81 @@ def test_grounding_rejects_omitted_standalone_division_operator():
     )
 
     assert not _is_grounded(item, ["Use 6 3 = 2."], start_index=0)
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_omitted_standalone_multiplication_operator(
+    mock_call,
+):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "Use 6 * 3 = 18.",
+                "slide_index": 0,
+                "one_line_summary": "Multiply 6 by 3",
+            }
+        ]
+    }
+
+    assert discover_candidates(["Use 6 3 = 18."]) == []
+
+
+@pytest.mark.parametrize(
+    "slide_text",
+    ["Use 5 cup of sugar.", "Use .6 cup of sugar."],
+    ids=["integer-five", "leading-dot-six"],
+)
+def test_grounding_rejects_changed_leading_dot_decimal(slide_text):
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Use .5 cup of sugar.",
+        slide_index=0,
+        one_line_summary="Measure sugar",
+    )
+
+    assert not _is_grounded(item, [slide_text], start_index=0)
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_filters_malformed_item_without_dropping_valid_item(
+    mock_call,
+):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {"source_excerpt": "4 + 3", "slide_index": 0},
+            {
+                "source_excerpt": "4 + 3",
+                "slide_index": 0,
+                "one_line_summary": "Add 4 and 3",
+            },
+        ]
+    }
+
+    candidates = discover_candidates(["The problem is 4 + 3."])
+
+    assert [candidate.source_excerpt for candidate in candidates] == ["4 + 3"]
+    candidate_schema = mock_call.call_args.kwargs["tool_schema"]["$defs"][
+        "_DiscoveredItem"
+    ]
+    assert set(candidate_schema["required"]) == {
+        "source_excerpt",
+        "slide_index",
+        "one_line_summary",
+    }
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_malformed_top_level_envelope(mock_call):
+    from pydantic import ValidationError
+
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {"candidates": {"source_excerpt": "4 + 3"}}
+
+    with pytest.raises(ValidationError):
+        discover_candidates(["The problem is 4 + 3."])

@@ -1,7 +1,8 @@
 import re
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.models.candidate import Candidate
 from app.pipeline.bedrock_client import call_with_tool
@@ -17,7 +18,7 @@ _DISCOVERY_SYSTEM_PROMPT = (
 
 _BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
 _GROUNDING_TOKEN_RE = re.compile(
-    r"\d+(?:[./]\d+)*|[^\W\d_]+(?:'[^\W\d_]+)*|[+\-−×·÷/=]"
+    r"(?:\d+(?:[./]\d+)*|\.\d+)|[^\W\d_]+(?:'[^\W\d_]+)*|[+\-−×·÷/*=]"
 )
 
 
@@ -29,6 +30,10 @@ class _DiscoveredItem(BaseModel):
 
 class _DiscoveryResult(BaseModel):
     candidates: list[_DiscoveredItem]
+
+
+class _DiscoveryEnvelope(BaseModel):
+    candidates: list[Any]
 
 
 def _tokenize_for_grounding(text: str) -> list[str]:
@@ -66,17 +71,23 @@ def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Ca
         tool_name="report_candidates",
         tool_schema=schema,
     )
-    parsed = _DiscoveryResult.model_validate(result)
-    return [
-        Candidate(
-            candidate_id=str(uuid4()),
-            source_excerpt=item.source_excerpt,
-            slide_index=item.slide_index,
-            one_line_summary=item.one_line_summary,
-        )
-        for item in parsed.candidates
-        if _is_grounded(item, slide_texts, start_index)
-    ]
+    parsed = _DiscoveryEnvelope.model_validate(result)
+    candidates: list[Candidate] = []
+    for raw_item in parsed.candidates:
+        try:
+            item = _DiscoveredItem.model_validate(raw_item)
+        except ValidationError:
+            continue
+        if _is_grounded(item, slide_texts, start_index):
+            candidates.append(
+                Candidate(
+                    candidate_id=str(uuid4()),
+                    source_excerpt=item.source_excerpt,
+                    slide_index=item.slide_index,
+                    one_line_summary=item.one_line_summary,
+                )
+            )
+    return candidates
 
 
 def discover_candidates_for_document(slide_texts: list[str], chunk_size: int = 25) -> list[Candidate]:
