@@ -26,6 +26,7 @@ eval/fixtures/*.pptx
 
 # SDD scratch (not committed)
 .superpowers/
+.worktrees/
 
 # Local source/reference materials (not committed)
 /eval set/
