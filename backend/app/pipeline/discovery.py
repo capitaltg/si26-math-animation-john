@@ -18,7 +18,9 @@ _DISCOVERY_SYSTEM_PROMPT = (
 
 _BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
 _GROUNDING_TOKEN_RE = re.compile(
-    r"(?:\d+(?:[./]\d+)*|\.\d+)|[^\W\d_]+(?:'[^\W\d_]+)*|[+\-−×·÷/*=]"
+    r"(?:\d+(?:[./]\d+)*|\.\d+)"
+    r"|[^\W\d_]+(?:'[^\W\d_]+)*"
+    r"|[^\s|:,.;!?'\"“”‘’…•–—]"
 )
 
 

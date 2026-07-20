@@ -205,6 +205,57 @@ def test_discover_candidates_rejects_omitted_standalone_multiplication_operator(
     assert discover_candidates(["Use 6 3 = 18."]) == []
 
 
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_omitted_exponentiation_symbol(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "Use 2 ^ 3 = 8.",
+                "slide_index": 0,
+                "one_line_summary": "Cube 2",
+            }
+        ]
+    }
+
+    assert discover_candidates(["Use 2 3 = 8."]) == []
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_omitted_percent_symbol(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "Find 50% of 20.",
+                "slide_index": 0,
+                "one_line_summary": "Find the percentage",
+            }
+        ]
+    }
+
+    assert discover_candidates(["Find 50 of 20."]) == []
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_omitted_grouping_symbol(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "Use (2 + 3) * 4.",
+                "slide_index": 0,
+                "one_line_summary": "Multiply a grouped sum",
+            }
+        ]
+    }
+
+    assert discover_candidates(["Use 2 + 3 * 4."]) == []
+
+
 @pytest.mark.parametrize(
     "slide_text",
     ["Use 5 cup of sugar.", "Use .6 cup of sugar."],
