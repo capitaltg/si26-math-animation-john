@@ -1,10 +1,14 @@
 import json
+import sys
 from pathlib import Path
 
-from app.pipeline.discovery import discover_candidates_for_document
-from app.pipeline.parsing import extract_slide_texts
+BACKEND_ROOT = Path(__file__).resolve().parent.parent / "backend"
+sys.path.insert(0, str(BACKEND_ROOT))
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+from app.pipeline.discovery import discover_candidates_for_document  # noqa: E402
+from app.pipeline.parsing import extract_slide_texts  # noqa: E402
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def run_fixture(pptx_path: Path) -> dict:
@@ -18,8 +22,12 @@ def run_fixture(pptx_path: Path) -> dict:
 
 
 def main() -> None:
-    report = [run_fixture(path) for path in sorted(FIXTURES_DIR.glob("*.pptx"))]
-    print(json.dumps(report, indent=2))
+    fixtures = sorted(FIXTURES_DIR.glob("*.pptx"))
+    if not fixtures:
+        raise RuntimeError(
+            "No eval fixtures found; run `python eval/generate_fixtures.py` first"
+        )
+    print(json.dumps([run_fixture(path) for path in fixtures], indent=2))
 
 
 if __name__ == "__main__":

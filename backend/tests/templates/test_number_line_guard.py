@@ -28,6 +28,46 @@ def test_running_total_going_negative_is_rejected():
         )
 
 
+def test_negative_start_is_rejected():
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+
+    with pytest.raises(ValidationError):
+        NumberLineParams(
+            start=-1,
+            steps=[
+                NumberLineStep(operation="add", amount=2),
+                NumberLineStep(operation="add", amount=1),
+            ],
+        )
+
+
+def test_number_line_span_over_twenty_is_rejected():
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+
+    with pytest.raises(ValidationError):
+        NumberLineParams(
+            start=0,
+            steps=[
+                NumberLineStep(operation="add", amount=21),
+                NumberLineStep(operation="subtract", amount=1),
+            ],
+        )
+
+
+def test_number_line_span_of_twenty_is_allowed():
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+
+    params = NumberLineParams(
+        start=0,
+        steps=[
+            NumberLineStep(operation="add", amount=20),
+            NumberLineStep(operation="subtract", amount=1),
+        ],
+    )
+
+    assert params.start == 0
+
+
 @pytest.mark.parametrize("step_count", [0, 1, 4])
 def test_step_count_outside_two_to_three_is_rejected(step_count):
     from app.templates.number_line.params import NumberLineParams, NumberLineStep

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pptx import Presentation
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def _new_presentation():
@@ -26,27 +26,23 @@ def build_zero_candidate_deck(path: Path) -> None:
 
 def build_distractor_heavy_deck(path: Path) -> None:
     presentation, layout = _new_presentation()
-
     slide = presentation.slides.add_slide(layout)
     slide.shapes.title.text = "Warm Up"
     slide.placeholders[1].text = (
         "Date: 3/14. Standard 3.OA.A.1. Page 42.\n"
         "Sarah has 4 apples and buys 3 more apples. How many apples does she have now?"
     )
-
     presentation.save(path)
 
 
 def build_ambiguous_phrasing_deck(path: Path) -> None:
     presentation, layout = _new_presentation()
-
     slide = presentation.slides.add_slide(layout)
     slide.shapes.title.text = "Think About It"
     slide.placeholders[1].text = (
         "There are some red apples and some green apples. There are 4 more red "
         "apples than green apples. How many apples are there in all?"
     )
-
     presentation.save(path)
 
 

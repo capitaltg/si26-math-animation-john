@@ -11,13 +11,68 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
         ]
     }
 
-    candidates = discover_candidates(["slide 0 text"])
+    candidates = discover_candidates(["The problem is 4 + 3."])
 
     assert len(candidates) == 1
     assert candidates[0].source_excerpt == "4 + 3"
     assert candidates[0].slide_index == 0
     assert candidates[0].candidate_id
     assert "computed answer" in mock_call.call_args.kwargs["system_prompt"]
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_drops_out_of_chunk_slide_index(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "4 + 3",
+                "slide_index": 999,
+                "one_line_summary": "Detected: 4 + 3",
+            }
+        ]
+    }
+
+    assert discover_candidates(["The problem is 4 + 3."]) == []
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_drops_excerpt_not_on_reported_slide(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "9 times 9",
+                "slide_index": 0,
+                "one_line_summary": "Detected: 9 times 9",
+            }
+        ]
+    }
+
+    assert discover_candidates(["The problem is 4 + 3."]) == []
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_normalizes_whitespace_when_grounding(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": "Sarah has 4 apples and buys 3 more.",
+                "slide_index": 25,
+                "one_line_summary": "Detected: 4 + 3",
+            }
+        ]
+    }
+
+    candidates = discover_candidates(
+        ["Sarah has 4 apples\nand buys 3 more."], start_index=25
+    )
+
+    assert len(candidates) == 1
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -35,7 +90,7 @@ def test_discover_candidates_for_document_applies_global_slide_offset(mock_call)
         return {
             "candidates": [
                 {
-                    "source_excerpt": f"excerpt {slide_index}",
+                    "source_excerpt": f"slide {slide_index}",
                     "slide_index": slide_index,
                     "one_line_summary": f"summary {slide_index}",
                 }

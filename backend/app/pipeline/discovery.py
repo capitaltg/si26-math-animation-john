@@ -24,6 +24,20 @@ class _DiscoveryResult(BaseModel):
     candidates: list[_DiscoveredItem]
 
 
+def _normalize_for_grounding(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int) -> bool:
+    local_index = item.slide_index - start_index
+    if not 0 <= local_index < len(slide_texts):
+        return False
+
+    excerpt = _normalize_for_grounding(item.source_excerpt)
+    slide_text = _normalize_for_grounding(slide_texts[local_index])
+    return bool(excerpt) and excerpt in slide_text
+
+
 def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:
     numbered = "\n".join(f"[slide {start_index + i}] {text}" for i, text in enumerate(slide_texts))
     schema = _DiscoveryResult.model_json_schema()
@@ -42,6 +56,7 @@ def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Ca
             one_line_summary=item.one_line_summary,
         )
         for item in parsed.candidates
+        if _is_grounded(item, slide_texts, start_index)
     ]
 
 

@@ -38,7 +38,7 @@ def run_benchmark(output_dir: Path) -> list[dict]:
 
 
 def main() -> None:
-    output_dir = Path(__file__).parent / "_benchmark_output"
+    output_dir = Path(__file__).resolve().parent / "_benchmark_output"
     print(json.dumps(run_benchmark(output_dir), indent=2))
 
 
