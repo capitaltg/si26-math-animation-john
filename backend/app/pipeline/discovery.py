@@ -1,3 +1,4 @@
+import re
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -10,7 +11,13 @@ _DISCOVERY_SYSTEM_PROMPT = (
     "You find candidate K-8 math example problems in slide text. Only flag text that "
     "states a concrete solvable math problem with numbers — ignore dates, page numbers, "
     "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem. "
+    "Copy source_excerpt verbatim from the reported slide; do not paraphrase it. "
     "Do not state a computed answer or include the final answer in one_line_summary."
+)
+
+_BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
+_GROUNDING_TOKEN_RE = re.compile(
+    r"\d+(?:[./]\d+)*|[^\W\d_]+(?:'[^\W\d_]+)*|[+\-−×·÷=]"
 )
 
 
@@ -24,8 +31,20 @@ class _DiscoveryResult(BaseModel):
     candidates: list[_DiscoveredItem]
 
 
-def _normalize_for_grounding(text: str) -> str:
-    return " ".join(text.split()).casefold()
+def _tokenize_for_grounding(text: str) -> list[str]:
+    normalized = text.casefold().replace("’", "'")
+    normalized = _BLANK_PLACEHOLDER_RE.sub(" ", normalized)
+    return _GROUNDING_TOKEN_RE.findall(normalized)
+
+
+def _is_ordered_subsequence(needle: list[str], haystack: list[str]) -> bool:
+    if not needle:
+        return False
+    haystack_iter = iter(haystack)
+    return all(
+        any(candidate == token for candidate in haystack_iter)
+        for token in needle
+    )
 
 
 def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int) -> bool:
@@ -33,9 +52,9 @@ def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int
     if not 0 <= local_index < len(slide_texts):
         return False
 
-    excerpt = _normalize_for_grounding(item.source_excerpt)
-    slide_text = _normalize_for_grounding(slide_texts[local_index])
-    return bool(excerpt) and excerpt in slide_text
+    excerpt_tokens = _tokenize_for_grounding(item.source_excerpt)
+    slide_tokens = _tokenize_for_grounding(slide_texts[local_index])
+    return _is_ordered_subsequence(excerpt_tokens, slide_tokens)
 
 
 def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:

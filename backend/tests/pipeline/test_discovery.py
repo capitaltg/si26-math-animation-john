@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 
 @patch("app.pipeline.discovery.call_with_tool")
 def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
@@ -18,6 +20,7 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
     assert candidates[0].slide_index == 0
     assert candidates[0].candidate_id
     assert "computed answer" in mock_call.call_args.kwargs["system_prompt"]
+    assert "verbatim" in mock_call.call_args.kwargs["system_prompt"]
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -108,3 +111,57 @@ def test_discover_candidates_for_document_applies_global_slide_offset(mock_call)
     # Correct global numbering must report the first slide of each chunk: 0 and 25.
     assert [c.slide_index for c in candidates] == [0, 25]
     assert candidates[1].slide_index >= 25
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_accepts_ordered_noncontiguous_slide_tokens(mock_call):
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = {
+        "candidates": [
+            {
+                "source_excerpt": (
+                    "A recipe says that 6 spring rolls will serve 3 people. "
+                    "Complete the table.\n"
+                    "number of spring rolls | number of people\n"
+                    "6 | 3\n30 | [blank]\n[blank] | 40\n28 | [blank]"
+                ),
+                "slide_index": 0,
+                "one_line_summary": "Complete the proportional table",
+            }
+        ]
+    }
+    slide_text = (
+        "ACTIVITY 1\n"
+        "A recipe says that 6 spring rolls will serve 3 people. Complete the table.\n"
+        "Source: page 2 of 5.\n"
+        "number of spring rolls\nnumber of people\n6\n3\n30\n40\n28"
+    )
+
+    candidates = discover_candidates([slide_text])
+
+    assert len(candidates) == 1
+
+
+@pytest.mark.parametrize(
+    ("slide_text", "source_excerpt"),
+    [
+        ("Use 10 + 2 = 12.", "Use 10 - 2 = 12."),
+        ("Mary swims 1/8 mile each day for 12 days.", "Mary swims 1/8 mile each day for 13 days."),
+        ("6 spring rolls will serve 3 people.", "3 people will serve 6 spring rolls."),
+        ("Complete the table with 6 and 3.", "[blank] | [blank]"),
+    ],
+    ids=["changed-operator", "changed-number", "reordered", "placeholder-only"],
+)
+def test_grounding_rejects_changed_reordered_or_empty_content(
+    slide_text, source_excerpt
+):
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt=source_excerpt,
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert not _is_grounded(item, [slide_text], start_index=0)
