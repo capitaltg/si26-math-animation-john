@@ -1,6 +1,8 @@
 # Week 1 Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Completed steps use checkbox (`- [x]`) syntax for tracking.
+
+**Status:** Complete as of 2026-07-20. All implementation steps below are present and verified. Final-review hardening and acceptance-tooling details are recorded in `docs/superpowers/specs/2026-07-20-week1-review-remediation-design.md` and `docs/superpowers/plans/2026-07-20-week1-review-remediation.md`; those amendments are authoritative wherever an initial code listing below differs from the hardened implementation.
 
 **Goal:** Stand up the backend foundation for the K-8 Math Animation Generator: PPTX parsing/chunking, the storyboard data model, a chunked Bedrock candidate-discovery call, two hardcoded-param Manim templates, a full subprocess-isolated render producing a real MP4, a schema-scoped extraction call, and a wall-clock latency benchmark across 3 real scenes — plus the first eval fixtures. This is Week 1 of the 4-week MVP per `project description.md` Section 11 and the technical spec at `docs/superpowers/specs/2026-07-17-math-animation-generator-design.md`.
 
@@ -36,7 +38,7 @@
 **Interfaces:**
 - Produces: `get_settings() -> Settings` (module `app.config`), consumed by `app.pipeline.bedrock_client` in Task 5.
 
-- [ ] **Step 1: Ignore local credential files before any are created**
+- [x] **Step 1: Ignore local credential files before any are created**
 
 ```gitignore
 # Local credentials and developer-specific configuration
@@ -46,7 +48,7 @@
 
 This root `.gitignore` must be committed before a developer creates `backend/.env`; `.env.example` remains tracked because these rules match only files named exactly `.env`.
 
-- [ ] **Step 2: Write `pyproject.toml`**
+- [x] **Step 2: Write `pyproject.toml`**
 
 ```toml
 [project]
@@ -75,18 +77,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 ```
 
-- [ ] **Step 3: Write `.env.example`**
+- [x] **Step 3: Write `.env.example`**
 
 ```
 AWS_REGION=us-east-1
 BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
-- [ ] **Step 4: Create empty `app/__init__.py` and `tests/__init__.py`**
+- [x] **Step 4: Create empty `app/__init__.py` and `tests/__init__.py`**
 
 Both files are empty — they mark the directories as packages.
 
-- [ ] **Step 5: Write the failing test for settings**
+- [x] **Step 5: Write the failing test for settings**
 
 ```python
 # backend/tests/test_config.py
@@ -99,12 +101,12 @@ def test_settings_load_defaults():
     assert "claude" in settings.bedrock_model_id.lower()
 ```
 
-- [ ] **Step 6: Install deps and run test to verify it fails**
+- [x] **Step 6: Install deps and run test to verify it fails**
 
 Run: `cd backend && pip install -e ".[dev]" && pytest tests/test_config.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.config'`
 
-- [ ] **Step 7: Write `app/config.py`**
+- [x] **Step 7: Write `app/config.py`**
 
 ```python
 from functools import lru_cache
@@ -124,12 +126,12 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-- [ ] **Step 8: Run test to verify it passes**
+- [x] **Step 8: Run test to verify it passes**
 
 Run: `pytest tests/test_config.py -v`
 Expected: PASS (2 tests... actually 1 test, `test_settings_load_defaults`)
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add .gitignore backend/pyproject.toml backend/.env.example backend/app/__init__.py backend/app/config.py backend/tests/__init__.py backend/tests/test_config.py
@@ -150,9 +152,9 @@ git commit -m "chore: scaffold backend project with settings module"
 **Interfaces:**
 - Produces: `Candidate` (module `app.models.candidate`), `Scene`, `TemplateName` (module `app.models.scene`) — consumed by `app.pipeline.discovery` (Task 5), `app.templates.registry` (Task 6/7), and `app.render.full_render` (Task 8).
 
-- [ ] **Step 1: Create empty `app/models/__init__.py` and `tests/models/__init__.py`**
+- [x] **Step 1: Create empty `app/models/__init__.py` and `tests/models/__init__.py`**
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 # backend/tests/models/test_models.py
@@ -197,12 +199,12 @@ def test_scene_round_trip_retains_manual_source_and_stated_answer():
     assert restored.stated_answer == Fraction(5, 2)
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `pytest tests/models/test_models.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.models.candidate'`
 
-- [ ] **Step 4: Write `app/models/candidate.py`**
+- [x] **Step 4: Write `app/models/candidate.py`**
 
 ```python
 from pydantic import BaseModel
@@ -215,7 +217,7 @@ class Candidate(BaseModel):
     one_line_summary: str
 ```
 
-- [ ] **Step 5: Write `app/models/scene.py`**
+- [x] **Step 5: Write `app/models/scene.py`**
 
 ```python
 from fractions import Fraction
@@ -223,7 +225,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TemplateName(str, Enum):
@@ -236,7 +238,7 @@ class Scene(BaseModel):
     candidate_id: str | None = None
     manual_source_text: str | None = None
     template: TemplateName | None = None
-    grade_level: int
+    grade_level: int = Field(ge=0, le=8)
     grade_overridden: bool = False
     params: dict = Field(default_factory=dict)
     stated_answer: Fraction | None = None
@@ -244,14 +246,28 @@ class Scene(BaseModel):
     fallback_reason: str | None = None
     thumbnail_path: Path | None = None
     render_path: Path | None = None
+
+    @model_validator(mode="after")
+    def _check_workflow_invariants(self):
+        has_candidate = bool(self.candidate_id and self.candidate_id.strip())
+        has_manual_source = bool(self.manual_source_text and self.manual_source_text.strip())
+        if has_candidate == has_manual_source:
+            raise ValueError("Scene requires exactly one source: candidate_id or manual_source_text")
+
+        has_fallback_reason = bool(self.fallback_reason and self.fallback_reason.strip())
+        if self.status == "fallback" and not has_fallback_reason:
+            raise ValueError("Fallback scenes require a nonblank fallback_reason")
+        if self.status != "fallback" and self.fallback_reason is not None:
+            raise ValueError("Only fallback scenes may include fallback_reason")
+        return self
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `pytest tests/models/test_models.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/models backend/tests/models
@@ -271,9 +287,9 @@ git commit -m "feat: add Candidate, Scene, and TemplateName storyboard models"
 **Interfaces:**
 - Produces: `extract_slide_texts(pptx_path: Path) -> list[str]`, `chunk_slide_texts(slide_texts: list[str], chunk_size: int = 25) -> list[list[str]]` (module `app.pipeline.parsing`) — consumed by `app.pipeline.discovery` (Task 5).
 
-- [ ] **Step 1: Create empty `app/pipeline/__init__.py` and `tests/pipeline/__init__.py`**
+- [x] **Step 1: Create empty `app/pipeline/__init__.py` and `tests/pipeline/__init__.py`**
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 # backend/tests/pipeline/test_parsing.py
@@ -338,12 +354,12 @@ def test_chunk_slide_texts_splits_at_chunk_size():
     assert chunks[1][0] == "slide 25"
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `pytest tests/pipeline/test_parsing.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.pipeline.parsing'`
 
-- [ ] **Step 4: Write `app/pipeline/parsing.py`**
+- [x] **Step 4: Write `app/pipeline/parsing.py`**
 
 ```python
 from pathlib import Path
@@ -383,12 +399,12 @@ def chunk_slide_texts(slide_texts: list[str], chunk_size: int = 25) -> list[list
     return [slide_texts[i:i + chunk_size] for i in range(0, len(slide_texts), chunk_size)]
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `pytest tests/pipeline/test_parsing.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/pipeline backend/tests/pipeline
@@ -415,9 +431,9 @@ git commit -m "feat: add PPTX slide text extraction and chunking"
 - Produces: `NumberLineParams`, `NumberLineStep` (module `app.templates.number_line.params`); `ArrayGridParams` (module `app.templates.array_grid.params`) — consumed by `app.templates.registry` (Task 6), `app.pipeline.extraction` and `scripts/benchmark_latency.py` (Task 8/9).
 - Number line params use plain `int` for `start`/`amount` this week (no fraction support yet — fractions are scoped to a later, dedicated fraction template per the product doc's component table, not this one).
 
-- [ ] **Step 1: Create empty `__init__.py` files** for `app/templates`, `app/templates/number_line`, `app/templates/array_grid`, `tests/templates`
+- [x] **Step 1: Create empty `__init__.py` files** for `app/templates`, `app/templates/number_line`, `app/templates/array_grid`, `tests/templates`
 
-- [ ] **Step 2: Write the failing guard tests**
+- [x] **Step 2: Write the failing guard tests**
 
 ```python
 # backend/tests/templates/test_number_line_guard.py
@@ -508,25 +524,40 @@ def test_overlong_single_axis_is_rejected(rows, cols):
         ArrayGridParams(rows=rows, cols=cols)
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `pytest tests/templates -v`
 Expected: FAIL with `ModuleNotFoundError`
 
-- [ ] **Step 4: Write `app/templates/number_line/guard.py`**
+- [x] **Step 4: Write `app/templates/number_line/guard.py`**
 
 ```python
+MAX_NUMBER_LINE_SPAN = 20
+
+
 def check_number_line_compatibility(params) -> None:
+    if params.start < 0:
+        raise ValueError("Number line start must be nonnegative")
+
     total = params.start
+    values = [total]
     for step in params.steps:
         total = total + step.amount if step.operation == "add" else total - step.amount
         if total < 0:
             raise ValueError(
                 f"Number line running total went negative ({total}) — not valid for this template"
             )
+        values.append(total)
+
+    span = max(values) - min(values)
+    if span > MAX_NUMBER_LINE_SPAN:
+        raise ValueError(
+            f"Number line span is too large to render clearly "
+            f"({span} > {MAX_NUMBER_LINE_SPAN})"
+        )
 ```
 
-- [ ] **Step 5: Write `app/templates/number_line/params.py`**
+- [x] **Step 5: Write `app/templates/number_line/params.py`**
 
 ```python
 from typing import Literal
@@ -551,7 +582,7 @@ class NumberLineParams(BaseModel):
         return self
 ```
 
-- [ ] **Step 6: Write `app/templates/array_grid/guard.py`**
+- [x] **Step 6: Write `app/templates/array_grid/guard.py`**
 
 ```python
 def check_array_grid_compatibility(params) -> None:
@@ -567,7 +598,7 @@ def check_array_grid_compatibility(params) -> None:
         )
 ```
 
-- [ ] **Step 7: Write `app/templates/array_grid/params.py`**
+- [x] **Step 7: Write `app/templates/array_grid/params.py`**
 
 ```python
 from pydantic import BaseModel, model_validator
@@ -585,12 +616,12 @@ class ArrayGridParams(BaseModel):
         return self
 ```
 
-- [ ] **Step 8: Run tests to verify they pass**
+- [x] **Step 8: Run tests to verify they pass**
 
 Run: `pytest tests/templates -v`
 Expected: PASS (11 tests)
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add backend/app/templates backend/tests/templates
@@ -611,7 +642,7 @@ git commit -m "feat: add number_line and array_grid params with compatibility gu
 - Consumes: `NumberLineParams` (Task 4), `ArrayGridParams` (Task 4), `TemplateName` (Task 2)
 - Produces: `NumberLineScene`, `ArrayGridScene` (Manim `Scene` subclasses with a settable `.params` attribute); `get_template(name: TemplateName | str) -> tuple[type, type]` (module `app.templates.registry`) — consumed by `app.render.render_worker` (Task 6).
 
-- [ ] **Step 1: Write `app/templates/number_line/scene.py`**
+- [x] **Step 1: Write `app/templates/number_line/scene.py`**
 
 ```python
 from manim import *
@@ -656,7 +687,7 @@ class NumberLineScene(Scene):
         self.wait(1)
 ```
 
-- [ ] **Step 2: Write `app/templates/array_grid/scene.py`**
+- [x] **Step 2: Write `app/templates/array_grid/scene.py`**
 
 ```python
 from manim import *
@@ -684,7 +715,7 @@ class ArrayGridScene(Scene):
         self.wait(1)
 ```
 
-- [ ] **Step 3: Write the failing registry test**
+- [x] **Step 3: Write the failing registry test**
 
 ```python
 # backend/tests/templates/test_registry.py
@@ -709,12 +740,12 @@ def test_get_template_accepts_a_plain_string():
     assert params_cls.__name__ == "ArrayGridParams"
 ```
 
-- [ ] **Step 4: Run test to verify it fails**
+- [x] **Step 4: Run test to verify it fails**
 
 Run: `pytest tests/templates/test_registry.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.templates.registry'`
 
-- [ ] **Step 5: Write `app/templates/registry.py`**
+- [x] **Step 5: Write `app/templates/registry.py`**
 
 ```python
 from app.models.scene import TemplateName
@@ -734,12 +765,12 @@ def get_template(name: TemplateName | str) -> tuple[type, type]:
     return _REGISTRY[key]
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [x] **Step 6: Run test to verify it passes**
 
 Run: `pytest tests/templates/test_registry.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/templates/number_line/scene.py backend/app/templates/array_grid/scene.py backend/app/templates/registry.py backend/tests/templates/test_registry.py
@@ -763,9 +794,9 @@ git commit -m "feat: add Manim scenes for number_line and array_grid, plus templ
 
 **Prerequisite:** ffmpeg must be installed and on `PATH` (Manim shells out to it internally). Verify with `ffmpeg -version` before running this task's tests.
 
-- [ ] **Step 1: Create empty `app/render/__init__.py` and `tests/render/__init__.py`**
+- [x] **Step 1: Create empty `app/render/__init__.py` and `tests/render/__init__.py`**
 
-- [ ] **Step 2: Write `app/render/render_worker.py`**
+- [x] **Step 2: Write `app/render/render_worker.py`**
 
 This is the subprocess entry point — each invocation gets its own fresh Python process, so Manim's global `config` singleton never bleeds between renders.
 
@@ -776,9 +807,14 @@ from pathlib import Path
 
 from app.templates.registry import get_template
 
+VALID_MODES = {"full", "thumbnail"}
+
 
 def main() -> None:
-    template_name, params_json_path, output_path_str, mode = sys.argv[1:5]
+    template_name, params_json_path, output_path_str, mode, scratch_dir_str = sys.argv[1:6]
+    if mode not in VALID_MODES:
+        raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
+
     params_data = json.loads(Path(params_json_path).read_text())
     scene_cls, params_cls = get_template(template_name)
     params = params_cls.model_validate(params_data)
@@ -786,9 +822,8 @@ def main() -> None:
     from manim import tempconfig
 
     output_path = Path(output_path_str)
-    output_path.unlink(missing_ok=True)
     overrides = {
-        "media_dir": str(output_path.parent),
+        "media_dir": scratch_dir_str,
         "output_file": output_path.stem,
         "disable_caching": True,
     }
@@ -804,13 +839,18 @@ def main() -> None:
         scene.render()
 
     ext = "png" if mode == "thumbnail" else "mp4"
+    destination = output_path.resolve()
     matches = [
         path
-        for path in output_path.parent.rglob(f"{output_path.stem}.{ext}")
-        if path != output_path
+        for path in Path(scratch_dir_str).rglob(f"{output_path.stem}.{ext}")
+        if path.resolve() != destination
     ]
-    if not matches:
-        raise RuntimeError(f"Manim did not produce the expected {ext} file for {output_path.stem}")
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 {ext} file for {output_path.stem}, found {len(matches)}: {matches}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     matches[0].replace(output_path)
 
 
@@ -818,19 +858,24 @@ if __name__ == "__main__":
     main()
 ```
 
-*Why the unlink and filtered `rglob` lookup:* Manim nests output under its own `videos/<scene>/<quality>/` (or `images/...`) folder structure inside `media_dir`, and the exact nesting has varied across Manim versions — searching for the expected filename and moving it to the caller's exact `output_path` avoids hardcoding a folder structure that could shift. Removing the old destination before rendering and excluding it from discovery guarantees a thumbnail re-render or benchmark rerun cannot select stale output instead of Manim's newly generated artifact.
+*Final render-safety amendment:* The hardened worker renders inside a unique scratch directory and replaces `output_path` only after exactly one expected artifact exists. It does not unlink the destination before rendering, so a timeout or failed rerender preserves the last successful artifact. See the remediation design and `backend/app/render/render_worker.py` for the authoritative implementation.
 
-- [ ] **Step 3: Write `app/render/full_render.py`**
+- [x] **Step 3: Write `app/render/full_render.py`**
 
 ```python
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from app.models.scene import TemplateName
+
+RENDER_TIMEOUT_SECONDS = 120
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 def render_scene_to_mp4(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
@@ -842,24 +887,36 @@ def render_scene_thumbnail(template: TemplateName, params: BaseModel, output_pat
 
 
 def _run_render_worker(template: TemplateName, params: BaseModel, output_path: Path, mode: str) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    params_json_path = output_path.with_suffix(".params.json")
-    params_json_path.write_text(json.dumps(params.model_dump(mode="json")))
+    scratch_dir = tempfile.mkdtemp()
+    try:
+        params_json_path = Path(scratch_dir) / "params.json"
+        params_json_path.write_text(json.dumps(params.model_dump(mode="json")))
 
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "app.render.render_worker",
-            template.value, str(params_json_path), str(output_path), mode,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Render subprocess failed:\n{result.stdout}\n{result.stderr}")
-    return output_path
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "app.render.render_worker",
+                    template.value, str(params_json_path), str(output_path), mode, scratch_dir,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=RENDER_TIMEOUT_SECONDS,
+                cwd=str(BACKEND_ROOT),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Render subprocess timed out after {RENDER_TIMEOUT_SECONDS}s:\n"
+                f"{exc.stdout or ''}\n{exc.stderr or ''}"
+            ) from exc
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Render subprocess failed:\n{result.stdout}\n{result.stderr}")
+        return output_path
+    finally:
+        shutil.rmtree(scratch_dir, ignore_errors=True)
 ```
 
-- [ ] **Step 4: Write the test (this test actually invokes Manim + ffmpeg — expect it to take several seconds)**
+- [x] **Step 4: Write the test (this test actually invokes Manim + ffmpeg — expect it to take several seconds)**
 
 ```python
 # backend/tests/render/test_full_render.py
@@ -887,12 +944,12 @@ def test_render_number_line_scene_produces_mp4(tmp_path):
     assert output_path.read_bytes() != b"stale destination"
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/render/test_full_render.py -v -s`
 Expected: PASS (1 test; several seconds of Manim/ffmpeg output printed to stdout is normal)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/render backend/tests/render
@@ -912,7 +969,7 @@ git commit -m "feat: add subprocess-isolated Manim render producing MP4 and thum
 - Consumes: `get_settings` (Task 1), `NumberLineParams` (Task 4)
 - Produces: `call_with_tool(system_prompt: str, user_message: str, tool_name: str, tool_schema: dict) -> dict` (module `app.pipeline.bedrock_client`); `extract_params(source_text: str, params_cls: Type[T]) -> T` (module `app.pipeline.extraction`) — consumed by `app.pipeline.discovery` (Task 8) and `scripts/benchmark_latency.py` (Task 9).
 
-- [ ] **Step 1: Write `app/pipeline/bedrock_client.py`**
+- [x] **Step 1: Write `app/pipeline/bedrock_client.py`**
 
 ```python
 from functools import lru_cache
@@ -946,7 +1003,7 @@ def call_with_tool(system_prompt: str, user_message: str, tool_name: str, tool_s
     raise RuntimeError("Bedrock response did not include a tool call")
 ```
 
-- [ ] **Step 2: Write the failing extraction test (Bedrock mocked)**
+- [x] **Step 2: Write the failing extraction test (Bedrock mocked)**
 
 ```python
 # backend/tests/pipeline/test_extraction.py
@@ -975,12 +1032,12 @@ def test_extract_params_validates_against_the_template_schema(mock_call):
     assert params.steps[0].amount == 3
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `pytest tests/pipeline/test_extraction.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.pipeline.extraction'`
 
-- [ ] **Step 4: Write `app/pipeline/extraction.py`**
+- [x] **Step 4: Write `app/pipeline/extraction.py`**
 
 ```python
 from typing import Type, TypeVar
@@ -1009,12 +1066,12 @@ def extract_params(source_text: str, params_cls: Type[T]) -> T:
     return params_cls.model_validate(result)
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/pipeline/test_extraction.py -v`
 Expected: PASS (1 test)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/pipeline/bedrock_client.py backend/app/pipeline/extraction.py backend/tests/pipeline/test_extraction.py
@@ -1031,9 +1088,11 @@ git commit -m "feat: add schema-scoped Bedrock extraction call"
 
 **Interfaces:**
 - Consumes: `call_with_tool` (Task 7), `Candidate` (Task 2), `chunk_slide_texts` (Task 3)
-- Produces: `discover_candidates(slide_texts: list[str], slide_offset: int = 0) -> list[Candidate]`, `discover_candidates_for_document(slide_texts: list[str], chunk_size: int = 25) -> list[Candidate]` (module `app.pipeline.discovery`) — consumed by `eval/run_eval.py` (Task 10) and, later, the `/upload` route (Week 2).
+- Produces: `discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]`, `discover_candidates_for_document(slide_texts: list[str], chunk_size: int = 25) -> list[Candidate]` (module `app.pipeline.discovery`) — consumed by `eval/run_eval.py` (Task 10) and, later, the `/upload` route (Week 2).
 
-- [ ] **Step 1: Write the failing discovery tests**
+The final implementation validates that every model-reported slide index belongs to the submitted chunk and that its whitespace-normalized, case-folded excerpt occurs on that exact slide. Invalid candidates are dropped independently before `Candidate` construction.
+
+- [x] **Step 1: Write the failing discovery tests**
 
 ```python
 # backend/tests/pipeline/test_discovery.py
@@ -1050,13 +1109,13 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
         ]
     }
 
-    candidates = discover_candidates(["slide 25 text"], slide_offset=25)
+    candidates = discover_candidates(["The problem is 4 + 3."], start_index=25)
 
     assert len(candidates) == 1
     assert candidates[0].source_excerpt == "4 + 3"
     assert candidates[0].slide_index == 25
     assert candidates[0].candidate_id
-    assert "[slide 25] slide 25 text" in mock_call.call_args.kwargs["user_message"]
+    assert "[slide 25] The problem is 4 + 3." in mock_call.call_args.kwargs["user_message"]
 
 
 @patch("app.pipeline.discovery.discover_candidates")
@@ -1074,19 +1133,19 @@ def test_discover_candidates_for_document_merges_across_chunks(mock_discover):
 
     assert mock_discover.call_count == 2
     assert mock_discover.call_args_list == [
-        call(slide_texts[:25], slide_offset=0),
-        call(slide_texts[25:], slide_offset=25),
+        call(slide_texts[:25], start_index=0),
+        call(slide_texts[25:], start_index=25),
     ]
     assert [c.candidate_id for c in candidates] == ["a", "b"]
     assert [c.slide_index for c in candidates] == [0, 25]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/pipeline/test_discovery.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.pipeline.discovery'`
 
-- [ ] **Step 3: Write `app/pipeline/discovery.py`**
+- [x] **Step 3: Write `app/pipeline/discovery.py`**
 
 ```python
 from uuid import uuid4
@@ -1100,7 +1159,8 @@ from app.pipeline.parsing import chunk_slide_texts
 _DISCOVERY_SYSTEM_PROMPT = (
     "You find candidate K-8 math example problems in slide text. Only flag text that "
     "states a concrete solvable math problem with numbers — ignore dates, page numbers, "
-    "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem."
+    "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem. "
+    "Do not state a computed answer or include the final answer in one_line_summary."
 )
 
 
@@ -1114,10 +1174,23 @@ class _DiscoveryResult(BaseModel):
     candidates: list[_DiscoveredItem]
 
 
-def discover_candidates(slide_texts: list[str], slide_offset: int = 0) -> list[Candidate]:
+def _normalize_for_grounding(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int) -> bool:
+    local_index = item.slide_index - start_index
+    if not 0 <= local_index < len(slide_texts):
+        return False
+    excerpt = _normalize_for_grounding(item.source_excerpt)
+    slide_text = _normalize_for_grounding(slide_texts[local_index])
+    return bool(excerpt) and excerpt in slide_text
+
+
+def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:
     numbered = "\n".join(
         f"[slide {i}] {text}"
-        for i, text in enumerate(slide_texts, start=slide_offset)
+        for i, text in enumerate(slide_texts, start=start_index)
     )
     schema = _DiscoveryResult.model_json_schema()
     result = call_with_tool(
@@ -1135,25 +1208,26 @@ def discover_candidates(slide_texts: list[str], slide_offset: int = 0) -> list[C
             one_line_summary=item.one_line_summary,
         )
         for item in parsed.candidates
+        if _is_grounded(item, slide_texts, start_index)
     ]
 
 
 def discover_candidates_for_document(slide_texts: list[str], chunk_size: int = 25) -> list[Candidate]:
     all_candidates: list[Candidate] = []
     for chunk_index, chunk in enumerate(chunk_slide_texts(slide_texts, chunk_size=chunk_size)):
-        slide_offset = chunk_index * chunk_size
-        all_candidates.extend(discover_candidates(chunk, slide_offset=slide_offset))
+        start_index = chunk_index * chunk_size
+        all_candidates.extend(discover_candidates(chunk, start_index=start_index))
     return all_candidates
 ```
 
 *Note on `candidate_id`:* generated locally with `uuid4()`, never trusted from the Bedrock response — the model isn't asked for an ID at all, only `source_excerpt`/`slide_index`/`one_line_summary`, keeping it out of the business of inventing identifiers.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/pipeline/test_discovery.py -v`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/pipeline/discovery.py backend/tests/pipeline/test_discovery.py
@@ -1173,7 +1247,7 @@ git commit -m "feat: add chunked candidate discovery with cross-chunk merge"
 
 This task has no automated test — it's a manual measurement run against real Bedrock and real Manim, per the product doc's Week 1 requirement to "measure and record wall-clock duration for the full pipeline... on three real Manim scenes" before more templates are built on top.
 
-- [ ] **Step 1: Write `backend/scripts/benchmark_latency.py`**
+- [x] **Step 1: Write `backend/scripts/benchmark_latency.py`**
 
 ```python
 import time
@@ -1218,21 +1292,21 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Confirm AWS credentials and Bedrock model access are configured**
+- [x] **Step 2: Confirm AWS credentials and Bedrock model access are configured**
 
 Run: `aws sts get-caller-identity`
 Expected: returns your AWS account identity (not an error) — confirms credentials are usable before spending a real Bedrock call.
 
-- [ ] **Step 3: Run the benchmark**
+- [x] **Step 3: Run the benchmark**
 
 Run: `cd backend && python scripts/benchmark_latency.py`
 Expected: prints 3 dicts, one per scene, each with `extraction_seconds`, `render_seconds`, `total_seconds`.
 
-- [ ] **Step 4: Record the results**
+- [x] **Step 4: Record the results**
 
 Create `docs/latency-benchmark-week1.md` and paste in the 3 printed result dicts plus one sentence noting whether `total_seconds` per scene feels acceptable for the synchronous, blocking-request-plus-spinner UX decided in the spec (Section 2, Progress UX) — if any scene's total is high enough (tens of seconds) to make a blocking HTTP call impractical, flag it now rather than in Week 4.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/scripts/benchmark_latency.py docs/latency-benchmark-week1.md
@@ -1253,7 +1327,7 @@ git commit -m "chore: add Week 1 latency benchmark and record results"
 
 No automated pass/fail assertions here — discovery quality needs a human judgment call (per the spec's Section 9 on the eval harness), not a string-match test.
 
-- [ ] **Step 1: Write `eval/generate_fixtures.py`**
+- [x] **Step 1: Write `eval/generate_fixtures.py`**
 
 ```python
 from pathlib import Path
@@ -1320,7 +1394,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Write `eval/run_eval.py`**
+- [x] **Step 2: Write `eval/run_eval.py`**
 
 ```python
 import json
@@ -1354,17 +1428,17 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Generate the fixture decks**
+- [x] **Step 3: Generate the fixture decks**
 
 Run: `cd eval && python generate_fixtures.py`
 Expected: `Wrote fixtures to .../eval/fixtures`, and 3 `.pptx` files now exist in `eval/fixtures/`.
 
-- [ ] **Step 4: Run discovery against the fixtures**
+- [x] **Step 4: Run discovery against the fixtures**
 
 Run: `python run_eval.py`
 Expected: a JSON report printed for all 3 fixtures.
 
-- [ ] **Step 5: Hand-review the report and record results**
+- [x] **Step 5: Hand-review the report and record results**
 
 Create `docs/eval-results-week1.md`. For each fixture, note whether the result matches expectations:
 - `zero_candidate_deck.pptx` should report `candidate_count: 0`
@@ -1373,7 +1447,7 @@ Create `docs/eval-results-week1.md`. For each fixture, note whether the result m
 
 If any result doesn't match, note it as a known issue to revisit — this is exactly the kind of finding the eval set exists to catch early per the product doc's risk mitigations.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add eval/generate_fixtures.py eval/run_eval.py docs/eval-results-week1.md

@@ -22,7 +22,7 @@ The real Bedrock evaluation completed on 2026-07-20:
 The distractor candidate summary reports the operation without stating a
 computed final answer, as required.
 
-After Bedrock model access is granted, rerun:
+To reproduce the evaluation with configured Bedrock access, rerun:
 
 ```bash
 cd eval

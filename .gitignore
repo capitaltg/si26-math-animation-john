@@ -27,5 +27,10 @@ eval/fixtures/*.pptx
 # SDD scratch (not committed)
 .superpowers/
 
+# Local source/reference materials (not committed)
+/eval set/
+/project description.md
+/project_pitch_slides.pptx
+
 # OS
 .DS_Store

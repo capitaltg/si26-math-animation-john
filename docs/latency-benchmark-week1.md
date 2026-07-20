@@ -13,7 +13,7 @@ Sonnet 4.6 inference profile.
 The roughly 3-second end-to-end duration is compatible with the planned
 synchronous request plus spinner UX.
 
-After Bedrock model access is granted, rerun:
+To reproduce the benchmark with configured Bedrock access, rerun:
 
 ```bash
 cd backend
