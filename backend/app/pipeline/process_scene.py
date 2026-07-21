@@ -26,6 +26,10 @@ TEMPLATE_MISMATCH_REASON = (
 logger = logging.getLogger(__name__)
 
 
+def _unique_output_path(candidate: Candidate, output_dir: Path) -> Path:
+    return output_dir / f"{candidate.candidate_id}-{uuid4()}.mp4"
+
+
 def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
     lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
     if not lines:
@@ -37,7 +41,7 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
     )
     render_path = None
     try:
-        output_path = output_dir / f"{candidate.candidate_id}.mp4"
+        output_path = _unique_output_path(candidate, output_dir)
         render_scene_to_mp4(TemplateName.TEXT_CARD, params, output_path)
         render_path = output_path
     except Exception:
@@ -93,7 +97,7 @@ def process_scene(
     for attempt in range(2):
         try:
             params = extract_params(candidate.source_excerpt, params_cls)
-            output_path = output_dir / f"{candidate.candidate_id}.mp4"
+            output_path = _unique_output_path(candidate, output_dir)
             render_scene_to_mp4(resolved_template, params, output_path)
             return Scene(
                 scene_id=str(uuid4()),

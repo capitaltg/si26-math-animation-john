@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.scene import TemplateName
 from app.pipeline.classification import classify_candidate
@@ -13,6 +13,7 @@ from app.pipeline.process_scene import process_scene
 from app.session import SessionStore
 
 MAX_SLIDES = 50
+MAX_BATCH_SIZE = 50
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
 
 router = APIRouter()
@@ -32,7 +33,7 @@ class UploadResponse(BaseModel):
 
 
 class OptionsRequest(BaseModel):
-    candidate_ids: list[str]
+    candidate_ids: list[str] = Field(max_length=MAX_BATCH_SIZE)
 
 
 class TemplateOptionOut(BaseModel):
@@ -57,7 +58,7 @@ class RenderPick(BaseModel):
 
 
 class RenderRequest(BaseModel):
-    picks: list[RenderPick]
+    picks: list[RenderPick] = Field(max_length=MAX_BATCH_SIZE)
 
 
 class ClipResult(BaseModel):
@@ -120,12 +121,18 @@ def get_options(
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    results: list[CandidateOptionsOut] = []
+    if len(request.candidate_ids) != len(set(request.candidate_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate candidate ids are not allowed")
+
+    candidates = []
     for candidate_id in request.candidate_ids:
         candidate = session.candidates.get(candidate_id)
         if candidate is None:
             raise HTTPException(status_code=404, detail=f"Unknown candidate {candidate_id}")
+        candidates.append((candidate_id, candidate))
 
+    results: list[CandidateOptionsOut] = []
+    for candidate_id, candidate in candidates:
         classification = classify_candidate(candidate.source_excerpt)
         session.options[candidate_id] = classification
         results.append(
@@ -151,7 +158,11 @@ def render(request: RenderRequest, session_id: str | None = Cookie(default=None)
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    results: list[ClipResult] = []
+    candidate_ids = [pick.candidate_id for pick in request.picks]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate candidate ids are not allowed")
+
+    validated_picks = []
     for pick in request.picks:
         candidate = session.candidates.get(pick.candidate_id)
         if candidate is None:
@@ -176,7 +187,10 @@ def render(request: RenderRequest, session_id: str | None = Cookie(default=None)
                 ),
             )
         selected_template = TemplateName(pick.template)
+        validated_picks.append((pick, candidate, classification, selected_template))
 
+    results: list[ClipResult] = []
+    for pick, candidate, classification, selected_template in validated_picks:
         scene = process_scene(
             candidate,
             session.output_dir,

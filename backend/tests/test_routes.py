@@ -60,7 +60,11 @@ def _classification():
 
 
 def _upload_candidate(client):
-    with patch("app.routes.discover_candidates_for_document", return_value=[_candidate()]):
+    return _upload_candidates(client, [_candidate()])
+
+
+def _upload_candidates(client, candidates):
+    with patch("app.routes.discover_candidates_for_document", return_value=candidates):
         return client.post(
             "/upload",
             files={
@@ -257,6 +261,32 @@ def test_options_without_session_is_400():
     assert resp.status_code == 400
 
 
+def test_options_rejects_duplicate_candidates_before_classification():
+    client = _client()
+    _upload_candidate(client)
+
+    with patch("app.routes.classify_candidate", return_value=_classification()) as classify:
+        resp = client.post("/options", json={"candidate_ids": ["c1", "c1"]})
+
+    assert resp.status_code == 400
+    assert "duplicate" in resp.json()["detail"].lower()
+    classify.assert_not_called()
+
+
+def test_options_rejects_more_than_50_candidates_before_classification():
+    client = _client()
+    _upload_candidate(client)
+
+    with patch("app.routes.classify_candidate") as classify:
+        resp = client.post(
+            "/options",
+            json={"candidate_ids": [f"c{i}" for i in range(51)]},
+        )
+
+    assert resp.status_code == 422
+    classify.assert_not_called()
+
+
 def test_render_rejects_template_that_was_not_offered():
     client = _client()
     _upload_candidate(client)
@@ -298,6 +328,87 @@ def test_render_rejects_unknown_template_name_as_bad_request():
 
     assert resp.status_code == 400
     assert "not offered" in resp.json()["detail"]
+
+
+def test_render_preflights_entire_batch_before_rendering(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    with patch("app.routes.classify_candidate", return_value=_classification()):
+        client.post("/options", json={"candidate_ids": ["c1", "c2"]})
+
+    rendered_scene = Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        status="approved",
+        render_path=tmp_path / "render.mp4",
+    )
+    with patch("app.routes.process_scene", return_value=rendered_scene) as process:
+        resp = client.post(
+            "/render",
+            json={
+                "picks": [
+                    {"candidate_id": "c1", "template": "number_line"},
+                    {"candidate_id": "c2", "template": "array_grid"},
+                ]
+            },
+        )
+
+    assert resp.status_code == 400
+    process.assert_not_called()
+
+
+def test_render_rejects_duplicate_candidates_before_rendering():
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidate(client)
+    with patch("app.routes.classify_candidate", return_value=_classification()):
+        client.post("/options", json={"candidate_ids": ["c1"]})
+
+    rendered_scene = Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        status="approved",
+    )
+    with patch("app.routes.process_scene", return_value=rendered_scene) as process:
+        resp = client.post(
+            "/render",
+            json={
+                "picks": [
+                    {"candidate_id": "c1", "template": "number_line"},
+                    {"candidate_id": "c1", "template": "text_card"},
+                ]
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "duplicate" in resp.json()["detail"].lower()
+    process.assert_not_called()
+
+
+def test_render_rejects_more_than_50_picks_before_rendering():
+    client = _client()
+    _upload_candidate(client)
+
+    with patch("app.routes.process_scene") as process:
+        resp = client.post(
+            "/render",
+            json={
+                "picks": [
+                    {"candidate_id": f"c{i}", "template": "text_card"}
+                    for i in range(51)
+                ]
+            },
+        )
+
+    assert resp.status_code == 422
+    process.assert_not_called()
 
 
 def test_unknown_clip_id_is_404():

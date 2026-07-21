@@ -55,6 +55,31 @@ def test_classify_does_not_duplicate_an_existing_text_card(mock_call):
 
 
 @patch("app.pipeline.classification.call_with_tool")
+def test_classify_stably_deduplicates_structural_templates(mock_call):
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import classify_candidate
+
+    mock_call.return_value = {
+        "options": [
+            {"template": "number_line", "rationale": "best-ranked rationale"},
+            {"template": "balance_scale", "rationale": "shows the equation"},
+            {"template": "number_line", "rationale": "duplicate rationale"},
+        ],
+        "grade_level": 1,
+        "ambiguous": False,
+    }
+
+    result = classify_candidate("6 + 3 = ?")
+
+    assert [option.template for option in result.options] == [
+        TemplateName.NUMBER_LINE,
+        TemplateName.BALANCE_SCALE,
+        TemplateName.TEXT_CARD,
+    ]
+    assert result.options[0].rationale == "best-ranked rationale"
+
+
+@patch("app.pipeline.classification.call_with_tool")
 def test_ambiguous_result_exposes_only_text_card_fallback(mock_call):
     from app.models.scene import TemplateName
     from app.pipeline.classification import classify_candidate

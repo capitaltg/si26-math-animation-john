@@ -63,11 +63,17 @@ def classify_candidate(source_text: str) -> ClassificationResult:
         ),
         _TEXT_CARD_OPTION,
     )
-    structural_options = [] if classification.ambiguous else [
-        option
-        for option in classification.options
-        if option.template != TemplateName.TEXT_CARD
-    ]
+    structural_options = []
+    seen_templates: set[TemplateName] = set()
+    if not classification.ambiguous:
+        for option in classification.options:
+            if (
+                option.template == TemplateName.TEXT_CARD
+                or option.template in seen_templates
+            ):
+                continue
+            seen_templates.add(option.template)
+            structural_options.append(option)
     return classification.model_copy(
         update={"options": [*structural_options, text_card]},
     )

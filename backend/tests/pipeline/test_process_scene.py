@@ -34,7 +34,11 @@ def test_clean_success_returns_approved_scene(mock_classify, mock_extract, mock_
             TemplateOption(
                 template=TemplateName.NUMBER_LINE,
                 rationale="shows the operations as jumps",
-            )
+            ),
+            TemplateOption(
+                template=TemplateName.BALANCE_SCALE,
+                rationale="shows the equation as a balance",
+            ),
         ],
         grade_level=2,
         ambiguous=False,
@@ -46,10 +50,17 @@ def test_clean_success_returns_approved_scene(mock_classify, mock_extract, mock_
 
     assert scene.status == "approved"
     assert scene.template == TemplateName.NUMBER_LINE
-    assert scene.render_path == tmp_path / "c1.mp4"
+    assert scene.render_path.parent == tmp_path
+    assert scene.render_path.suffix == ".mp4"
     assert scene.fallback_reason is None
-    assert mock_extract.call_count == 1
-    assert mock_render.call_count == 1
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_extract.assert_called_once_with(_candidate().source_excerpt, NumberLineParams)
+    mock_render.assert_called_once_with(
+        TemplateName.NUMBER_LINE,
+        mock_extract.return_value,
+        scene.render_path,
+    )
 
 
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
@@ -77,6 +88,65 @@ def test_explicit_template_and_grade_skip_classification(
     assert scene.template == TemplateName.NUMBER_LINE
     assert scene.grade_level == 4
     mock_classify.assert_not_called()
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.extract_params")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_explicit_template_without_grade_uses_default_and_skips_classification(
+    mock_classify,
+    mock_extract,
+    mock_render,
+    tmp_path,
+):
+    from app.pipeline.process_scene import DEFAULT_FALLBACK_GRADE, process_scene
+
+    mock_extract.return_value = _number_line_params()
+
+    scene = process_scene(
+        _candidate(),
+        tmp_path,
+        template=TemplateName.NUMBER_LINE,
+    )
+
+    assert scene.status == "approved"
+    assert scene.grade_level == DEFAULT_FALLBACK_GRADE
+    mock_classify.assert_not_called()
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.extract_params")
+def test_repeated_approved_renders_use_distinct_output_paths(mock_extract, mock_render, tmp_path):
+    from app.pipeline.process_scene import process_scene
+
+    mock_extract.return_value = _number_line_params()
+
+    first = process_scene(_candidate(), tmp_path, template=TemplateName.NUMBER_LINE)
+    second = process_scene(_candidate(), tmp_path, template=TemplateName.NUMBER_LINE)
+
+    assert first.render_path != second.render_path
+    assert [call.args[2] for call in mock_render.call_args_list] == [
+        first.render_path,
+        second.render_path,
+    ]
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_repeated_fallback_renders_use_distinct_output_paths(mock_classify, mock_render, tmp_path):
+    from app.pipeline.classification import ClassificationResult
+    from app.pipeline.process_scene import process_scene
+
+    mock_classify.return_value = ClassificationResult(options=[], grade_level=3, ambiguous=True)
+
+    first = process_scene(_candidate(), tmp_path)
+    second = process_scene(_candidate(), tmp_path)
+
+    assert first.render_path != second.render_path
+    assert [call.args[2] for call in mock_render.call_args_list] == [
+        first.render_path,
+        second.render_path,
+    ]
 
 
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
@@ -190,7 +260,8 @@ def test_persistent_contract_mismatch_reroutes_to_text_card(mock_classify, mock_
     assert scene.template == TemplateName.TEXT_CARD
     assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
     assert scene.fallback_reason != TECHNICAL_FAILURE_REASON
-    assert scene.render_path == tmp_path / "c1.mp4"  # content still rendered
+    assert scene.render_path.parent == tmp_path  # content still rendered
+    assert scene.render_path.suffix == ".mp4"
     assert mock_extract.call_count == 2  # retried once (extraction is nondeterministic)
     mock_classify.assert_not_called()
 
