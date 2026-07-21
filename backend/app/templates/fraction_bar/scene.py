@@ -1,5 +1,7 @@
 from manim import *
 
+from app.templates._shared.fraction_cells import build_fraction_cells
+
 
 class FractionBarScene(Scene):
     params = None
@@ -16,12 +18,7 @@ class FractionBarScene(Scene):
             values.append(total)
 
         n_cells = max(max(values), denominator)
-        cell_width = min(0.6, 12.0 / n_cells)
-
-        cells = VGroup()
-        for _ in range(n_cells):
-            cells.add(Rectangle(width=cell_width, height=0.8, stroke_color=WHITE))
-        cells.arrange(RIGHT, buff=0).move_to(ORIGIN)
+        cells = build_fraction_cells(n_cells)
         self.play(Create(cells))
 
         label = Text(f"{values[0]}/{denominator}").scale(0.6).next_to(cells, UP)
