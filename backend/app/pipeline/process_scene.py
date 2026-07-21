@@ -3,6 +3,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
@@ -17,6 +19,9 @@ CLASSIFICATION_AMBIGUOUS_REASON = (
     "Classification ambiguous or unsupported: no template confidently fits this problem."
 )
 TECHNICAL_FAILURE_REASON = "Technical failure during extraction or render"
+TEMPLATE_MISMATCH_REASON = (
+    "This problem did not fit the chosen visual template; showing the problem text instead."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,18 @@ def process_scene(candidate: Candidate, output_dir: Path) -> Scene:
             last_error = exc
             if attempt == 0:
                 time.sleep(BACKOFF_SECONDS)
+
+    # A ValidationError means the extracted params could not satisfy the template's
+    # structural contract (e.g. a single-operation problem routed to number_line, which
+    # needs 2-3 steps). That is a routing mismatch, not a technical failure: re-route to
+    # a plain text card with an honest reason rather than mislabeling it.
+    if isinstance(last_error, ValidationError):
+        logger.info(
+            "Candidate %s did not fit template %s; re-routing to text card",
+            candidate.candidate_id,
+            template,
+        )
+        return _fallback_scene(candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir)
 
     logger.exception(
         "Extraction/render failed after retries for candidate %s", candidate.candidate_id, exc_info=last_error

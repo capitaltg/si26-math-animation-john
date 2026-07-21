@@ -39,3 +39,23 @@ def test_classify_rejects_an_unknown_template(mock_call):
 
     with pytest.raises(ValidationError):
         classify_candidate("anything")
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classification_prompt_states_each_template_contract(mock_call):
+    """The classifier must know each template's structural contract so it does not
+    route single-operation problems to number_line (which requires 2-3 steps)."""
+    from app.pipeline.classification import classify_candidate
+
+    mock_call.return_value = {"template": "balance_scale", "grade_level": 1, "ambiguous": False}
+
+    classify_candidate("6 + 3 = ?")
+
+    system_prompt = mock_call.call_args.kwargs["system_prompt"]
+    # Every template must be named so the model can choose deliberately.
+    for template in ("number_line", "array_grid", "balance_scale", "fraction_bar", "text_card"):
+        assert template in system_prompt
+    # The number_line multi-step contract is the one that was being violated.
+    assert "2" in system_prompt and "3" in system_prompt
+    # Single-operation equations belong on the balance scale, not the number line.
+    assert "single" in system_prompt.lower()
