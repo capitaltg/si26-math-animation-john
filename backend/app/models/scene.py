@@ -12,6 +12,7 @@ class TemplateName(str, Enum):
     TEXT_CARD = "text_card"
     FRACTION_BAR = "fraction_bar"
     BALANCE_SCALE = "balance_scale"
+    FRACTION_OF_WHOLE = "fraction_of_whole"
 
 
 class Scene(BaseModel):
