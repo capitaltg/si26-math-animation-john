@@ -35,3 +35,29 @@ def test_clip_registration_round_trips(tmp_path):
 
     assert store.get_clip(clip_id) == clip_path
     assert store.get_clip("unknown") is None
+
+
+def test_new_sessions_have_independent_empty_option_caches(tmp_path):
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path)
+    first = store.create([_candidate("a")])
+    second = store.create([_candidate("b")])
+
+    assert first.options == {}
+    assert second.options == {}
+
+    first.options["a"] = ClassificationResult(
+        options=[
+            TemplateOption(
+                template=TemplateName.NUMBER_LINE,
+                rationale="shows one jump",
+            )
+        ],
+        grade_level=1,
+    )
+
+    assert "a" in first.options
+    assert second.options == {}

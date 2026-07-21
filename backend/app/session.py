@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
 from app.models.candidate import Candidate
+from app.pipeline.classification import ClassificationResult
 
 
 @dataclass
@@ -10,6 +11,7 @@ class Session:
     session_id: str
     candidates: dict[str, Candidate]
     output_dir: Path
+    options: dict[str, ClassificationResult] = field(default_factory=dict)
 
 
 class SessionStore:
