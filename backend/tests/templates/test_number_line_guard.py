@@ -129,5 +129,7 @@ def test_schema_exposes_step_constraints_to_bedrock():
 
     assert schema["properties"]["steps"]["minItems"] == 1
     assert schema["properties"]["steps"]["maxItems"] == 3
+    assert "first operand" in schema["properties"]["start"]["description"]
+    assert "source order" in schema["properties"]["steps"]["description"]
     amount_schema = schema["$defs"]["NumberLineStep"]["properties"]["amount"]
     assert amount_schema["exclusiveMinimum"] == 0

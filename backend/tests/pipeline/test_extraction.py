@@ -23,6 +23,54 @@ def test_extract_params_validates_against_the_template_schema(mock_call):
     assert params.steps[0].amount == 3
 
 
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_params_ignores_labels_after_question_and_preserves_operand_order(
+    mock_call,
+):
+    from app.pipeline.extraction import extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_call.return_value = {
+        "start": 6,
+        "steps": [{"operation": "add", "amount": 3}],
+    }
+
+    params = extract_params(
+        "What is composed of 6 and 3? 9 6 3",
+        NumberLineParams,
+    )
+
+    assert params.start == 6
+    assert params.steps[0].amount == 3
+    assert mock_call.call_args.kwargs["user_message"] == (
+        "What is composed of 6 and 3?"
+    )
+    system_prompt = mock_call.call_args.kwargs["system_prompt"]
+    assert "Preserve operand order" in system_prompt
+    assert "composed of A and B" in system_prompt
+    assert "answer choices" in system_prompt
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_params_keeps_text_through_the_last_question_mark(mock_call):
+    from app.pipeline.extraction import extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_call.return_value = {
+        "start": 6,
+        "steps": [{"operation": "add", "amount": 3}],
+    }
+
+    extract_params(
+        "Ready? What is composed of 6 and 3? 9 6 3",
+        NumberLineParams,
+    )
+
+    assert mock_call.call_args.kwargs["user_message"] == (
+        "Ready? What is composed of 6 and 3?"
+    )
+
+
 @patch("app.pipeline.bedrock_client.boto3.client")
 @patch("app.pipeline.bedrock_client.get_settings")
 def test_bedrock_client_uses_credentials_loaded_from_settings(mock_settings, mock_client):

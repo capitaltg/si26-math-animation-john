@@ -11,8 +11,14 @@ class NumberLineStep(BaseModel):
 
 
 class NumberLineParams(BaseModel):
-    start: int
-    steps: list[NumberLineStep] = Field(min_length=1, max_length=3)
+    start: int = Field(
+        description="first operand in the problem statement; never swap operand order"
+    )
+    steps: list[NumberLineStep] = Field(
+        min_length=1,
+        max_length=3,
+        description="Operations for subsequent operands in source order",
+    )
 
     @model_validator(mode="after")
     def _check_guard(self):
