@@ -55,33 +55,51 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
     )
 
 
-def process_scene(candidate: Candidate, output_dir: Path) -> Scene:
-    try:
-        classification = classify_candidate(candidate.source_excerpt)
-    except Exception as exc:
-        logger.exception("Classification failed for candidate %s", candidate.candidate_id)
-        return _fallback_scene(
-            candidate, DEFAULT_FALLBACK_GRADE, TECHNICAL_FAILURE_REASON, output_dir
-        )
+def process_scene(
+    candidate: Candidate,
+    output_dir: Path,
+    *,
+    template: TemplateName | None = None,
+    grade: int | None = None,
+) -> Scene:
+    if template is None:
+        try:
+            classification = classify_candidate(candidate.source_excerpt)
+        except Exception:
+            logger.exception("Classification failed for candidate %s", candidate.candidate_id)
+            return _fallback_scene(
+                candidate,
+                DEFAULT_FALLBACK_GRADE,
+                TECHNICAL_FAILURE_REASON,
+                output_dir,
+            )
 
-    grade = classification.grade_level
-    if classification.ambiguous or classification.template is None:
-        return _fallback_scene(candidate, grade, CLASSIFICATION_AMBIGUOUS_REASON, output_dir)
+        resolved_grade = classification.grade_level
+        if classification.ambiguous or not classification.options:
+            return _fallback_scene(
+                candidate,
+                resolved_grade,
+                CLASSIFICATION_AMBIGUOUS_REASON,
+                output_dir,
+            )
+        resolved_template = classification.options[0].template
+    else:
+        resolved_template = template
+        resolved_grade = grade if grade is not None else DEFAULT_FALLBACK_GRADE
 
-    template = classification.template
-    _, params_cls = get_template(template)
+    _, params_cls = get_template(resolved_template)
 
     last_error: Exception | None = None
     for attempt in range(2):
         try:
             params = extract_params(candidate.source_excerpt, params_cls)
             output_path = output_dir / f"{candidate.candidate_id}.mp4"
-            render_scene_to_mp4(template, params, output_path)
+            render_scene_to_mp4(resolved_template, params, output_path)
             return Scene(
                 scene_id=str(uuid4()),
                 candidate_id=candidate.candidate_id,
-                template=template,
-                grade_level=grade,
+                template=resolved_template,
+                grade_level=resolved_grade,
                 params=params.model_dump(mode="json"),
                 status="approved",
                 render_path=output_path,
@@ -91,19 +109,29 @@ def process_scene(candidate: Candidate, output_dir: Path) -> Scene:
             if attempt == 0:
                 time.sleep(BACKOFF_SECONDS)
 
-    # A ValidationError means the extracted params could not satisfy the template's
-    # structural contract (e.g. a single-operation problem routed to number_line, which
-    # needs 2-3 steps). That is a routing mismatch, not a technical failure: re-route to
-    # a plain text card with an honest reason rather than mislabeling it.
+    # A ValidationError means extraction could not satisfy the chosen template's
+    # structural contract. Preserve the user's content as an honest text-card fallback.
     if isinstance(last_error, ValidationError):
         logger.info(
             "Candidate %s did not fit template %s; re-routing to text card",
             candidate.candidate_id,
-            template,
+            resolved_template,
         )
-        return _fallback_scene(candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir)
+        return _fallback_scene(
+            candidate,
+            resolved_grade,
+            TEMPLATE_MISMATCH_REASON,
+            output_dir,
+        )
 
     logger.exception(
-        "Extraction/render failed after retries for candidate %s", candidate.candidate_id, exc_info=last_error
+        "Extraction/render failed after retries for candidate %s",
+        candidate.candidate_id,
+        exc_info=last_error,
     )
-    return _fallback_scene(candidate, grade, TECHNICAL_FAILURE_REASON, output_dir)
+    return _fallback_scene(
+        candidate,
+        resolved_grade,
+        TECHNICAL_FAILURE_REASON,
+        output_dir,
+    )
