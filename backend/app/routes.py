@@ -5,6 +5,8 @@ from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app.models.scene import TemplateName
+from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import process_scene
@@ -29,8 +31,33 @@ class UploadResponse(BaseModel):
     candidates: list[CandidateOut]
 
 
-class RenderRequest(BaseModel):
+class OptionsRequest(BaseModel):
     candidate_ids: list[str]
+
+
+class TemplateOptionOut(BaseModel):
+    template: TemplateName
+    rationale: str
+
+
+class CandidateOptionsOut(BaseModel):
+    candidate_id: str
+    grade_level: int
+    ambiguous: bool
+    templates: list[TemplateOptionOut]
+
+
+class OptionsResponse(BaseModel):
+    options: list[CandidateOptionsOut]
+
+
+class RenderPick(BaseModel):
+    candidate_id: str
+    template: str
+
+
+class RenderRequest(BaseModel):
+    picks: list[RenderPick]
 
 
 class ClipResult(BaseModel):
@@ -84,6 +111,40 @@ async def upload(response: Response, file: UploadFile = File(...)):
     )
 
 
+@router.post("/options", response_model=OptionsResponse)
+def get_options(
+    request: OptionsRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+
+    results: list[CandidateOptionsOut] = []
+    for candidate_id in request.candidate_ids:
+        candidate = session.candidates.get(candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail=f"Unknown candidate {candidate_id}")
+
+        classification = classify_candidate(candidate.source_excerpt)
+        session.options[candidate_id] = classification
+        results.append(
+            CandidateOptionsOut(
+                candidate_id=candidate_id,
+                grade_level=classification.grade_level,
+                ambiguous=classification.ambiguous,
+                templates=[
+                    TemplateOptionOut(
+                        template=option.template,
+                        rationale=option.rationale,
+                    )
+                    for option in classification.options
+                ],
+            )
+        )
+    return OptionsResponse(options=results)
+
+
 @router.post("/render", response_model=RenderResponse)
 def render(request: RenderRequest, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
@@ -91,19 +152,44 @@ def render(request: RenderRequest, session_id: str | None = Cookie(default=None)
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
     results: list[ClipResult] = []
-    for candidate_id in request.candidate_ids:
-        candidate = session.candidates.get(candidate_id)
+    for pick in request.picks:
+        candidate = session.candidates.get(pick.candidate_id)
         if candidate is None:
-            raise HTTPException(status_code=404, detail=f"Unknown candidate {candidate_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown candidate {pick.candidate_id}",
+            )
 
-        scene = process_scene(candidate, session.output_dir)
+        classification = session.options.get(pick.candidate_id)
+        if classification is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No options cached for candidate {pick.candidate_id}",
+            )
+        offered = {option.template.value for option in classification.options}
+        if pick.template not in offered:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Template {pick.template} was not offered for "
+                    f"candidate {pick.candidate_id}"
+                ),
+            )
+        selected_template = TemplateName(pick.template)
+
+        scene = process_scene(
+            candidate,
+            session.output_dir,
+            template=selected_template,
+            grade=classification.grade_level,
+        )
         clip_url = None
         if scene.render_path is not None:
             clip_id = store.register_clip(scene.render_path)
             clip_url = f"/clips/{clip_id}"
         results.append(
             ClipResult(
-                candidate_id=candidate_id,
+                candidate_id=pick.candidate_id,
                 status=scene.status,
                 clip_url=clip_url,
                 fallback_reason=scene.fallback_reason,
