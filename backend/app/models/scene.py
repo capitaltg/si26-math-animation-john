@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 class TemplateName(str, Enum):
     NUMBER_LINE = "number_line"
     ARRAY_GRID = "array_grid"
+    TEXT_CARD = "text_card"
 
 
 class Scene(BaseModel):
