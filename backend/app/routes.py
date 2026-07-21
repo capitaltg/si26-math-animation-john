@@ -11,6 +11,7 @@ from app.pipeline.process_scene import process_scene
 from app.session import SessionStore
 
 MAX_SLIDES = 50
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
 
 router = APIRouter()
 store = SessionStore(Path(tempfile.gettempdir()) / "math_anim_sessions")
@@ -48,12 +49,26 @@ async def upload(response: Response, file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pptx"):
         raise HTTPException(status_code=400, detail="Only .pptx uploads are supported")
 
-    contents = await file.read()
+    contents = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        contents.extend(chunk)
+        if len(contents) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload exceeds the {MAX_UPLOAD_BYTES}-byte limit",
+            )
+
     with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tmp:
         tmp.write(contents)
         tmp_path = Path(tmp.name)
     try:
-        slide_texts = extract_slide_texts(tmp_path)
+        try:
+            slide_texts = extract_slide_texts(tmp_path)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Could not parse .pptx file") from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 

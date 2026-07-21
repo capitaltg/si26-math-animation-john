@@ -51,6 +51,27 @@ def test_upload_rejects_document_over_slide_cap():
     assert resp.status_code == 400
 
 
+def test_upload_rejects_oversized_file():
+    from app.routes import MAX_UPLOAD_BYTES
+
+    client = _client()
+    oversized = b"\x00" * (MAX_UPLOAD_BYTES + 1)
+    resp = client.post(
+        "/upload",
+        files={"file": ("big.pptx", oversized, "application/vnd.openxmlformats-officedocument.presentationml.presentation")},
+    )
+    assert resp.status_code == 400
+
+
+def test_upload_rejects_corrupt_pptx():
+    client = _client()
+    resp = client.post(
+        "/upload",
+        files={"file": ("broken.pptx", b"not a real pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")},
+    )
+    assert resp.status_code == 400
+
+
 def test_upload_returns_candidates_and_sets_cookie():
     client = _client()
     with patch("app.routes.discover_candidates_for_document", return_value=[_candidate()]):
