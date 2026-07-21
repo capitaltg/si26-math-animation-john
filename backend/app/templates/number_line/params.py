@@ -12,7 +12,7 @@ class NumberLineStep(BaseModel):
 
 class NumberLineParams(BaseModel):
     start: int
-    steps: list[NumberLineStep] = Field(min_length=2, max_length=3)
+    steps: list[NumberLineStep] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
     def _check_guard(self):
