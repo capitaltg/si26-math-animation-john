@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/upload': 'http://localhost:8000',
+      '/options': 'http://localhost:8000',
       '/render': 'http://localhost:8000',
       '/clips': 'http://localhost:8000',
     },
