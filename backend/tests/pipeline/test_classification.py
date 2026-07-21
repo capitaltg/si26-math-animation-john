@@ -140,6 +140,7 @@ def test_classification_prompt_requests_every_compatible_template_ranked(mock_ca
         "array_grid",
         "balance_scale",
         "fraction_bar",
+        "fraction_of_whole",
         "text_card",
     ):
         assert template in system_prompt
