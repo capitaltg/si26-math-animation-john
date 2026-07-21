@@ -1,6 +1,6 @@
 # Math Animation Generator
 
-Upload a PPTX of K–8 math example problems, pick the ones you want, and download short Manim-rendered MP4 clips. A FastAPI backend discovers candidate problems, classifies each into a visual template (number line, array grid, fraction bar, balance scale), and renders it — falling back to an honest, labeled text card when a problem can't be classified or rendered. A React + Vite frontend drives the upload → select → render flow.
+Upload a PPTX of K–8 math example problems, pick the problems you want, choose a visualization for each from ranked compatible options, and download short Manim-rendered MP4 clips. A FastAPI backend discovers candidate problems, classifies each selected problem into compatible visual templates (number line, array grid, fraction bar, balance scale, or text card), validates the teacher's choice, and renders it — falling back to an honest, labeled text card when extraction or rendering cannot satisfy the chosen template. A React + Vite frontend drives the upload → select problems → choose visualizations → render flow.
 
 The LLM never computes arithmetic: it only selects a template and infers a grade. Every running total and equality is recomputed and validated in Python.
 
@@ -18,7 +18,7 @@ frontend/   React + Vite single-page app
 - **ffmpeg** — video encoding
 - **Cairo + Pango + pkg-config** — Manim native rendering deps
 - **LaTeX** (`latex` + `dvisvgm`) — number-line labels use MathTeX
-- **AWS credentials with Amazon Bedrock access** — required for `/upload` (problem discovery) and `/render` (classification/extraction)
+- **AWS credentials with Amazon Bedrock access** — required for `/upload` (problem discovery), `/options` (ranked classification), and `/render` (parameter extraction)
 
 ### macOS (Homebrew)
 
@@ -74,9 +74,9 @@ npm install
 npm run dev
 ```
 
-Frontend serves on `http://localhost:5173`. Its dev server proxies `/upload`, `/render`, and `/clips` to the backend on `:8000`, so the browser talks to a single origin and the session cookie flows without cross-origin friction.
+Frontend serves on `http://localhost:5173`. Its dev server proxies `/upload`, `/options`, `/render`, and `/clips` to the backend on `:8000`, so the browser talks to a single origin and the session cookie flows without cross-origin friction.
 
-**Start the backend first**, then the frontend. Open `http://localhost:5173`, upload a small PPTX with a math problem, select a candidate, and click **Render selected** — a downloadable clip (or a labeled fallback reason) appears.
+**Start the backend first**, then the frontend. Open `http://localhost:5173`, upload a small PPTX with a math problem, select one or more candidates, click **Get options.**, choose a visualization for each problem, and click **Render.** — a downloadable clip (or a labeled fallback reason) appears.
 
 Production build:
 
@@ -101,7 +101,8 @@ The frontend has no test framework in this scope; it is verified via `npm run bu
 | Method | Path           | Purpose                                                                 |
 |--------|----------------|-------------------------------------------------------------------------|
 | POST   | `/upload`      | Multipart PPTX (`.pptx` only, ≤50 slides, ≤50 MB) → discovered candidates + httponly session cookie |
-| POST   | `/render`      | JSON `{ "candidate_ids": [...] }` → rendered clips with status / clip URL / fallback reason |
+| POST   | `/options`     | JSON `{ "candidate_ids": [...] }` → ranked compatible templates + rationale per selected candidate |
+| POST   | `/render`      | JSON `{ "picks": [{ "candidate_id": "...", "template": "number_line" }] }` → rendered clips with status / clip URL / fallback reason |
 | GET    | `/clips/{id}`  | Download a rendered MP4 by server-issued clip id                        |
 
 State is in-memory only (no database); it does not survive a restart.
