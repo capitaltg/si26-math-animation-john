@@ -108,6 +108,25 @@ def test_repeated_render_failure_falls_back_with_technical_reason(mock_classify,
 
 
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_blank_source_excerpt_falls_back_without_raising(mock_classify, mock_render, tmp_path):
+    from app.pipeline.classification import ClassificationResult
+    from app.pipeline.process_scene import process_scene
+
+    mock_classify.return_value = ClassificationResult(template=None, grade_level=3, ambiguous=True)
+    mock_render.return_value = tmp_path / "c1.mp4"
+
+    candidate = Candidate(
+        candidate_id="c1", source_excerpt="   ", slide_index=0, one_line_summary="Detected: x"
+    )
+
+    scene = process_scene(candidate, tmp_path)
+
+    assert scene.status == "fallback"
+    assert scene.template == TemplateName.TEXT_CARD
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
 @patch("app.pipeline.process_scene.extract_params")
 @patch("app.pipeline.process_scene.classify_candidate")
 def test_classification_exception_falls_back_technically(mock_classify, mock_extract, mock_render, tmp_path):

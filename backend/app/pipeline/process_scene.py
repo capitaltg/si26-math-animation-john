@@ -19,9 +19,12 @@ TECHNICAL_FAILURE_REASON = "Technical failure during extraction or render"
 
 
 def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
+    lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
+    if not lines:
+        lines = ["Unable to animate this problem"]
     params = TextCardParams(
         headline=candidate.one_line_summary or "Unable to animate this problem",
-        lines=[candidate.source_excerpt, reason],
+        lines=lines,
     )
     render_path = None
     try:
