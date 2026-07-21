@@ -127,6 +127,28 @@ def test_blank_source_excerpt_falls_back_without_raising(mock_classify, mock_ren
 
 
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_whitespace_only_summary_falls_back_without_raising(mock_classify, mock_render, tmp_path):
+    from app.pipeline.classification import ClassificationResult
+    from app.pipeline.process_scene import process_scene
+
+    mock_classify.return_value = ClassificationResult(template=None, grade_level=3, ambiguous=True)
+    mock_render.return_value = tmp_path / "c1.mp4"
+
+    candidate = Candidate(
+        candidate_id="c1",
+        source_excerpt="Sarah has 4 apples and buys 3 more, then gives 1 away.",
+        slide_index=0,
+        one_line_summary="   ",
+    )
+
+    scene = process_scene(candidate, tmp_path)
+
+    assert scene.status == "fallback"
+    assert scene.template == TemplateName.TEXT_CARD
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
 @patch("app.pipeline.process_scene.extract_params")
 @patch("app.pipeline.process_scene.classify_candidate")
 def test_classification_exception_falls_back_technically(mock_classify, mock_extract, mock_render, tmp_path):

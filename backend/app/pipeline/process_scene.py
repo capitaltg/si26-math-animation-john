@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -17,13 +18,16 @@ CLASSIFICATION_AMBIGUOUS_REASON = (
 )
 TECHNICAL_FAILURE_REASON = "Technical failure during extraction or render"
 
+logger = logging.getLogger(__name__)
+
 
 def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
     lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
     if not lines:
         lines = ["Unable to animate this problem"]
+    headline = (candidate.one_line_summary or "").strip() or "Unable to animate this problem"
     params = TextCardParams(
-        headline=candidate.one_line_summary or "Unable to animate this problem",
+        headline=headline,
         lines=lines,
     )
     render_path = None
@@ -50,8 +54,9 @@ def process_scene(candidate: Candidate, output_dir: Path) -> Scene:
     try:
         classification = classify_candidate(candidate.source_excerpt)
     except Exception as exc:
+        logger.exception("Classification failed for candidate %s", candidate.candidate_id)
         return _fallback_scene(
-            candidate, DEFAULT_FALLBACK_GRADE, f"{TECHNICAL_FAILURE_REASON}: {exc}", output_dir
+            candidate, DEFAULT_FALLBACK_GRADE, TECHNICAL_FAILURE_REASON, output_dir
         )
 
     grade = classification.grade_level
@@ -81,4 +86,7 @@ def process_scene(candidate: Candidate, output_dir: Path) -> Scene:
             if attempt == 0:
                 time.sleep(BACKOFF_SECONDS)
 
-    return _fallback_scene(candidate, grade, f"{TECHNICAL_FAILURE_REASON}: {last_error}", output_dir)
+    logger.exception(
+        "Extraction/render failed after retries for candidate %s", candidate.candidate_id, exc_info=last_error
+    )
+    return _fallback_scene(candidate, grade, TECHNICAL_FAILURE_REASON, output_dir)

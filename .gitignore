@@ -38,4 +38,3 @@ eval/fixtures/*.pptx
 
 # Node / frontend build artifacts
 node_modules/
-frontend/dist/
