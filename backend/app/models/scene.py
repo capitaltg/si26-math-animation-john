@@ -11,6 +11,7 @@ class TemplateName(str, Enum):
     ARRAY_GRID = "array_grid"
     TEXT_CARD = "text_card"
     FRACTION_BAR = "fraction_bar"
+    BALANCE_SCALE = "balance_scale"
 
 
 class Scene(BaseModel):

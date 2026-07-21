@@ -1,6 +1,8 @@
 from app.models.scene import TemplateName
 from app.templates.array_grid.params import ArrayGridParams
 from app.templates.array_grid.scene import ArrayGridScene
+from app.templates.balance_scale.params import BalanceScaleParams
+from app.templates.balance_scale.scene import BalanceScaleScene
 from app.templates.fraction_bar.params import FractionBarParams
 from app.templates.fraction_bar.scene import FractionBarScene
 from app.templates.number_line.params import NumberLineParams
@@ -13,6 +15,7 @@ _REGISTRY = {
     TemplateName.ARRAY_GRID: (ArrayGridScene, ArrayGridParams),
     TemplateName.TEXT_CARD: (TextCardScene, TextCardParams),
     TemplateName.FRACTION_BAR: (FractionBarScene, FractionBarParams),
+    TemplateName.BALANCE_SCALE: (BalanceScaleScene, BalanceScaleParams),
 }
 
 
