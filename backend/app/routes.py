@@ -5,6 +5,7 @@ from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.models.scene import TemplateName
 from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
@@ -105,7 +106,13 @@ async def upload(response: Response, file: UploadFile = File(...)):
 
     candidates = discover_candidates_for_document(slide_texts)
     session = store.create(candidates)
-    response.set_cookie("session_id", session.session_id, httponly=True, samesite="lax")
+    response.set_cookie(
+        "session_id",
+        session.session_id,
+        httponly=True,
+        samesite="lax",
+        secure=get_settings().session_cookie_secure,
+    )
     return UploadResponse(
         session_id=session.session_id,
         candidates=[CandidateOut(**c.model_dump()) for c in candidates],

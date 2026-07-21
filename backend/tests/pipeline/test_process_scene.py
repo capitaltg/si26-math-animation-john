@@ -22,6 +22,30 @@ def _number_line_params():
     )
 
 
+def test_fallback_render_failure_is_logged(tmp_path, caplog):
+    import logging
+
+    from app.pipeline.process_scene import process_scene
+
+    with patch(
+        "app.pipeline.process_scene.classify_candidate",
+        side_effect=RuntimeError("classify boom"),
+    ), patch(
+        "app.pipeline.process_scene.render_scene_to_mp4",
+        side_effect=RuntimeError("render boom"),
+    ), caplog.at_level(logging.WARNING, logger="app.pipeline.process_scene"):
+        scene = process_scene(_candidate(), tmp_path)
+
+    assert scene.status == "fallback"
+    assert scene.render_path is None
+    assert any(
+        r.name == "app.pipeline.process_scene"
+        and r.levelno >= logging.WARNING
+        and "fallback render failed" in r.message.lower()
+        for r in caplog.records
+    )
+
+
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
 @patch("app.pipeline.process_scene.extract_params")
 @patch("app.pipeline.process_scene.classify_candidate")

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
+    session_cookie_secure: bool = False
 
 
 @lru_cache

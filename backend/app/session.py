@@ -1,9 +1,14 @@
+import shutil
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
 from app.models.candidate import Candidate
 from app.pipeline.classification import ClassificationResult
+
+DEFAULT_MAX_SESSIONS = 200
+DEFAULT_MAX_CLIPS = 1000
 
 
 @dataclass
@@ -15,10 +20,17 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, root_dir: Path):
+    def __init__(
+        self,
+        root_dir: Path,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
+        max_clips: int = DEFAULT_MAX_CLIPS,
+    ):
         self._root = Path(root_dir)
-        self._sessions: dict[str, Session] = {}
-        self._clips: dict[str, Path] = {}
+        self._max_sessions = max_sessions
+        self._max_clips = max_clips
+        self._sessions: OrderedDict[str, Session] = OrderedDict()
+        self._clips: OrderedDict[str, Path] = OrderedDict()
 
     def create(self, candidates: list[Candidate]) -> Session:
         session_id = str(uuid4())
@@ -30,14 +42,22 @@ class SessionStore:
             output_dir=output_dir,
         )
         self._sessions[session_id] = session
+        if len(self._sessions) > self._max_sessions:
+            _, evicted = self._sessions.popitem(last=False)
+            shutil.rmtree(evicted.output_dir, ignore_errors=True)
         return session
 
     def get(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        if session is not None:
+            self._sessions.move_to_end(session_id)
+        return session
 
     def register_clip(self, path: Path) -> str:
         clip_id = str(uuid4())
         self._clips[clip_id] = Path(path)
+        if len(self._clips) > self._max_clips:
+            self._clips.popitem(last=False)
         return clip_id
 
     def get_clip(self, clip_id: str) -> Path | None:
