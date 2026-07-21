@@ -35,3 +35,6 @@ eval/fixtures/*.pptx
 
 # OS
 .DS_Store
+
+# Node / frontend build artifacts
+node_modules/
