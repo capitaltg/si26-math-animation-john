@@ -124,6 +124,28 @@ def test_upload_returns_candidates_and_sets_cookie():
     assert "session_id" in resp.cookies
 
 
+def test_upload_sets_secure_cookie_when_configured():
+    from app.config import Settings
+
+    client = _client()
+    with patch(
+        "app.routes.get_settings",
+        return_value=Settings(session_cookie_secure=True),
+    ):
+        resp = _upload_candidate(client)
+
+    assert resp.status_code == 200
+    assert "secure" in resp.headers["set-cookie"].lower()
+
+
+def test_upload_cookie_is_not_secure_by_default():
+    client = _client()
+    resp = _upload_candidate(client)
+
+    assert resp.status_code == 200
+    assert "secure" not in resp.headers["set-cookie"].lower()
+
+
 def test_render_returns_clip_url_for_a_rendered_scene(tmp_path):
     from app.models.scene import Scene, TemplateName
 

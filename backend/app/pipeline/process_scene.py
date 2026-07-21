@@ -45,6 +45,11 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
         render_scene_to_mp4(TemplateName.TEXT_CARD, params, output_path)
         render_path = output_path
     except Exception:
+        logger.warning(
+            "Fallback render failed for candidate %s; returning fallback scene without a clip",
+            candidate.candidate_id,
+            exc_info=True,
+        )
         render_path = None
 
     return Scene(

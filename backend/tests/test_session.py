@@ -37,6 +37,45 @@ def test_clip_registration_round_trips(tmp_path):
     assert store.get_clip("unknown") is None
 
 
+def test_create_evicts_least_recently_used_session_and_removes_its_dir(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_sessions=2)
+    first = store.create([_candidate("a")])
+    store.create([_candidate("b")])
+    store.create([_candidate("c")])
+
+    assert store.get(first.session_id) is None
+    assert not first.output_dir.exists()
+
+
+def test_get_marks_session_as_recently_used(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_sessions=2)
+    first = store.create([_candidate("a")])
+    second = store.create([_candidate("b")])
+    store.get(first.session_id)  # first is now most-recently-used
+    store.create([_candidate("c")])  # evicts the LRU, which is now second
+
+    assert store.get(first.session_id) is first
+    assert store.get(second.session_id) is None
+
+
+def test_clip_registry_is_bounded(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_clips=2)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+
+    first_id = store.register_clip(clip)
+    store.register_clip(clip)
+    store.register_clip(clip)
+
+    assert store.get_clip(first_id) is None
+
+
 def test_new_sessions_have_independent_empty_option_caches(tmp_path):
     from app.models.scene import TemplateName
     from app.pipeline.classification import ClassificationResult, TemplateOption
