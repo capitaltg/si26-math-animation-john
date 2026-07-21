@@ -5,6 +5,8 @@ from app.templates.balance_scale.params import BalanceScaleParams
 from app.templates.balance_scale.scene import BalanceScaleScene
 from app.templates.fraction_bar.params import FractionBarParams
 from app.templates.fraction_bar.scene import FractionBarScene
+from app.templates.fraction_of_whole.params import FractionOfWholeParams
+from app.templates.fraction_of_whole.scene import FractionOfWholeScene
 from app.templates.number_line.params import NumberLineParams
 from app.templates.number_line.scene import NumberLineScene
 from app.templates.text_card.params import TextCardParams
@@ -16,6 +18,7 @@ _REGISTRY = {
     TemplateName.TEXT_CARD: (TextCardScene, TextCardParams),
     TemplateName.FRACTION_BAR: (FractionBarScene, FractionBarParams),
     TemplateName.BALANCE_SCALE: (BalanceScaleScene, BalanceScaleParams),
+    TemplateName.FRACTION_OF_WHOLE: (FractionOfWholeScene, FractionOfWholeParams),
 }
 
 

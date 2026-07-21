@@ -17,3 +17,15 @@ def test_get_template_accepts_a_plain_string():
 
     assert scene_cls.__name__ == "ArrayGridScene"
     assert params_cls.__name__ == "ArrayGridParams"
+
+
+def test_get_template_returns_fraction_of_whole_scene_and_params():
+    from app.models.scene import TemplateName
+    from app.templates.registry import get_template
+    from app.templates.fraction_of_whole.scene import FractionOfWholeScene
+    from app.templates.fraction_of_whole.params import FractionOfWholeParams
+
+    scene_cls, params_cls = get_template(TemplateName.FRACTION_OF_WHOLE)
+
+    assert scene_cls is FractionOfWholeScene
+    assert params_cls is FractionOfWholeParams
