@@ -119,6 +119,7 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={!!selected[candidate.candidate_id]}
+                disabled={loading}
                 onChange={() => toggle(candidate.candidate_id)}
               />
               <strong> {candidate.one_line_summary}</strong>
@@ -139,7 +140,11 @@ export default function App() {
               (entry) => entry.candidate_id === item.candidate_id,
             )
             return (
-              <fieldset key={item.candidate_id} style={{ margin: '1rem 0' }}>
+              <fieldset
+                key={item.candidate_id}
+                disabled={loading}
+                style={{ margin: '1rem 0' }}
+              >
                 <legend>{candidate?.one_line_summary || item.candidate_id}</legend>
                 {item.templates.map((option) => (
                   <label key={option.template} style={{ display: 'block', margin: '0.4rem 0' }}>
