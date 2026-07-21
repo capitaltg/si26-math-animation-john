@@ -2,7 +2,7 @@
 
 Upload a PPTX of K–8 math example problems, pick the problems you want, choose a visualization for each from ranked compatible options, and download short Manim-rendered MP4 clips. A FastAPI backend discovers candidate problems, classifies each selected problem into compatible visual templates (number line, array grid, fraction bar, balance scale, or text card), validates the teacher's choice, and renders it — falling back to an honest, labeled text card when extraction or rendering cannot satisfy the chosen template. A React + Vite frontend drives the upload → select problems → choose visualizations → render flow.
 
-The LLM never computes arithmetic: it only selects a template and infers a grade. Every running total and equality is recomputed and validated in Python.
+The LLM never computes arithmetic: it proposes structurally compatible templates, infers a grade, and extracts template parameters. Every running total and equality is recomputed and validated in Python.
 
 ## Repository layout
 
