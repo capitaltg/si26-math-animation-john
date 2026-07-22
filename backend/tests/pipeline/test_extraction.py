@@ -2,6 +2,24 @@ from unittest.mock import patch
 
 
 @patch("app.pipeline.extraction.call_with_tool")
+def test_extract_params_raises_when_model_declines(mock_call):
+    import pytest
+
+    from app.pipeline.extraction import TemplateMismatchError, extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_call.return_value = (
+        "decline_extraction",
+        {"reason": "no add or subtract sequence in the problem"},
+    )
+
+    with pytest.raises(TemplateMismatchError) as exc_info:
+        extract_params("A word problem with no operands.", NumberLineParams)
+
+    assert "no add or subtract sequence" in str(exc_info.value)
+
+
+@patch("app.pipeline.extraction.call_with_tool")
 def test_extract_params_validates_against_the_template_schema(mock_call):
     from app.pipeline.extraction import extract_params
     from app.templates.number_line.params import NumberLineParams
