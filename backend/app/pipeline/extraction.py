@@ -3,6 +3,7 @@ from typing import Type, TypeVar
 from pydantic import BaseModel
 
 from app.pipeline.bedrock_client import call_with_tool
+from app.pipeline.grounding import check_params_grounded
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -50,4 +51,10 @@ def extract_params(source_text: str, params_cls: Type[T]) -> T:
     if tool_name == _DECLINE_TOOL_NAME:
         reason = result.get("reason", "no reason given")
         raise TemplateMismatchError(f"Model declined extraction: {reason}")
-    return params_cls.model_validate(result)
+    params = params_cls.model_validate(result)
+    ungrounded = check_params_grounded(params, source_text)
+    if ungrounded:
+        raise TemplateMismatchError(
+            f"Extracted numbers not grounded in source: {', '.join(ungrounded)}"
+        )
+    return params

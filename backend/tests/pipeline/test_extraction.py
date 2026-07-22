@@ -92,6 +92,90 @@ def test_extract_params_keeps_text_through_the_last_question_mark(mock_call):
     )
 
 
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_rejects_truncated_array_grid(mock_call):
+    import pytest
+
+    from app.pipeline.extraction import TemplateMismatchError, extract_params
+    from app.templates.array_grid.params import ArrayGridParams
+
+    # Repro 1: model truncates 2.4 x 1.3 to a 2x2 grid.
+    mock_call.return_value = ("report_params", {"rows": 2, "cols": 2})
+
+    with pytest.raises(TemplateMismatchError):
+        extract_params("Multiply (2.4) · (1.3).", ArrayGridParams)
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_rejects_invented_number_line_operation(mock_call):
+    import pytest
+
+    from app.pipeline.extraction import TemplateMismatchError, extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    # Repro 2: fraction-equivalence proof, model invents start=1, subtract 1.
+    mock_call.return_value = (
+        "report_params",
+        {"start": 1, "steps": [{"operation": "subtract", "amount": 1}]},
+    )
+
+    with pytest.raises(TemplateMismatchError):
+        extract_params("Show 1/2, 3/6, 4/8, 2/4 are equivalent.", NumberLineParams)
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_accepts_grounded_number_line(mock_call):
+    from app.pipeline.extraction import extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_call.return_value = (
+        "report_params",
+        {"start": 4, "steps": [{"operation": "add", "amount": 3}, {"operation": "subtract", "amount": 2}]},
+    )
+
+    params = extract_params(
+        "Sarah has 4 apples, buys 3 more, then gives 2 away.", NumberLineParams
+    )
+
+    assert params.start == 4
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_accepts_balance_scale_with_derived_total(mock_call):
+    from app.pipeline.extraction import extract_params
+    from app.templates.balance_scale.params import BalanceScaleParams
+
+    mock_call.return_value = ("report_params", {"left_terms": [3, 4], "right_total": 7})
+
+    params = extract_params("3 + 4 = ?", BalanceScaleParams)
+
+    assert params.right_total == 7
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_accepts_grounded_fraction_bar(mock_call):
+    from app.pipeline.extraction import extract_params
+    from app.templates.fraction_bar.params import FractionBarParams
+
+    # Two steps (min_length=2 per FractionBarParams.steps); running totals
+    # 3 -> 4 -> 6 stay within the guard's [0, denominator * 4] = [0, 24] bound.
+    mock_call.return_value = (
+        "report_params",
+        {
+            "denominator": 6,
+            "start_numerator": 3,
+            "steps": [
+                {"operation": "add", "numerator": 1},
+                {"operation": "add", "numerator": 2},
+            ],
+        },
+    )
+
+    params = extract_params("3/6 + 1/6 + 2/6 = ?", FractionBarParams)
+
+    assert params.denominator == 6
+
+
 @patch("app.pipeline.bedrock_client.get_bedrock_client")
 @patch("app.pipeline.bedrock_client.get_settings")
 def test_call_with_tool_offers_all_tools_and_returns_fired_name(mock_settings, mock_get_client):
