@@ -18,3 +18,12 @@ def test_tokenize_keeps_numbers_atomic(text, expected_present):
         assert token in tokens
     # A decimal is never split into its digits or its dot.
     assert "2" not in tokenize_for_grounding("2.4")
+
+
+def test_curly_quotes_and_apostrophes_normalized():
+    from app.pipeline.grounding import tokenize_for_grounding
+
+    # Curly apostrophe U+2019 is normalized to straight, keeping the word one token.
+    assert tokenize_for_grounding("Sarah’s apples") == ["sarah's", "apples"]
+    # Curly double quotes U+201C/U+201D are excluded, not emitted as tokens.
+    assert tokenize_for_grounding("“hi”") == ["hi"]
