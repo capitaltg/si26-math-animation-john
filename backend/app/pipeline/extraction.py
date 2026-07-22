@@ -52,7 +52,7 @@ def extract_params(source_text: str, params_cls: Type[T]) -> T:
         reason = result.get("reason", "no reason given")
         raise TemplateMismatchError(f"Model declined extraction: {reason}")
     params = params_cls.model_validate(result)
-    ungrounded = check_params_grounded(params, source_text)
+    ungrounded = check_params_grounded(params, _problem_statement(source_text))
     if ungrounded:
         raise TemplateMismatchError(
             f"Extracted numbers not grounded in source: {', '.join(ungrounded)}"

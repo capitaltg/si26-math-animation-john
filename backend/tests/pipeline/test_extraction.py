@@ -107,6 +107,22 @@ def test_extract_rejects_truncated_array_grid(mock_call):
 
 
 @patch("app.pipeline.extraction.call_with_tool")
+def test_grounding_ignores_numbers_after_the_question_mark(mock_call):
+    import pytest
+
+    from app.pipeline.extraction import TemplateMismatchError, extract_params
+    from app.templates.array_grid.params import ArrayGridParams
+
+    # The model only sees "What is 2.4 times 1.3?"; the "2" lives in the answer
+    # choices AFTER the "?", which the model never saw. A fabricated 2x2 grid must
+    # NOT be grounded by that trailing "2".
+    mock_call.return_value = ("report_params", {"rows": 2, "cols": 2})
+
+    with pytest.raises(TemplateMismatchError):
+        extract_params("What is 2.4 times 1.3? Options: 2, 3, 4.", ArrayGridParams)
+
+
+@patch("app.pipeline.extraction.call_with_tool")
 def test_extract_rejects_invented_number_line_operation(mock_call):
     import pytest
 
