@@ -19,3 +19,8 @@ class FractionBarParams(BaseModel):
     def _check_guard(self):
         check_fraction_bar_compatibility(self)
         return self
+
+    def grounding_number_tokens(self) -> list[str]:
+        tokens = [f"{self.start_numerator}/{self.denominator}"]
+        tokens += [f"{step.numerator}/{self.denominator}" for step in self.steps]
+        return tokens

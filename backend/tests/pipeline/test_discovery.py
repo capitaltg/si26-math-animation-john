@@ -7,11 +7,14 @@ import pytest
 def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {"source_excerpt": "4 + 3", "slide_index": 0, "one_line_summary": "Detected: 4 + 3"},
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {"source_excerpt": "4 + 3", "slide_index": 0, "one_line_summary": "Detected: 4 + 3"},
+            ]
+        },
+    )
 
     candidates = discover_candidates(["The problem is 4 + 3."])
 
@@ -27,15 +30,18 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
 def test_discover_candidates_drops_out_of_chunk_slide_index(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "4 + 3",
-                "slide_index": 999,
-                "one_line_summary": "Detected: 4 + 3",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "4 + 3",
+                    "slide_index": 999,
+                    "one_line_summary": "Detected: 4 + 3",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["The problem is 4 + 3."]) == []
 
@@ -44,15 +50,18 @@ def test_discover_candidates_drops_out_of_chunk_slide_index(mock_call):
 def test_discover_candidates_drops_excerpt_not_on_reported_slide(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "9 times 9",
-                "slide_index": 0,
-                "one_line_summary": "Detected: 9 times 9",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "9 times 9",
+                    "slide_index": 0,
+                    "one_line_summary": "Detected: 9 times 9",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["The problem is 4 + 3."]) == []
 
@@ -61,15 +70,18 @@ def test_discover_candidates_drops_excerpt_not_on_reported_slide(mock_call):
 def test_discover_candidates_normalizes_whitespace_when_grounding(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "Sarah has 4 apples and buys 3 more.",
-                "slide_index": 25,
-                "one_line_summary": "Detected: 4 + 3",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Sarah has 4 apples and buys 3 more.",
+                    "slide_index": 25,
+                    "one_line_summary": "Detected: 4 + 3",
+                }
+            ]
+        },
+    )
 
     candidates = discover_candidates(
         ["Sarah has 4 apples\nand buys 3 more."], start_index=25
@@ -82,7 +94,7 @@ def test_discover_candidates_normalizes_whitespace_when_grounding(mock_call):
 def test_discover_candidates_for_document_applies_global_slide_offset(mock_call):
     from app.pipeline.discovery import discover_candidates_for_document
 
-    def fake_call_with_tool(*, system_prompt, user_message, tool_name, tool_schema):
+    def fake_call_with_tool(*, system_prompt, user_message, tools):
         # The prompt numbers its first line "[slide N] ...". Echo N back as the
         # discovered candidate's slide_index, exactly as a real model would when
         # asked to report which numbered slide the excerpt came from. This means
@@ -90,15 +102,18 @@ def test_discover_candidates_for_document_applies_global_slide_offset(mock_call)
         # hardcoding an expected offset.
         first_line = user_message.splitlines()[0]
         slide_index = int(first_line.split("]")[0].removeprefix("[slide").strip())
-        return {
-            "candidates": [
-                {
-                    "source_excerpt": f"slide {slide_index}",
-                    "slide_index": slide_index,
-                    "one_line_summary": f"summary {slide_index}",
-                }
-            ]
-        }
+        return (
+            "report_candidates",
+            {
+                "candidates": [
+                    {
+                        "source_excerpt": f"slide {slide_index}",
+                        "slide_index": slide_index,
+                        "one_line_summary": f"summary {slide_index}",
+                    }
+                ]
+            },
+        )
 
     mock_call.side_effect = fake_call_with_tool
     slide_texts = [f"slide {i}" for i in range(50)]
@@ -117,20 +132,23 @@ def test_discover_candidates_for_document_applies_global_slide_offset(mock_call)
 def test_discover_candidates_accepts_ordered_noncontiguous_slide_tokens(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": (
-                    "A recipe says that 6 spring rolls will serve 3 people. "
-                    "Complete the table.\n"
-                    "number of spring rolls | number of people\n"
-                    "6 | 3\n30 | [blank]\n[blank] | 40\n28 | [blank]"
-                ),
-                "slide_index": 0,
-                "one_line_summary": "Complete the proportional table",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": (
+                        "A recipe says that 6 spring rolls will serve 3 people. "
+                        "Complete the table.\n"
+                        "number of spring rolls | number of people\n"
+                        "6 | 3\n30 | [blank]\n[blank] | 40\n28 | [blank]"
+                    ),
+                    "slide_index": 0,
+                    "one_line_summary": "Complete the proportional table",
+                }
+            ]
+        },
+    )
     slide_text = (
         "ACTIVITY 1\n"
         "A recipe says that 6 spring rolls will serve 3 people. Complete the table.\n"
@@ -192,15 +210,18 @@ def test_discover_candidates_rejects_omitted_standalone_multiplication_operator(
 ):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "Use 6 * 3 = 18.",
-                "slide_index": 0,
-                "one_line_summary": "Multiply 6 by 3",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Use 6 * 3 = 18.",
+                    "slide_index": 0,
+                    "one_line_summary": "Multiply 6 by 3",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["Use 6 3 = 18."]) == []
 
@@ -209,15 +230,18 @@ def test_discover_candidates_rejects_omitted_standalone_multiplication_operator(
 def test_discover_candidates_rejects_omitted_exponentiation_symbol(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "Use 2 ^ 3 = 8.",
-                "slide_index": 0,
-                "one_line_summary": "Cube 2",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Use 2 ^ 3 = 8.",
+                    "slide_index": 0,
+                    "one_line_summary": "Cube 2",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["Use 2 3 = 8."]) == []
 
@@ -226,15 +250,18 @@ def test_discover_candidates_rejects_omitted_exponentiation_symbol(mock_call):
 def test_discover_candidates_rejects_omitted_percent_symbol(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "Find 50% of 20.",
-                "slide_index": 0,
-                "one_line_summary": "Find the percentage",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Find 50% of 20.",
+                    "slide_index": 0,
+                    "one_line_summary": "Find the percentage",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["Find 50 of 20."]) == []
 
@@ -243,15 +270,18 @@ def test_discover_candidates_rejects_omitted_percent_symbol(mock_call):
 def test_discover_candidates_rejects_omitted_grouping_symbol(mock_call):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {
-                "source_excerpt": "Use (2 + 3) * 4.",
-                "slide_index": 0,
-                "one_line_summary": "Multiply a grouped sum",
-            }
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Use (2 + 3) * 4.",
+                    "slide_index": 0,
+                    "one_line_summary": "Multiply a grouped sum",
+                }
+            ]
+        },
+    )
 
     assert discover_candidates(["Use 2 + 3 * 4."]) == []
 
@@ -279,21 +309,24 @@ def test_discover_candidates_filters_malformed_item_without_dropping_valid_item(
 ):
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {
-        "candidates": [
-            {"source_excerpt": "4 + 3", "slide_index": 0},
-            {
-                "source_excerpt": "4 + 3",
-                "slide_index": 0,
-                "one_line_summary": "Add 4 and 3",
-            },
-        ]
-    }
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {"source_excerpt": "4 + 3", "slide_index": 0},
+                {
+                    "source_excerpt": "4 + 3",
+                    "slide_index": 0,
+                    "one_line_summary": "Add 4 and 3",
+                },
+            ]
+        },
+    )
 
     candidates = discover_candidates(["The problem is 4 + 3."])
 
     assert [candidate.source_excerpt for candidate in candidates] == ["4 + 3"]
-    candidate_schema = mock_call.call_args.kwargs["tool_schema"]["$defs"][
+    candidate_schema = mock_call.call_args.kwargs["tools"][0]["schema"]["$defs"][
         "_DiscoveredItem"
     ]
     assert set(candidate_schema["required"]) == {
@@ -309,7 +342,7 @@ def test_discover_candidates_rejects_malformed_top_level_envelope(mock_call):
 
     from app.pipeline.discovery import discover_candidates
 
-    mock_call.return_value = {"candidates": {"source_excerpt": "4 + 3"}}
+    mock_call.return_value = ("report_candidates", {"candidates": {"source_excerpt": "4 + 3"}})
 
     with pytest.raises(ValidationError):
         discover_candidates(["The problem is 4 + 3."])

@@ -1,4 +1,3 @@
-import re
 from typing import Any
 from uuid import uuid4
 
@@ -6,6 +5,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.candidate import Candidate
 from app.pipeline.bedrock_client import call_with_tool
+from app.pipeline.grounding import tokenize_for_grounding
 from app.pipeline.parsing import chunk_slide_texts
 
 _DISCOVERY_SYSTEM_PROMPT = (
@@ -14,13 +14,6 @@ _DISCOVERY_SYSTEM_PROMPT = (
     "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem. "
     "Copy source_excerpt verbatim from the reported slide; do not paraphrase it. "
     "Do not state a computed answer or include the final answer in one_line_summary."
-)
-
-_BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
-_GROUNDING_TOKEN_RE = re.compile(
-    r"(?:\d+(?:[./]\d+)*|\.\d+)"
-    r"|[^\W\d_]+(?:'[^\W\d_]+)*"
-    r"|[^\s|:,.;!?'\"“”‘’…•–—]"
 )
 
 
@@ -38,12 +31,6 @@ class _DiscoveryEnvelope(BaseModel):
     candidates: list[Any]
 
 
-def _tokenize_for_grounding(text: str) -> list[str]:
-    normalized = text.casefold().replace("’", "'")
-    normalized = _BLANK_PLACEHOLDER_RE.sub(" ", normalized)
-    return _GROUNDING_TOKEN_RE.findall(normalized)
-
-
 def _is_ordered_subsequence(needle: list[str], haystack: list[str]) -> bool:
     if not needle:
         return False
@@ -59,19 +46,18 @@ def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int
     if not 0 <= local_index < len(slide_texts):
         return False
 
-    excerpt_tokens = _tokenize_for_grounding(item.source_excerpt)
-    slide_tokens = _tokenize_for_grounding(slide_texts[local_index])
+    excerpt_tokens = tokenize_for_grounding(item.source_excerpt)
+    slide_tokens = tokenize_for_grounding(slide_texts[local_index])
     return _is_ordered_subsequence(excerpt_tokens, slide_tokens)
 
 
 def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:
     numbered = "\n".join(f"[slide {start_index + i}] {text}" for i, text in enumerate(slide_texts))
     schema = _DiscoveryResult.model_json_schema()
-    result = call_with_tool(
+    _, result = call_with_tool(
         system_prompt=_DISCOVERY_SYSTEM_PROMPT,
         user_message=numbered,
-        tool_name="report_candidates",
-        tool_schema=schema,
+        tools=[{"name": "report_candidates", "schema": schema}],
     )
     parsed = _DiscoveryEnvelope.model_validate(result)
     candidates: list[Candidate] = []
