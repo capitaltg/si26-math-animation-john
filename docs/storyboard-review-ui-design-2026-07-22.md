@@ -226,11 +226,11 @@ ticket).
 - Schema contract: assert `NumberLineParams.model_json_schema()` exposes
   `$defs` + `steps` array so the `SchemaForm` ref-following assumption holds.
 
-**⚠️ Known blocker:** `test_routes.py` collection currently fails — missing
-`httpx2` for Starlette `TestClient` (pre-existing). New endpoint tests inherit this
-break. **Recommended:** fix the dep pin as part of this ticket (small, unblocks all
-route tests). Alternative: test endpoint logic via direct function calls until the
-dep lands. **Decision pending.**
+**Test-client status:** `test_routes.py` already runs green (23 pass) — `httpx2>=2.7`
+is pinned in dev deps (commit `ec9ffa5`) and Starlette `TestClient` works against it.
+No dep fix needed; new endpoint tests (`/storyboard`, `PATCH`, retry, approve/reject,
+`/render`) go straight into `test_routes.py` using the existing `TestClient` fixture.
+(An earlier draft flagged this as a blocker — verified resolved on 2026-07-22.)
 
 **Frontend:** no test runner in `frontend/` today. Manual verification via `/run`
 against a known-good PPTX (matches the demo-rehearsal approach in the project
