@@ -63,13 +63,68 @@ def test_ungrounded_token_is_reported():
     assert check_params_grounded(params, "(2.4) · (1.3)") == ["2", "2"]
 
 
-def test_derived_total_is_allowed_when_it_equals_the_sum_of_grounded_numbers():
+class _StubParams:
+    """Minimal params exposing the grounding hooks directly."""
+
+    def __init__(self, tokens, derived_totals):
+        self._tokens = tokens
+        self._derived_totals = derived_totals
+
+    def grounding_number_tokens(self):
+        return self._tokens
+
+    def grounding_derived_totals(self):
+        return self._derived_totals
+
+
+def test_derived_total_allowed_only_via_explicit_declaration():
+    from app.pipeline.grounding import check_params_grounded
+
+    # "7" is absent from the source but a template declares it as 3 + 4.
+    # "5" is grounded literally, so the OLD global-sum heuristic (3+4+5=12)
+    # would have rejected "7"; the explicit subset declaration accepts it.
+    params = _StubParams(
+        tokens=["3", "4", "5", "7"],
+        derived_totals=[("7", ["3", "4"])],
+    )
+
+    assert check_params_grounded(params, "3 4 5") == []
+
+
+def test_global_sum_without_declaration_is_rejected():
+    from app.pipeline.grounding import check_params_grounded
+
+    # "7" equals 3 + 4 but NO template vouches for it -> strict literal-only.
+    params = _StubParams(tokens=["7", "3", "4"], derived_totals=[])
+
+    assert check_params_grounded(params, "3 + 4 = ?") == ["7"]
+
+
+def test_derived_total_rejected_when_a_component_is_not_grounded():
+    from app.pipeline.grounding import check_params_grounded
+
+    # "3" is absent, so the declared total "7" cannot be vouched for either.
+    params = _StubParams(tokens=["3", "4", "7"], derived_totals=[("7", ["3", "4"])])
+
+    assert check_params_grounded(params, "4 = ?") == ["3", "7"]
+
+
+def test_derived_total_rejected_when_value_does_not_equal_component_sum():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Declared total "8" does not equal 3 + 4, so it stays ungrounded.
+    params = _StubParams(tokens=["3", "4", "8"], derived_totals=[("8", ["3", "4"])])
+
+    assert check_params_grounded(params, "3 4") == ["8"]
+
+
+def test_balance_scale_declares_right_total_as_derived():
     from app.pipeline.grounding import check_params_grounded
     from app.templates.balance_scale.params import BalanceScaleParams
 
     params = BalanceScaleParams(left_terms=[3, 4], right_total=7)
 
-    # "7" is absent from the source but equals 3 + 4, both grounded.
+    # "7" is absent from the source but the template vouches for it as 3 + 4.
     assert check_params_grounded(params, "3 + 4 = ?") == []
 
 

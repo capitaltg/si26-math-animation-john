@@ -1,4 +1,8 @@
+import math
 import re
+
+_REL_TOL = 1e-9
+_ABS_TOL = 1e-12
 
 _BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
 _GROUNDING_TOKEN_RE = re.compile(
@@ -54,25 +58,46 @@ def params_number_tokens(params) -> list[str]:
     return default_number_tokens(params)
 
 
+def params_derived_totals(params) -> list[tuple[str, list[str]]]:
+    """(total_token, [component_tokens]) pairs a template vouches for.
+
+    A template opts in to the derived-total allowance by defining a
+    ``grounding_derived_totals`` method. The default is empty, so templates that
+    do not opt in get strict literal-only grounding.
+    """
+    hook = getattr(params, "grounding_derived_totals", None)
+    if callable(hook):
+        return [(str(total), list(components)) for total, components in hook()]
+    return []
+
+
 def check_params_grounded(params, source_text: str) -> list[str]:
     """Return the params number tokens that are not grounded in the source.
 
-    A token is grounded when it appears in the source tokens, or (derived-total
-    allowance) its numeric value equals the sum of the numeric values of the tokens
-    grounded by the first rule. An empty return means fully grounded.
+    A token is grounded when it appears literally in the source tokens, or a
+    template declared it a derived total (see ``grounding_derived_totals``) whose
+    named components are all grounded literally and whose numeric value equals
+    their sum. An empty return means fully grounded.
     """
     source = set(tokenize_for_grounding(source_text))
     tokens = params_number_tokens(params)
     grounded = {token for token in tokens if token in source}
-    base_sum = sum(
-        value for token in grounded if (value := _token_value(token)) is not None
-    )
-    ungrounded: list[str] = []
-    for token in tokens:
-        if token in grounded:
+
+    allowed_totals: set[str] = set()
+    for total_token, components in params_derived_totals(params):
+        if not components or any(component not in source for component in components):
             continue
-        value = _token_value(token)
-        if grounded and value is not None and value == base_sum:
+        total_value = _token_value(total_token)
+        component_values = [_token_value(component) for component in components]
+        if total_value is None or any(value is None for value in component_values):
             continue
-        ungrounded.append(token)
-    return ungrounded
+        if math.isclose(
+            sum(component_values), total_value, rel_tol=_REL_TOL, abs_tol=_ABS_TOL
+        ):
+            allowed_totals.add(total_token)
+
+    return [
+        token
+        for token in tokens
+        if token not in grounded and token not in allowed_totals
+    ]
