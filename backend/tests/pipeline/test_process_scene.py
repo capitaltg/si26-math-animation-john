@@ -41,7 +41,7 @@ def test_fallback_render_failure_is_logged(tmp_path, caplog):
     assert any(
         r.name == "app.pipeline.process_scene"
         and r.levelno >= logging.WARNING
-        and "fallback render failed" in r.message.lower()
+        and "text-card render failed" in r.message.lower()
         for r in caplog.records
     )
 
@@ -171,6 +171,47 @@ def test_repeated_fallback_renders_use_distinct_output_paths(mock_classify, mock
         first.render_path,
         second.render_path,
     ]
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.extract_params")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_text_card_choice_renders_directly_as_approved(mock_classify, mock_extract, mock_render, tmp_path):
+    """When text_card is the only structural fit, render it directly as an approved
+    scene rather than running numeric extraction that would only decline."""
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.pipeline.process_scene import process_scene
+
+    mock_classify.return_value = ClassificationResult(
+        options=[TemplateOption(template=TemplateName.TEXT_CARD, rationale="static plot task")],
+        grade_level=3,
+        ambiguous=False,
+    )
+    mock_render.return_value = tmp_path / "c1.mp4"
+
+    scene = process_scene(_candidate(), tmp_path)
+
+    assert scene.status == "approved"
+    assert scene.template == TemplateName.TEXT_CARD
+    assert scene.fallback_reason is None
+    assert scene.render_path.parent == tmp_path
+    assert mock_extract.call_count == 0  # no numeric extraction for a text card
+
+
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.extract_params")
+def test_explicit_text_card_template_skips_extraction(mock_extract, mock_render, tmp_path):
+    from app.pipeline.process_scene import process_scene
+
+    mock_render.return_value = tmp_path / "c1.mp4"
+
+    scene = process_scene(_candidate(), tmp_path, template=TemplateName.TEXT_CARD, grade=2)
+
+    assert scene.status == "approved"
+    assert scene.template == TemplateName.TEXT_CARD
+    assert scene.grade_level == 2
+    assert scene.fallback_reason is None
+    assert mock_extract.call_count == 0
 
 
 @patch("app.pipeline.process_scene.render_scene_to_mp4")

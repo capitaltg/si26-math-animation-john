@@ -30,7 +30,17 @@ def _unique_output_path(candidate: Candidate, output_dir: Path) -> Path:
     return output_dir / f"{candidate.candidate_id}-{uuid4()}.mp4"
 
 
-def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
+def _text_card_scene(
+    candidate: Candidate,
+    grade: int,
+    output_dir: Path,
+    *,
+    reason: str | None = None,
+) -> Scene:
+    """Render a text card. With a reason it is an honest fallback from a failed or
+    unavailable visual template; without one it is a deliberately chosen text card
+    (status "approved"), so no fallback_reason is attached."""
+    reason = reason or None  # normalize "" to None so the Scene invariant holds
     lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
     if not lines:
         lines = ["Unable to animate this problem"]
@@ -46,7 +56,7 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
         render_path = output_path
     except Exception:
         logger.warning(
-            "Fallback render failed for candidate %s; returning fallback scene without a clip",
+            "Text-card render failed for candidate %s; returning scene without a clip",
             candidate.candidate_id,
             exc_info=True,
         )
@@ -58,10 +68,14 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
         template=TemplateName.TEXT_CARD,
         grade_level=grade,
         params=params.model_dump(mode="json"),
-        status="fallback",
+        status="fallback" if reason else "approved",
         fallback_reason=reason,
         render_path=render_path,
     )
+
+
+def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
+    return _text_card_scene(candidate, grade, output_dir, reason=reason)
 
 
 def process_scene(
@@ -95,6 +109,12 @@ def process_scene(
     else:
         resolved_template = template
         resolved_grade = grade if grade is not None else DEFAULT_FALLBACK_GRADE
+
+    # A text card carries the problem statement verbatim — there are no numeric params
+    # to extract. Render it directly rather than routing through extract_params, which
+    # would decline the non-numeric schema and then re-route here anyway.
+    if resolved_template == TemplateName.TEXT_CARD:
+        return _text_card_scene(candidate, resolved_grade, output_dir)
 
     _, params_cls = get_template(resolved_template)
 

@@ -167,3 +167,21 @@ def test_classification_prompt_requests_every_compatible_template_ranked(mock_ca
     assert "one-phrase rationale" in system_prompt.lower()
     assert "1 to 3" in system_prompt
     assert "single operation" in system_prompt.lower()
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classification_prompt_excludes_static_plots_from_number_line(mock_call):
+    from app.pipeline.classification import classify_candidate
+
+    mock_call.return_value = (
+        "classify_problem",
+        {"options": [], "grade_level": 3, "ambiguous": True},
+    )
+
+    classify_candidate("Plot 1/4 and 2/4 on the number line.")
+
+    system_prompt = mock_call.call_args.kwargs["system_prompt"].lower()
+    # number_line must require an operation, not accept static plotting tasks
+    assert "requires an actual" in system_prompt
+    assert "plotting" in system_prompt
+    assert "no operation is performed" in system_prompt

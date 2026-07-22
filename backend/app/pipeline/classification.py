@@ -7,7 +7,10 @@ from app.pipeline.bedrock_client import call_with_tool
 # must return only options whose parameter guards can accept the problem downstream.
 _TEMPLATE_CONTRACTS = (
     "- number_line: a journey of 1 to 3 sequential add/subtract jumps from a start value "
-    "(e.g. 6 + 3 or 4 + 3 - 1). A single operation is one valid jump.\n"
+    "(e.g. 6 + 3 or 4 + 3 - 1). A single operation is one valid jump. Requires an actual "
+    "add or subtract operation that moves along the line. Do NOT use for plotting, drawing, "
+    "or labeling given numbers or fractions on a line when no operation is performed — a "
+    "static plot-the-points task has no journey and belongs to text_card.\n"
     "- balance_scale: a single equation with exactly two addends on one side equalling a "
     "total (e.g. 6 + 3 = ?, 10 + 2 = 12). Useful for single-operation sums.\n"
     "- array_grid: equal groups / repeated addition / multiplication shown as rows x columns.\n"
