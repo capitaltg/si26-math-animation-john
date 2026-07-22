@@ -23,10 +23,9 @@ def _problem_statement(source_text: str) -> str:
 
 def extract_params(source_text: str, params_cls: Type[T]) -> T:
     schema = params_cls.model_json_schema()
-    result = call_with_tool(
+    _, result = call_with_tool(
         system_prompt=_EXTRACTION_SYSTEM_PROMPT,
         user_message=_problem_statement(source_text),
-        tool_name="report_params",
-        tool_schema=schema,
+        tools=[{"name": "report_params", "schema": schema}],
     )
     return params_cls.model_validate(result)

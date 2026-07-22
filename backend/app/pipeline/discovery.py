@@ -54,11 +54,10 @@ def _is_grounded(item: _DiscoveredItem, slide_texts: list[str], start_index: int
 def discover_candidates(slide_texts: list[str], start_index: int = 0) -> list[Candidate]:
     numbered = "\n".join(f"[slide {start_index + i}] {text}" for i, text in enumerate(slide_texts))
     schema = _DiscoveryResult.model_json_schema()
-    result = call_with_tool(
+    _, result = call_with_tool(
         system_prompt=_DISCOVERY_SYSTEM_PROMPT,
         user_message=numbered,
-        tool_name="report_candidates",
-        tool_schema=schema,
+        tools=[{"name": "report_candidates", "schema": schema}],
     )
     parsed = _DiscoveryEnvelope.model_validate(result)
     candidates: list[Candidate] = []

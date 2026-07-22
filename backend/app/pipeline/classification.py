@@ -48,11 +48,10 @@ _TEXT_CARD_OPTION = TemplateOption(
 
 def classify_candidate(source_text: str) -> ClassificationResult:
     schema = ClassificationResult.model_json_schema()
-    result = call_with_tool(
+    _, result = call_with_tool(
         system_prompt=_CLASSIFICATION_SYSTEM_PROMPT,
         user_message=source_text,
-        tool_name="classify_problem",
-        tool_schema=schema,
+        tools=[{"name": "classify_problem", "schema": schema}],
     )
     classification = ClassificationResult.model_validate(result)
     text_card = next(

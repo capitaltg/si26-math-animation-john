@@ -20,7 +20,11 @@ def get_bedrock_client():
     return boto3.client("bedrock-runtime", **client_kwargs)
 
 
-def call_with_tool(system_prompt: str, user_message: str, tool_name: str, tool_schema: dict) -> dict:
+def call_with_tool(
+    system_prompt: str,
+    user_message: str,
+    tools: list[dict],
+) -> tuple[str, dict]:
     settings = get_settings()
     client = get_bedrock_client()
     response = client.converse(
@@ -28,11 +32,14 @@ def call_with_tool(system_prompt: str, user_message: str, tool_name: str, tool_s
         system=[{"text": system_prompt}],
         messages=[{"role": "user", "content": [{"text": user_message}]}],
         toolConfig={
-            "tools": [{"toolSpec": {"name": tool_name, "inputSchema": {"json": tool_schema}}}],
-            "toolChoice": {"tool": {"name": tool_name}},
+            "tools": [
+                {"toolSpec": {"name": tool["name"], "inputSchema": {"json": tool["schema"]}}}
+                for tool in tools
+            ],
+            "toolChoice": {"any": {}},
         },
     )
     for block in response["output"]["message"]["content"]:
         if "toolUse" in block:
-            return block["toolUse"]["input"]
+            return block["toolUse"]["name"], block["toolUse"]["input"]
     raise RuntimeError("Bedrock response did not include a tool call")
