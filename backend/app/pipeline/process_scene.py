@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
-from app.pipeline.extraction import extract_params
+from app.pipeline.extraction import TemplateMismatchError, extract_params
 from app.render.full_render import render_scene_to_mp4
 from app.templates.registry import get_template
 from app.templates.text_card.params import TextCardParams
@@ -113,14 +113,19 @@ def process_scene(
                 status="approved",
                 render_path=output_path,
             )
+        except TemplateMismatchError as exc:
+            # A structural mismatch will not change on retry — stop immediately.
+            last_error = exc
+            break
         except Exception as exc:
             last_error = exc
             if attempt == 0:
                 time.sleep(BACKOFF_SECONDS)
 
-    # A ValidationError means extraction could not satisfy the chosen template's
-    # structural contract. Preserve the user's content as an honest text-card fallback.
-    if isinstance(last_error, ValidationError):
+    # A ValidationError or TemplateMismatchError means extraction could not satisfy
+    # the chosen template's structural contract. Preserve the user's content as an
+    # honest text-card fallback.
+    if isinstance(last_error, (ValidationError, TemplateMismatchError)):
         logger.info(
             "Candidate %s did not fit template %s; re-routing to text card",
             candidate.candidate_id,

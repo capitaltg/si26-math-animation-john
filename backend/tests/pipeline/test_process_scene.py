@@ -290,6 +290,33 @@ def test_persistent_contract_mismatch_reroutes_to_text_card(mock_classify, mock_
     mock_classify.assert_not_called()
 
 
+@patch("app.pipeline.process_scene.time.sleep")
+@patch("app.pipeline.process_scene.render_scene_to_mp4")
+@patch("app.pipeline.process_scene.extract_params")
+@patch("app.pipeline.process_scene.classify_candidate")
+def test_template_mismatch_reroutes_to_text_card_without_retry(
+    mock_classify, mock_extract, mock_render, mock_sleep, tmp_path
+):
+    from app.pipeline.extraction import TemplateMismatchError
+    from app.pipeline.process_scene import TEMPLATE_MISMATCH_REASON, process_scene
+
+    mock_extract.side_effect = TemplateMismatchError("numbers not grounded: 2")
+    mock_render.return_value = tmp_path / "c1.mp4"
+
+    scene = process_scene(
+        _candidate(),
+        tmp_path,
+        template=TemplateName.NUMBER_LINE,
+        grade=1,
+    )
+
+    assert scene.status == "fallback"
+    assert scene.template == TemplateName.TEXT_CARD
+    assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
+    assert mock_extract.call_count == 1  # structural mismatch: no retry
+    assert mock_sleep.call_count == 0
+
+
 @patch("app.pipeline.process_scene.render_scene_to_mp4")
 @patch("app.pipeline.process_scene.classify_candidate")
 def test_blank_source_excerpt_falls_back_without_raising(mock_classify, mock_render, tmp_path):
