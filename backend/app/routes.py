@@ -1,9 +1,10 @@
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.models.scene import Scene, TemplateName
@@ -11,6 +12,7 @@ from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene, process_scene
+from app.render.full_render import render_scene_thumbnail
 from app.session import SessionStore
 from app.templates.registry import get_template
 
@@ -95,6 +97,11 @@ class StoryboardRequest(BaseModel):
 
 class StoryboardResponse(BaseModel):
     scenes: list[SceneOut]
+
+
+class SceneEditRequest(BaseModel):
+    params: dict | None = None
+    grade_level: int | None = Field(default=None, ge=0, le=8)
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -333,3 +340,54 @@ def get_thumbnail(thumb_id: str):
     if path is None or not path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(path, media_type="image/png", filename=path.name)
+
+
+def _field_errors(exc: ValidationError) -> dict:
+    return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
+
+
+@router.patch("/storyboard/{scene_id}", response_model=SceneOut)
+def edit_scene(
+    scene_id: str,
+    request: SceneEditRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = session.scenes.get(scene_id)
+    if scene is None:
+        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    candidate = session.candidates.get(scene.candidate_id)
+    if scene.template is None:
+        raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
+
+    new_params = scene.params
+    new_thumb = scene.thumbnail_path
+    if request.params is not None:
+        _, params_cls = get_template(scene.template)
+        try:
+            params = params_cls.model_validate(request.params)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=_field_errors(exc))
+        out = session.output_dir / f"{scene.candidate_id}-{uuid4()}.png"
+        try:
+            render_scene_thumbnail(scene.template, params, out)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
+        new_params = params.model_dump(mode="json")
+        new_thumb = out
+
+    grade = request.grade_level if request.grade_level is not None else scene.grade_level
+    grade_overridden = scene.grade_overridden or request.grade_level is not None
+
+    updated = scene.model_copy(
+        update={
+            "params": new_params,
+            "thumbnail_path": new_thumb,
+            "grade_level": grade,
+            "grade_overridden": grade_overridden,
+        }
+    )
+    session.scenes[scene_id] = updated
+    return _scene_out(updated, candidate)

@@ -516,3 +516,86 @@ def test_storyboard_without_session_is_400():
         json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
     )
     assert resp.status_code == 400
+
+
+def _seed_scene(client, scene, template=None):
+    """Attach `scene` to the client's current session (in the module-level store)."""
+    from app.models.scene import TemplateName
+    from app.routes import store
+
+    session_id = client.cookies.get("session_id")
+    session = store.get(session_id)
+    session.scenes[scene.scene_id] = scene
+    session.scene_order.append(scene.scene_id)
+    if template is not None:
+        session.scene_requested_template[scene.scene_id] = TemplateName(template)
+    return session
+
+
+def _number_line_scene(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"png")
+    return Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        status="pending_review",
+        thumbnail_path=thumb,
+    )
+
+
+def test_patch_valid_params_re_renders_thumbnail(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    with patch("app.routes.render_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["params"]["start"] == 10
+    assert body["status"] == "pending_review"
+    thumb.assert_called_once()
+
+
+def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    # start=1 then subtract 5 -> running total goes negative -> guard rejects.
+    with patch("app.routes.render_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 1, "steps": [{"operation": "subtract", "amount": 5}]}},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["errors"]
+    thumb.assert_not_called()
+
+
+def test_patch_grade_sets_overridden(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": 5})
+    assert resp.status_code == 200
+    assert resp.json()["grade_level"] == 5
+    assert resp.json()["grade_overridden"] is True
+
+
+def test_patch_unknown_scene_is_404():
+    client = _client()
+    _upload_candidate(client)
+    resp = client.patch("/storyboard/nope", json={"grade_level": 3})
+    assert resp.status_code == 404
