@@ -11,3 +11,6 @@ class FractionOfWholeParams(BaseModel):
     def _check_guard(self):
         check_fraction_of_whole_compatibility(self)
         return self
+
+    def grounding_number_tokens(self) -> list[str]:
+        return [f"{self.numerator}/{self.denominator}"]
