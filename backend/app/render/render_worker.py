@@ -2,18 +2,22 @@ import json
 import sys
 from pathlib import Path
 
-from app.templates.registry import get_template
+from app.templates.registry import get_chained_template, get_template
 
 VALID_MODES = {"full", "thumbnail"}
+VALID_CHAIN_FLAGS = {"solo", "chained"}
 
 
 def main() -> None:
-    template_name, params_json_path, output_path_str, mode, scratch_dir_str = sys.argv[1:6]
+    template_name, params_json_path, output_path_str, mode, scratch_dir_str, chain_flag = sys.argv[1:7]
     if mode not in VALID_MODES:
         raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
+    if chain_flag not in VALID_CHAIN_FLAGS:
+        raise ValueError(f"Unknown chain flag {chain_flag!r}; expected one of {sorted(VALID_CHAIN_FLAGS)}")
 
     params_data = json.loads(Path(params_json_path).read_text())
-    scene_cls, params_cls = get_template(template_name)
+    lookup = get_chained_template if chain_flag == "chained" else get_template
+    scene_cls, params_cls = lookup(template_name)
     params = params_cls.model_validate(params_data)
 
     from manim import tempconfig

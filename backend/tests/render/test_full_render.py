@@ -53,3 +53,21 @@ def test_failed_rerender_preserves_existing_artifact(mock_run, tmp_path):
         render_scene_thumbnail(TemplateName.ARRAY_GRID, params, output_path)
 
     assert output_path.read_bytes() == b"previous successful thumbnail"
+
+
+def test_render_chained_number_line_scene_produces_mp4(tmp_path):
+    from app.models.scene import TemplateName
+    from app.render.full_render import render_chained_scene_to_mp4
+    from app.templates.number_line.params import ChainedNumberLineParams, NumberLineParams, NumberLineStep
+
+    params = ChainedNumberLineParams(items=[
+        NumberLineParams(start=1, steps=[NumberLineStep(operation="add", amount=2)]),
+        NumberLineParams(start=5, steps=[NumberLineStep(operation="subtract", amount=1)]),
+    ])
+    output_path = tmp_path / "chain.mp4"
+
+    result_path = render_chained_scene_to_mp4(TemplateName.NUMBER_LINE, params, output_path)
+
+    assert result_path == output_path
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0

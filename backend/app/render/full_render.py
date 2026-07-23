@@ -14,14 +14,20 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 def render_scene_to_mp4(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
-    return _run_render_worker(template, params, output_path, mode="full")
+    return _run_render_worker(template, params, output_path, mode="full", chained=False)
 
 
 def render_scene_thumbnail(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
-    return _run_render_worker(template, params, output_path, mode="thumbnail")
+    return _run_render_worker(template, params, output_path, mode="thumbnail", chained=False)
 
 
-def _run_render_worker(template: TemplateName, params: BaseModel, output_path: Path, mode: str) -> Path:
+def render_chained_scene_to_mp4(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
+    return _run_render_worker(template, params, output_path, mode="full", chained=True)
+
+
+def _run_render_worker(
+    template: TemplateName, params: BaseModel, output_path: Path, mode: str, chained: bool
+) -> Path:
     scratch_dir = tempfile.mkdtemp()
     try:
         params_json_path = Path(scratch_dir) / "params.json"
@@ -32,6 +38,7 @@ def _run_render_worker(template: TemplateName, params: BaseModel, output_path: P
                 [
                     sys.executable, "-m", "app.render.render_worker",
                     template.value, str(params_json_path), str(output_path), mode, scratch_dir,
+                    "chained" if chained else "solo",
                 ],
                 capture_output=True,
                 text=True,
