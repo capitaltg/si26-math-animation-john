@@ -594,6 +594,22 @@ def test_patch_grade_sets_overridden(tmp_path):
     assert resp.json()["grade_overridden"] is True
 
 
+def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    with patch("app.routes.render_scene_thumbnail") as thumb:
+        resp = client.patch("/storyboard/s1", json={"grade_level": 100})
+
+    assert resp.status_code == 422
+    errors = resp.json()["detail"]["errors"]
+    assert errors
+    assert "loc" in errors[0]
+    assert "msg" in errors[0]
+    thumb.assert_not_called()
+
+
 def test_patch_unknown_scene_is_404():
     client = _client()
     _upload_candidate(client)

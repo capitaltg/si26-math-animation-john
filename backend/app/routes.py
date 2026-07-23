@@ -101,7 +101,7 @@ class StoryboardResponse(BaseModel):
 
 class SceneEditRequest(BaseModel):
     params: dict | None = None
-    grade_level: int | None = Field(default=None, ge=0, le=8)
+    grade_level: int | None = None
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -361,6 +361,16 @@ def edit_scene(
     candidate = session.candidates.get(scene.candidate_id)
     if scene.template is None:
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
+
+    if request.grade_level is not None and not (0 <= request.grade_level <= 8):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "errors": [
+                    {"loc": ["grade_level"], "msg": "grade_level must be between 0 and 8"}
+                ]
+            },
+        )
 
     new_params = scene.params
     new_thumb = scene.thumbnail_path
