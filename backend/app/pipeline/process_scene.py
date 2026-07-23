@@ -29,6 +29,14 @@ def _unique_thumbnail_path(candidate: Candidate, output_dir: Path) -> Path:
     return output_dir / f"{candidate.candidate_id}-{uuid4()}.png"
 
 
+def _text_card_params(candidate: Candidate, reason: str | None = None) -> TextCardParams:
+    lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
+    if not lines:
+        lines = ["Unable to animate this problem"]
+    headline = (candidate.one_line_summary or "").strip() or "Unable to animate this problem"
+    return TextCardParams(headline=headline, lines=lines)
+
+
 def _fallback_scene(
     candidate: Candidate,
     grade: int,
@@ -37,11 +45,7 @@ def _fallback_scene(
     *,
     thumbnail: bool = False,
 ) -> Scene:
-    lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
-    if not lines:
-        lines = ["Unable to animate this problem"]
-    headline = (candidate.one_line_summary or "").strip() or "Unable to animate this problem"
-    params = TextCardParams(headline=headline, lines=lines)
+    params = _text_card_params(candidate, reason)
 
     render_path = None
     thumbnail_path = None
@@ -81,23 +85,36 @@ def assemble_scene(
     template: TemplateName,
     grade: int,
 ) -> Scene:
+    if template == TemplateName.TEXT_CARD:
+        params = _text_card_params(candidate)
+        thumb_path = _unique_thumbnail_path(candidate, output_dir)
+        try:
+            render_scene_thumbnail(template, params, thumb_path)
+        except Exception:
+            logger.warning(
+                "Thumbnail render failed for candidate %s; returning scene without preview",
+                candidate.candidate_id,
+                exc_info=True,
+            )
+            thumb_path = None
+        return Scene(
+            scene_id=str(uuid4()),
+            candidate_id=candidate.candidate_id,
+            template=template,
+            grade_level=grade,
+            params=params.model_dump(mode="json"),
+            status="pending_review",
+            thumbnail_path=thumb_path,
+        )
+
     _, params_cls = get_template(template)
 
     last_error: Exception | None = None
+    params = None
     for attempt in range(2):
         try:
             params = extract_params(candidate.source_excerpt, params_cls)
-            thumb_path = _unique_thumbnail_path(candidate, output_dir)
-            render_scene_thumbnail(template, params, thumb_path)
-            return Scene(
-                scene_id=str(uuid4()),
-                candidate_id=candidate.candidate_id,
-                template=template,
-                grade_level=grade,
-                params=params.model_dump(mode="json"),
-                status="pending_review",
-                thumbnail_path=thumb_path,
-            )
+            break
         except TemplateMismatchError as exc:
             last_error = exc
             break
@@ -106,10 +123,31 @@ def assemble_scene(
             if attempt == 0:
                 time.sleep(BACKOFF_SECONDS)
 
-    if isinstance(last_error, (ValidationError, TemplateMismatchError)):
+    if params is None:
+        if isinstance(last_error, (ValidationError, TemplateMismatchError)):
+            return _fallback_scene(
+                candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir, thumbnail=True
+            )
         return _fallback_scene(
-            candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir, thumbnail=True
+            candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, thumbnail=True
         )
-    return _fallback_scene(
-        candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, thumbnail=True
+
+    thumb_path = _unique_thumbnail_path(candidate, output_dir)
+    try:
+        render_scene_thumbnail(template, params, thumb_path)
+    except Exception:
+        logger.warning(
+            "Thumbnail render failed for candidate %s; returning scene without preview",
+            candidate.candidate_id,
+            exc_info=True,
+        )
+        thumb_path = None
+    return Scene(
+        scene_id=str(uuid4()),
+        candidate_id=candidate.candidate_id,
+        template=template,
+        grade_level=grade,
+        params=params.model_dump(mode="json"),
+        status="pending_review",
+        thumbnail_path=thumb_path,
     )

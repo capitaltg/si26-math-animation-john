@@ -7,6 +7,22 @@ function resolveRef(node, root) {
   return node
 }
 
+function blankValue(schema, root) {
+  const resolved = resolveRef(schema, root)
+  if (resolved.enum) return resolved.enum[0]
+  if (resolved.type === 'integer' || resolved.type === 'number') return 0
+  if (resolved.type === 'array') return []
+  if (resolved.type === 'object' || resolved.properties) {
+    return Object.fromEntries(
+      Object.entries(resolved.properties || {}).map(([name, property]) => [
+        name,
+        blankValue(property, root),
+      ]),
+    )
+  }
+  return ''
+}
+
 function Field({ name, schema, root, value, onChange }) {
   const resolved = resolveRef(schema, root)
   const label = resolved.title || name
@@ -48,32 +64,37 @@ function Field({ name, schema, root, value, onChange }) {
     const rows = Array.isArray(value) ? value : []
     const minItems = resolved.minItems ?? 0
     const maxItems = resolved.maxItems ?? Infinity
-
-    const blankRow = () =>
-      Object.fromEntries(
-        Object.entries(itemSchema.properties || {}).map(([k, s]) => {
-          const rs = resolveRef(s, root)
-          if (rs.enum) return [k, rs.enum[0]]
-          if (rs.type === 'integer' || rs.type === 'number') return [k, 0]
-          return [k, '']
-        }),
-      )
+    const itemIsObject = itemSchema.type === 'object' || !!itemSchema.properties
 
     return (
       <fieldset style={{ margin: '0.4rem 0' }}>
         <legend>{label}</legend>
         {rows.map((row, i) => (
           <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <SchemaForm
-              schema={itemSchema}
-              root={root}
-              value={row}
-              onChange={(nextRow) => {
-                const next = rows.slice()
-                next[i] = nextRow
-                onChange(next)
-              }}
-            />
+            {itemIsObject ? (
+              <SchemaForm
+                schema={itemSchema}
+                root={root}
+                value={row}
+                onChange={(nextRow) => {
+                  const next = rows.slice()
+                  next[i] = nextRow
+                  onChange(next)
+                }}
+              />
+            ) : (
+              <Field
+                name={`${label} ${i + 1}`}
+                schema={itemSchema}
+                root={root}
+                value={row}
+                onChange={(nextValue) => {
+                  const next = rows.slice()
+                  next[i] = nextValue
+                  onChange(next)
+                }}
+              />
+            )}
             {rows.length > minItems && (
               <button
                 type="button"
@@ -85,8 +106,11 @@ function Field({ name, schema, root, value, onChange }) {
           </div>
         ))}
         {rows.length < maxItems && (
-          <button type="button" onClick={() => onChange([...rows, blankRow()])}>
-            add step
+          <button
+            type="button"
+            onClick={() => onChange([...rows, blankValue(itemSchema, root)])}
+          >
+            add item
           </button>
         )}
       </fieldset>

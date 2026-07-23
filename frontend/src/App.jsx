@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import SchemaForm from './SchemaForm'
 
+function sceneIsDirty(scene, drafts) {
+  return JSON.stringify(drafts[scene.scene_id]) !== JSON.stringify(scene.params)
+}
+
 export default function App() {
   const [candidates, setCandidates] = useState(null)
   const [selected, setSelected] = useState({})
@@ -22,6 +26,9 @@ export default function App() {
     setOptions(null)
     setPicks({})
     setResults(null)
+    setStoryboard(null)
+    setDrafts({})
+    setFieldErrors({})
     const form = new FormData()
     form.append('file', file)
     try {
@@ -151,6 +158,10 @@ export default function App() {
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
 
   async function handleRender() {
+    if (storyboard?.some((scene) => scene.status === 'approved' && sceneIsDirty(scene, drafts))) {
+      setError('Save all edits before rendering approved scenes')
+      return
+    }
     setError(null)
     setLoading(true)
     try {
@@ -176,7 +187,14 @@ export default function App() {
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {loading && <p>Working…</p>}
 
-      {candidates && candidates.length === 0 && <p>No problems found in this document.</p>}
+      {candidates && candidates.length === 0 && (
+        <p>
+          No solvable problems found in this document. Slides with concept
+          explanations, vocabulary, or &quot;color/identify&quot; prompts
+          aren&apos;t flagged unless they state a concrete problem with
+          numbers to work out.
+        </p>
+      )}
 
       {candidates && candidates.length > 0 && !options && !results && (
         <section>
@@ -252,8 +270,7 @@ export default function App() {
         <section>
           <h2>Storyboard review</h2>
           {storyboard.map((scene) => {
-            const isDirty =
-              JSON.stringify(drafts[scene.scene_id]) !== JSON.stringify(scene.params)
+            const isDirty = sceneIsDirty(scene, drafts)
             return (
             <div
               key={scene.scene_id}
@@ -345,7 +362,13 @@ export default function App() {
 
           <button
             onClick={handleRender}
-            disabled={loading || !storyboard.some((s) => s.status === 'approved')}
+            disabled={
+              loading
+              || !storyboard.some((scene) => scene.status === 'approved')
+              || storyboard.some(
+                (scene) => scene.status === 'approved' && sceneIsDirty(scene, drafts),
+              )
+            }
           >
             Render approved
           </button>
@@ -357,7 +380,11 @@ export default function App() {
           <h2>Results</h2>
           {results.map((result) => (
             <div key={result.candidate_id} style={{ margin: '0.75rem 0' }}>
-              {result.clip_url ? (
+              {result.status === 'error' ? (
+                <span style={{ color: 'crimson' }}>
+                  Render failed for {result.candidate_id}
+                </span>
+              ) : result.clip_url ? (
                 <a href={result.clip_url} download>
                   Download clip ({result.candidate_id})
                 </a>
@@ -371,7 +398,17 @@ export default function App() {
               )}
             </div>
           ))}
-          <button onClick={() => setResults(null)}>Back to options</button>
+          <button
+            onClick={() => {
+              setResults(null)
+              setStoryboard(null)
+              setDrafts({})
+              setFieldErrors({})
+              setError(null)
+            }}
+          >
+            Back to options
+          </button>
         </section>
       )}
     </main>
