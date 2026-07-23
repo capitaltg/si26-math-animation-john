@@ -371,7 +371,7 @@ def edit_scene(
             params = params_cls.model_validate(request.params)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=_field_errors(exc))
-        out = session.output_dir / f"{scene.candidate_id}-{uuid4()}.png"
+        out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
         try:
             render_scene_thumbnail(scene.template, params, out)
         except Exception as exc:
