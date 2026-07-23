@@ -163,6 +163,30 @@ it('clears the prior storyboard when a new deck is uploaded', async () => {
   expect(screen.queryByRole('heading', { name: 'Storyboard review' })).toBeNull()
 })
 
+it('shows a useful upload error when the server returns non-JSON', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: false,
+    status: 500,
+    json: async () => {
+      throw new SyntaxError('Unexpected token I in JSON')
+    },
+  })))
+  const { container } = render(<App />)
+  const fileInput = container.querySelector('input[type="file"]')
+  const form = container.querySelector('form')
+  Object.defineProperty(form, 'file', {
+    configurable: true,
+    value: fileInput,
+  })
+  fireEvent.change(fileInput, {
+    target: { files: [new File(['deck'], 'g1-fractions.pptx')] },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+
+  await screen.findByText('Upload failed')
+  expect(screen.queryByText(/Unexpected token/)).toBeNull()
+})
+
 it('shows an explicit message when one approved scene fails to render', async () => {
   installFetchMock({ clipStatus: 'error' })
   await reachStoryboard()

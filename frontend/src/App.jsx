@@ -5,6 +5,18 @@ function sceneIsDirty(scene, drafts) {
   return JSON.stringify(drafts[scene.scene_id]) !== JSON.stringify(scene.params)
 }
 
+async function responseJson(resp, fallbackMessage) {
+  try {
+    return await resp.json()
+  } catch {
+    throw new Error(resp.ok ? 'Server returned an invalid response' : fallbackMessage)
+  }
+}
+
+function responseError(data, fallbackMessage) {
+  return typeof data?.detail === 'string' ? data.detail : fallbackMessage
+}
+
 export default function App() {
   const [candidates, setCandidates] = useState(null)
   const [selected, setSelected] = useState({})
@@ -37,8 +49,8 @@ export default function App() {
         body: form,
         credentials: 'include',
       })
-      if (!resp.ok) throw new Error((await resp.json()).detail || 'Upload failed')
-      const data = await resp.json()
+      const data = await responseJson(resp, 'Upload failed')
+      if (!resp.ok) throw new Error(responseError(data, 'Upload failed'))
       setCandidates(data.candidates)
       setSelected({})
     } catch (err) {
@@ -64,8 +76,8 @@ export default function App() {
         credentials: 'include',
         body: JSON.stringify({ candidate_ids: candidateIds }),
       })
-      if (!resp.ok) throw new Error((await resp.json()).detail || 'Could not get options')
-      const data = await resp.json()
+      const data = await responseJson(resp, 'Could not get options')
+      if (!resp.ok) throw new Error(responseError(data, 'Could not get options'))
       const initialPicks = Object.fromEntries(
         data.options
           .filter((item) => item.templates.length > 0)
@@ -95,8 +107,8 @@ export default function App() {
         credentials: 'include',
         body: JSON.stringify({ picks: body }),
       })
-      if (!resp.ok) throw new Error((await resp.json()).detail || 'Storyboard failed')
-      const data = await resp.json()
+      const data = await responseJson(resp, 'Storyboard failed')
+      if (!resp.ok) throw new Error(responseError(data, 'Storyboard failed'))
       setStoryboard(data.scenes)
       setDrafts(Object.fromEntries(data.scenes.map((s) => [s.scene_id, s.params])))
     } catch (err) {
@@ -121,12 +133,12 @@ export default function App() {
         credentials: 'include',
         ...options,
       })
-      const data = await resp.json()
+      const data = await responseJson(resp, 'Action failed')
       if (resp.status === 422) {
         setFieldErrors((prev) => ({ ...prev, [sceneId]: data.detail.errors }))
         return
       }
-      if (!resp.ok) throw new Error(data.detail || 'Action failed')
+      if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
       setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
       replaceScene(data, { resetDraft })
     } catch (err) {
@@ -166,8 +178,9 @@ export default function App() {
     setLoading(true)
     try {
       const resp = await fetch('/render', { method: 'POST', credentials: 'include' })
-      if (!resp.ok) throw new Error((await resp.json()).detail || 'Render failed')
-      setResults((await resp.json()).clips)
+      const data = await responseJson(resp, 'Render failed')
+      if (!resp.ok) throw new Error(responseError(data, 'Render failed'))
+      setResults(data.clips)
     } catch (err) {
       setError(err.message)
     } finally {

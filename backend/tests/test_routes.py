@@ -2,6 +2,7 @@
 import io
 from unittest.mock import patch
 
+from botocore.exceptions import NoCredentialsError
 from fastapi.testclient import TestClient
 from pptx import Presentation
 
@@ -129,6 +130,29 @@ def test_upload_returns_candidates_and_sets_cookie():
     assert len(body["candidates"]) == 1
     assert body["candidates"][0]["candidate_id"] == "c1"
     assert "session_id" in resp.cookies
+
+
+def test_upload_reports_missing_aws_credentials():
+    client = _client()
+    with patch(
+        "app.routes.discover_candidates_for_document",
+        side_effect=NoCredentialsError(),
+    ):
+        resp = client.post(
+            "/upload",
+            files={
+                "file": (
+                    "deck.pptx",
+                    _pptx_bytes(),
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                )
+            },
+        )
+
+    assert resp.status_code == 503
+    assert resp.json() == {
+        "detail": "Document analysis is unavailable because AWS credentials are not configured"
+    }
 
 
 def test_upload_sets_secure_cookie_when_configured():
