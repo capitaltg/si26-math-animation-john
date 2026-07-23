@@ -153,88 +153,6 @@ def test_upload_cookie_is_not_secure_by_default():
     assert "secure" not in resp.headers["set-cookie"].lower()
 
 
-def test_render_returns_clip_url_for_a_rendered_scene(tmp_path):
-    from app.models.scene import Scene, TemplateName
-
-    clip_file = tmp_path / "c1.mp4"
-    clip_file.write_bytes(b"fake mp4")
-
-    def fake_process_scene(candidate, output_dir, *, template, grade):
-        assert template == TemplateName.NUMBER_LINE
-        assert grade == 1
-        return Scene(
-            scene_id="s1",
-            candidate_id=candidate.candidate_id,
-            template=template,
-            grade_level=grade,
-            status="approved",
-            render_path=clip_file,
-        )
-
-    client = _client()
-    _upload_candidate(client)
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1"]})
-    with patch("app.routes.process_scene", side_effect=fake_process_scene):
-        resp = client.post(
-            "/render",
-            json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
-        )
-
-    assert resp.status_code == 200
-    clip = resp.json()["clips"][0]
-    assert clip["status"] == "approved"
-    assert clip["clip_url"].startswith("/clips/")
-
-    download = client.get(clip["clip_url"])
-    assert download.status_code == 200
-    assert download.content == b"fake mp4"
-
-
-def test_render_reports_fallback_reason_without_clip():
-    from app.models.scene import Scene, TemplateName
-
-    def fake_process_scene(candidate, output_dir, *, template, grade):
-        return Scene(
-            scene_id="s1",
-            candidate_id=candidate.candidate_id,
-            template=template,
-            grade_level=grade,
-            status="fallback",
-            fallback_reason="Classification ambiguous or unsupported: no template confidently fits this problem.",
-            render_path=None,
-        )
-
-    client = _client()
-    _upload_candidate(client)
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1"]})
-    with patch("app.routes.process_scene", side_effect=fake_process_scene):
-        resp = client.post(
-            "/render",
-            json={"picks": [{"candidate_id": "c1", "template": "text_card"}]},
-        )
-
-    clip = resp.json()["clips"][0]
-    assert clip["status"] == "fallback"
-    assert clip["clip_url"] is None
-    assert "ambiguous" in clip["fallback_reason"]
-
-
-def test_render_unknown_candidate_is_404():
-    client = _client()
-    _upload_candidate(client)
-    resp = client.post(
-        "/render",
-        json={
-            "picks": [
-                {"candidate_id": "does-not-exist", "template": "text_card"}
-            ]
-        },
-    )
-    assert resp.status_code == 404
-
-
 def test_render_without_session_is_400():
     client = _client()
     resp = client.post(
@@ -314,130 +232,6 @@ def test_options_rejects_more_than_50_candidates_before_classification():
 
     assert resp.status_code == 422
     classify.assert_not_called()
-
-
-def test_render_rejects_template_that_was_not_offered():
-    client = _client()
-    _upload_candidate(client)
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1"]})
-
-    resp = client.post(
-        "/render",
-        json={"picks": [{"candidate_id": "c1", "template": "array_grid"}]},
-    )
-
-    assert resp.status_code == 400
-    assert "not offered" in resp.json()["detail"]
-
-
-def test_render_rejects_pick_before_options_are_cached():
-    client = _client()
-    _upload_candidate(client)
-
-    resp = client.post(
-        "/render",
-        json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
-    )
-
-    assert resp.status_code == 400
-    assert "options" in resp.json()["detail"].lower()
-
-
-def test_render_rejects_unknown_template_name_as_bad_request():
-    client = _client()
-    _upload_candidate(client)
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1"]})
-
-    resp = client.post(
-        "/render",
-        json={"picks": [{"candidate_id": "c1", "template": "hologram"}]},
-    )
-
-    assert resp.status_code == 400
-    assert "not offered" in resp.json()["detail"]
-
-
-def test_render_preflights_entire_batch_before_rendering(tmp_path):
-    from app.models.scene import Scene, TemplateName
-
-    client = _client()
-    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1", "c2"]})
-
-    rendered_scene = Scene(
-        scene_id="s1",
-        candidate_id="c1",
-        template=TemplateName.NUMBER_LINE,
-        grade_level=1,
-        status="approved",
-        render_path=tmp_path / "render.mp4",
-    )
-    with patch("app.routes.process_scene", return_value=rendered_scene) as process:
-        resp = client.post(
-            "/render",
-            json={
-                "picks": [
-                    {"candidate_id": "c1", "template": "number_line"},
-                    {"candidate_id": "c2", "template": "array_grid"},
-                ]
-            },
-        )
-
-    assert resp.status_code == 400
-    process.assert_not_called()
-
-
-def test_render_rejects_duplicate_candidates_before_rendering():
-    from app.models.scene import Scene, TemplateName
-
-    client = _client()
-    _upload_candidate(client)
-    with patch("app.routes.classify_candidate", return_value=_classification()):
-        client.post("/options", json={"candidate_ids": ["c1"]})
-
-    rendered_scene = Scene(
-        scene_id="s1",
-        candidate_id="c1",
-        template=TemplateName.NUMBER_LINE,
-        grade_level=1,
-        status="approved",
-    )
-    with patch("app.routes.process_scene", return_value=rendered_scene) as process:
-        resp = client.post(
-            "/render",
-            json={
-                "picks": [
-                    {"candidate_id": "c1", "template": "number_line"},
-                    {"candidate_id": "c1", "template": "text_card"},
-                ]
-            },
-        )
-
-    assert resp.status_code == 400
-    assert "duplicate" in resp.json()["detail"].lower()
-    process.assert_not_called()
-
-
-def test_render_rejects_more_than_50_picks_before_rendering():
-    client = _client()
-    _upload_candidate(client)
-
-    with patch("app.routes.process_scene") as process:
-        resp = client.post(
-            "/render",
-            json={
-                "picks": [
-                    {"candidate_id": f"c{i}", "template": "text_card"}
-                    for i in range(51)
-                ]
-            },
-        )
-
-    assert resp.status_code == 422
-    process.assert_not_called()
 
 
 def test_unknown_clip_id_is_404():
@@ -546,6 +340,71 @@ def _number_line_scene(tmp_path):
         status="pending_review",
         thumbnail_path=thumb,
     )
+
+
+def test_render_renders_only_approved_from_stored_params(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path)
+    approved = approved.model_copy(update={"status": "approved"})
+    _seed_scene(client, approved)
+
+    def fake_render(template, params, out):
+        out.write_bytes(b"mp4")
+        return out
+
+    # Bedrock extraction must NOT be called at render time.
+    with patch("app.routes.render_scene_to_mp4", side_effect=fake_render), patch(
+        "app.pipeline.process_scene.extract_params"
+    ) as extract:
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    clips = resp.json()["clips"]
+    assert len(clips) == 1
+    assert clips[0]["clip_url"].startswith("/clips/")
+    extract.assert_not_called()
+
+
+def test_render_skips_rejected_scenes(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    rejected = _number_line_scene(tmp_path).model_copy(update={"status": "rejected"})
+    _seed_scene(client, rejected)
+    resp = client.post("/render")
+    assert resp.status_code == 400  # nothing approved
+
+
+def test_render_one_failure_does_not_sink_batch(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidate(client)
+    good = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "sg", "status": "approved"}
+    )
+    bad = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "sb", "status": "approved"}
+    )
+    _seed_scene(client, good)
+    _seed_scene(client, bad)
+
+    calls = {"n": 0}
+
+    def render_side_effect(template, params, out):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("boom")
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=render_side_effect):
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    statuses = {c["status"] for c in resp.json()["clips"]}
+    assert "error" in statuses
+    assert len(resp.json()["clips"]) == 2
 
 
 def test_patch_valid_params_re_renders_thumbnail(tmp_path):

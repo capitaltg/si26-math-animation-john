@@ -1,3 +1,4 @@
+import logging
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -12,13 +13,15 @@ from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene, process_scene
-from app.render.full_render import render_scene_thumbnail
+from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.session import SessionStore
 from app.templates.registry import get_template
 
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 store = SessionStore(Path(tempfile.gettempdir()) / "math_anim_sessions")
@@ -59,10 +62,6 @@ class OptionsResponse(BaseModel):
 class RenderPick(BaseModel):
     candidate_id: str
     template: str
-
-
-class RenderRequest(BaseModel):
-    picks: list[RenderPick] = Field(max_length=MAX_BATCH_SIZE)
 
 
 class ClipResult(BaseModel):
@@ -191,58 +190,37 @@ def get_options(
 
 
 @router.post("/render", response_model=RenderResponse)
-def render(request: RenderRequest, session_id: str | None = Cookie(default=None)):
+def render(session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    candidate_ids = [pick.candidate_id for pick in request.picks]
-    if len(candidate_ids) != len(set(candidate_ids)):
-        raise HTTPException(status_code=400, detail="Duplicate candidate ids are not allowed")
-
-    validated_picks = []
-    for pick in request.picks:
-        candidate = session.candidates.get(pick.candidate_id)
-        if candidate is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Unknown candidate {pick.candidate_id}",
-            )
-
-        classification = session.options.get(pick.candidate_id)
-        if classification is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No options cached for candidate {pick.candidate_id}",
-            )
-        offered = {option.template.value for option in classification.options}
-        if pick.template not in offered:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Template {pick.template} was not offered for "
-                    f"candidate {pick.candidate_id}"
-                ),
-            )
-        selected_template = TemplateName(pick.template)
-        validated_picks.append((pick, candidate, classification, selected_template))
+    approved = [
+        session.scenes[sid]
+        for sid in session.scene_order
+        if session.scenes[sid].status == "approved"
+    ]
+    if not approved:
+        raise HTTPException(status_code=400, detail="No approved scenes to render")
 
     results: list[ClipResult] = []
-    for pick, candidate, classification, selected_template in validated_picks:
-        scene = process_scene(
-            candidate,
-            session.output_dir,
-            template=selected_template,
-            grade=classification.grade_level,
-        )
+    for scene in approved:
+        _, params_cls = get_template(scene.template)
+        params = params_cls.model_validate(scene.params)
         clip_url = None
-        if scene.render_path is not None:
-            clip_id = store.register_clip(scene.render_path)
+        try:
+            output_path = session.output_dir / f"{scene.candidate_id}-{uuid4()}.mp4"
+            render_scene_to_mp4(scene.template, params, output_path)
+            clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
+            status = "fallback" if scene.fallback_reason else "approved"
+        except Exception:
+            logger.exception("Full render failed for scene %s", scene.scene_id)
+            status = "error"
         results.append(
             ClipResult(
-                candidate_id=pick.candidate_id,
-                status=scene.status,
+                candidate_id=scene.candidate_id,
+                status=status,
                 clip_url=clip_url,
                 fallback_reason=scene.fallback_reason,
             )
