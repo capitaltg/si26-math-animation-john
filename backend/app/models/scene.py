@@ -45,6 +45,4 @@ class Scene(BaseModel):
         )
         if self.status == "fallback" and not has_fallback_reason:
             raise ValueError("Fallback scenes require a nonblank fallback_reason")
-        if self.status != "fallback" and self.fallback_reason is not None:
-            raise ValueError("Only fallback scenes may include fallback_reason")
         return self

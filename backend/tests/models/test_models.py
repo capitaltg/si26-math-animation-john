@@ -71,11 +71,14 @@ def test_fallback_scene_requires_a_reason():
         Scene(scene_id="s7", candidate_id="c7", grade_level=2, status="fallback")
 
 
-def test_non_fallback_scene_rejects_a_fallback_reason():
-    with pytest.raises(ValidationError):
-        Scene(
-            scene_id="s8",
-            candidate_id="c8",
-            grade_level=2,
-            fallback_reason="This state is contradictory",
-        )
+def test_approved_fallback_scene_keeps_its_reason():
+    scene = Scene(
+        scene_id="s8",
+        candidate_id="c8",
+        template=TemplateName.TEXT_CARD,
+        grade_level=2,
+        status="approved",
+        fallback_reason="This problem did not fit the chosen visual template.",
+    )
+    assert scene.status == "approved"
+    assert scene.fallback_reason
