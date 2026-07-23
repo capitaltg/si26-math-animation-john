@@ -77,6 +77,13 @@ def _upload_candidates(client, candidates):
         )
 
 
+def _options_then(client):
+    """Upload one candidate and cache its options; return the client."""
+    with patch("app.routes.classify_candidate", return_value=_classification()):
+        client.post("/options", json={"candidate_ids": ["c1"]})
+    return client
+
+
 def test_upload_rejects_non_pptx():
     client = _client()
     resp = client.post("/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
@@ -437,3 +444,75 @@ def test_unknown_clip_id_is_404():
     client = _client()
     resp = client.get("/clips/nope")
     assert resp.status_code == 404
+
+
+def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidate(client)
+    _options_then(client)
+
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"png")
+    fake = Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        status="pending_review",
+        thumbnail_path=thumb,
+    )
+
+    with patch("app.routes.assemble_scene", return_value=fake):
+        resp = client.post(
+            "/storyboard",
+            json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
+        )
+
+    assert resp.status_code == 200
+    scene = resp.json()["scenes"][0]
+    assert scene["scene_id"] == "s1"
+    assert scene["status"] == "pending_review"
+    assert scene["thumbnail_url"].startswith("/thumbnails/")
+    assert scene["source_excerpt"]
+    assert scene["detected_summary"] == "Detected: 4 + 3"
+    assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
+
+
+def test_thumbnail_endpoint_serves_png(tmp_path):
+    from app.routes import store
+
+    client = _client()
+    png = tmp_path / "t.png"
+    png.write_bytes(b"\x89PNG\r\n")
+    thumb_id = store.register_thumbnail(png)
+
+    resp = client.get(f"/thumbnails/{thumb_id}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+
+
+def test_thumbnail_unknown_id_is_404():
+    client = _client()
+    assert client.get("/thumbnails/nope").status_code == 404
+
+
+def test_storyboard_rejects_pick_before_options_cached():
+    client = _client()
+    _upload_candidate(client)
+    resp = client.post(
+        "/storyboard",
+        json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
+    )
+    assert resp.status_code == 400
+
+
+def test_storyboard_without_session_is_400():
+    client = _client()
+    resp = client.post(
+        "/storyboard",
+        json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
+    )
+    assert resp.status_code == 400
