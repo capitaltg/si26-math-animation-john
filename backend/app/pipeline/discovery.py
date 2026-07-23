@@ -12,6 +12,10 @@ _DISCOVERY_SYSTEM_PROMPT = (
     "You find candidate K-8 math example problems in slide text. Only flag text that "
     "states a concrete solvable math problem with numbers — ignore dates, page numbers, "
     "standards codes (e.g. 3.OA.A.1), and student counts that are not part of a math problem. "
+    "A question still counts as solvable even when phrased as classroom discussion "
+    "(\"turn and tell\", \"how do you know\", \"why?\") or bundled with a diagram you cannot "
+    "see, as long as it asks for a specific quantity that can be computed from numbers given "
+    "in the text — flag that sub-question. "
     "Copy source_excerpt verbatim from the reported slide; do not paraphrase it. "
     "Do not state a computed answer or include the final answer in one_line_summary."
 )

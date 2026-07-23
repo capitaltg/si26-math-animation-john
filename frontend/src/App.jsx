@@ -106,7 +106,14 @@ export default function App() {
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {loading && <p>Working…</p>}
 
-      {candidates && candidates.length === 0 && <p>No problems found in this document.</p>}
+      {candidates && candidates.length === 0 && (
+        <p>
+          No solvable problems found in this document. Slides with concept
+          explanations, vocabulary, or &quot;color/identify&quot; prompts
+          aren&apos;t flagged unless they state a concrete problem with
+          numbers to work out.
+        </p>
+      )}
 
       {candidates && candidates.length > 0 && !options && !results && (
         <section>
