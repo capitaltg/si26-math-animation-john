@@ -407,6 +407,40 @@ def test_render_one_failure_does_not_sink_batch(tmp_path):
     assert len(resp.json()["clips"]) == 2
 
 
+def test_render_stored_param_validation_failure_does_not_sink_batch(tmp_path):
+    good = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "sg", "status": "approved"}
+    )
+    bad = _number_line_scene(tmp_path).model_copy(
+        update={
+            "scene_id": "sb",
+            "status": "approved",
+            # Guard-invalid: running total goes negative (1 - 5 = -4).
+            "params": {"start": 1, "steps": [{"operation": "subtract", "amount": 5}]},
+        }
+    )
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, good)
+    _seed_scene(client, bad)
+
+    def fake_render(template, params, out):
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=fake_render):
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    clips = resp.json()["clips"]
+    assert len(clips) == 2
+    # Scenes render in scene_order (good seeded first, bad second).
+    statuses = [c["status"] for c in clips]
+    assert statuses == ["approved", "error"]
+    assert clips[1]["clip_url"] is None
+
+
 def test_patch_valid_params_re_renders_thumbnail(tmp_path):
     client = _client()
     _upload_candidate(client)

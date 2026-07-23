@@ -12,7 +12,7 @@ from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
-from app.pipeline.process_scene import assemble_scene, process_scene
+from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.session import SessionStore
 from app.templates.registry import get_template
@@ -205,10 +205,10 @@ def render(session_id: str | None = Cookie(default=None)):
 
     results: list[ClipResult] = []
     for scene in approved:
-        _, params_cls = get_template(scene.template)
-        params = params_cls.model_validate(scene.params)
         clip_url = None
         try:
+            _, params_cls = get_template(scene.template)
+            params = params_cls.model_validate(scene.params)
             output_path = session.output_dir / f"{scene.candidate_id}-{uuid4()}.mp4"
             render_scene_to_mp4(scene.template, params, output_path)
             clip_id = store.register_clip(output_path)
