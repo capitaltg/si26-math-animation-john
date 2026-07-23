@@ -99,12 +99,14 @@ export default function App() {
     }
   }
 
-  function replaceScene(updated) {
+  function replaceScene(updated, { resetDraft = false } = {}) {
     setStoryboard((prev) => prev.map((s) => (s.scene_id === updated.scene_id ? updated : s)))
-    setDrafts((prev) => ({ ...prev, [updated.scene_id]: updated.params }))
+    if (resetDraft) {
+      setDrafts((prev) => ({ ...prev, [updated.scene_id]: updated.params }))
+    }
   }
 
-  async function sceneAction(sceneId, path, options) {
+  async function sceneAction(sceneId, path, options, { resetDraft = false } = {}) {
     setError(null)
     setLoading(true)
     try {
@@ -119,7 +121,7 @@ export default function App() {
       }
       if (!resp.ok) throw new Error(data.detail || 'Action failed')
       setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
-      replaceScene(data)
+      replaceScene(data, { resetDraft })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -128,18 +130,23 @@ export default function App() {
   }
 
   const saveEdits = (id) =>
-    sceneAction(id, '', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ params: drafts[id] }),
-    })
+    sceneAction(
+      id,
+      '',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: drafts[id] }),
+      },
+      { resetDraft: true },
+    )
   const setGrade = (id, grade) =>
     sceneAction(id, '', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ grade_level: Number(grade) }),
     })
-  const retryScene = (id) => sceneAction(id, '/retry', { method: 'POST' })
+  const retryScene = (id) => sceneAction(id, '/retry', { method: 'POST' }, { resetDraft: true })
   const approveScene = (id) => sceneAction(id, '/approve', { method: 'POST' })
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
 
@@ -244,7 +251,10 @@ export default function App() {
       {storyboard && !results && (
         <section>
           <h2>Storyboard review</h2>
-          {storyboard.map((scene) => (
+          {storyboard.map((scene) => {
+            const isDirty =
+              JSON.stringify(drafts[scene.scene_id]) !== JSON.stringify(scene.params)
+            return (
             <div
               key={scene.scene_id}
               style={{
@@ -312,14 +322,26 @@ export default function App() {
                 {scene.grade_overridden && ' (overridden)'}
               </label>
 
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <button onClick={() => saveEdits(scene.scene_id)} disabled={loading}>Save edits</button>
                 <button onClick={() => retryScene(scene.scene_id)} disabled={loading}>Retry</button>
-                <button onClick={() => approveScene(scene.scene_id)} disabled={loading}>Approve</button>
+                <button
+                  onClick={() => approveScene(scene.scene_id)}
+                  disabled={loading || isDirty}
+                  title={isDirty ? 'Save edits before approving' : undefined}
+                >
+                  Approve
+                </button>
                 <button onClick={() => rejectScene(scene.scene_id)} disabled={loading}>Reject</button>
+                {isDirty && (
+                  <span style={{ color: '#b45309', fontSize: '0.85rem' }}>
+                    Unsaved edits — Save first
+                  </span>
+                )}
               </div>
             </div>
-          ))}
+            )
+          })}
 
           <button
             onClick={handleRender}
