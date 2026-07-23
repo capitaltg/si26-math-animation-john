@@ -18,6 +18,7 @@ class TemplateName(str, Enum):
 class Scene(BaseModel):
     scene_id: str
     candidate_id: str | None = None
+    candidate_ids: list[str] | None = None
     manual_source_text: str | None = None
     template: TemplateName | None = None
     grade_level: int = Field(ge=0, le=8)
@@ -32,12 +33,14 @@ class Scene(BaseModel):
     @model_validator(mode="after")
     def _check_workflow_invariants(self):
         has_candidate = bool(self.candidate_id and self.candidate_id.strip())
+        has_candidate_group = bool(self.candidate_ids)
         has_manual_source = bool(
             self.manual_source_text and self.manual_source_text.strip()
         )
-        if has_candidate == has_manual_source:
+        source_count = sum([has_candidate, has_candidate_group, has_manual_source])
+        if source_count != 1:
             raise ValueError(
-                "Scene requires exactly one source: candidate_id or manual_source_text"
+                "Scene requires exactly one source: candidate_id, candidate_ids, or manual_source_text"
             )
 
         has_fallback_reason = bool(
@@ -45,4 +48,6 @@ class Scene(BaseModel):
         )
         if self.status == "fallback" and not has_fallback_reason:
             raise ValueError("Fallback scenes require a nonblank fallback_reason")
+        if self.status != "fallback" and self.fallback_reason is not None:
+            raise ValueError("Only fallback scenes may include fallback_reason")
         return self

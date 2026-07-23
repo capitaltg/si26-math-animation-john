@@ -77,8 +77,45 @@ def test_approved_fallback_scene_keeps_its_reason():
         candidate_id="c8",
         template=TemplateName.TEXT_CARD,
         grade_level=2,
-        status="approved",
+        status="fallback",
         fallback_reason="This problem did not fit the chosen visual template.",
     )
-    assert scene.status == "approved"
+    assert scene.status == "fallback"
     assert scene.fallback_reason
+
+
+def test_scene_accepts_candidate_ids_as_the_sole_source():
+    from app.models.scene import Scene
+
+    scene = Scene(
+        scene_id="s1",
+        candidate_ids=["c1", "c2"],
+        grade_level=2,
+        status="approved",
+    )
+    assert scene.candidate_ids == ["c1", "c2"]
+    assert scene.candidate_id is None
+
+
+def test_scene_rejects_both_candidate_id_and_candidate_ids():
+    from pydantic import ValidationError
+
+    from app.models.scene import Scene
+
+    with pytest.raises(ValidationError):
+        Scene(
+            scene_id="s1",
+            candidate_id="c1",
+            candidate_ids=["c2", "c3"],
+            grade_level=2,
+            status="approved",
+        )
+
+
+def test_scene_rejects_none_of_the_three_sources():
+    from pydantic import ValidationError
+
+    from app.models.scene import Scene
+
+    with pytest.raises(ValidationError):
+        Scene(scene_id="s1", grade_level=2, status="approved")
