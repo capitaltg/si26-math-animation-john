@@ -9,7 +9,7 @@ from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
 from app.pipeline.extraction import TemplateMismatchError, extract_params
-from app.render.full_render import render_scene_to_mp4
+from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.templates.registry import get_template
 from app.templates.text_card.params import TextCardParams
 
@@ -30,27 +30,41 @@ def _unique_output_path(candidate: Candidate, output_dir: Path) -> Path:
     return output_dir / f"{candidate.candidate_id}-{uuid4()}.mp4"
 
 
-def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: Path) -> Scene:
+def _unique_thumbnail_path(candidate: Candidate, output_dir: Path) -> Path:
+    return output_dir / f"{candidate.candidate_id}-{uuid4()}.png"
+
+
+def _fallback_scene(
+    candidate: Candidate,
+    grade: int,
+    reason: str,
+    output_dir: Path,
+    *,
+    thumbnail: bool = False,
+) -> Scene:
     lines = [line for line in (candidate.source_excerpt, reason) if line and line.strip()]
     if not lines:
         lines = ["Unable to animate this problem"]
     headline = (candidate.one_line_summary or "").strip() or "Unable to animate this problem"
-    params = TextCardParams(
-        headline=headline,
-        lines=lines,
-    )
+    params = TextCardParams(headline=headline, lines=lines)
+
     render_path = None
+    thumbnail_path = None
     try:
-        output_path = _unique_output_path(candidate, output_dir)
-        render_scene_to_mp4(TemplateName.TEXT_CARD, params, output_path)
-        render_path = output_path
+        if thumbnail:
+            out = _unique_thumbnail_path(candidate, output_dir)
+            render_scene_thumbnail(TemplateName.TEXT_CARD, params, out)
+            thumbnail_path = out
+        else:
+            out = _unique_output_path(candidate, output_dir)
+            render_scene_to_mp4(TemplateName.TEXT_CARD, params, out)
+            render_path = out
     except Exception:
         logger.warning(
-            "Fallback render failed for candidate %s; returning fallback scene without a clip",
+            "Fallback render failed for candidate %s; returning fallback scene without media",
             candidate.candidate_id,
             exc_info=True,
         )
-        render_path = None
 
     return Scene(
         scene_id=str(uuid4()),
@@ -61,6 +75,7 @@ def _fallback_scene(candidate: Candidate, grade: int, reason: str, output_dir: P
         status="fallback",
         fallback_reason=reason,
         render_path=render_path,
+        thumbnail_path=thumbnail_path,
     )
 
 
@@ -148,4 +163,45 @@ def process_scene(
         resolved_grade,
         TECHNICAL_FAILURE_REASON,
         output_dir,
+    )
+
+
+def assemble_scene(
+    candidate: Candidate,
+    output_dir: Path,
+    *,
+    template: TemplateName,
+    grade: int,
+) -> Scene:
+    _, params_cls = get_template(template)
+
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            params = extract_params(candidate.source_excerpt, params_cls)
+            thumb_path = _unique_thumbnail_path(candidate, output_dir)
+            render_scene_thumbnail(template, params, thumb_path)
+            return Scene(
+                scene_id=str(uuid4()),
+                candidate_id=candidate.candidate_id,
+                template=template,
+                grade_level=grade,
+                params=params.model_dump(mode="json"),
+                status="pending_review",
+                thumbnail_path=thumb_path,
+            )
+        except TemplateMismatchError as exc:
+            last_error = exc
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(BACKOFF_SECONDS)
+
+    if isinstance(last_error, (ValidationError, TemplateMismatchError)):
+        return _fallback_scene(
+            candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir, thumbnail=True
+        )
+    return _fallback_scene(
+        candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, thumbnail=True
     )
