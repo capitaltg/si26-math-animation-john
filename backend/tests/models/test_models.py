@@ -71,7 +71,7 @@ def test_fallback_scene_requires_a_reason():
         Scene(scene_id="s7", candidate_id="c7", grade_level=2, status="fallback")
 
 
-def test_approved_fallback_scene_keeps_its_reason():
+def test_fallback_scene_keeps_its_reason():
     scene = Scene(
         scene_id="s8",
         candidate_id="c8",

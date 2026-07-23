@@ -36,16 +36,16 @@ A teacher can approve a fallback (text-card) scene. That flips `status` to `appr
 In `backend/tests/models/test_models.py`, delete `test_non_fallback_scene_rejects_a_fallback_reason` (line ~74) and add:
 
 ```python
-def test_approved_fallback_scene_keeps_its_reason():
+def test_fallback_scene_keeps_its_reason():
     scene = Scene(
         scene_id="s8",
         candidate_id="c8",
         template=TemplateName.TEXT_CARD,
         grade_level=2,
-        status="approved",
+        status="fallback",
         fallback_reason="This problem did not fit the chosen visual template.",
     )
-    assert scene.status == "approved"
+    assert scene.status == "fallback"
     assert scene.fallback_reason
 
 
@@ -61,7 +61,7 @@ def test_fallback_status_still_requires_a_reason():
 - [ ] **Step 2: Run the tests to verify the new expectation fails**
 
 Run: `backend/.venv/bin/pytest tests/models/test_models.py -v`
-Expected: `test_approved_fallback_scene_keeps_its_reason` FAILS (ValueError raised by the current validator).
+Expected: `test_fallback_scene_keeps_its_reason` FAILS (ValueError raised by the current validator).
 
 - [ ] **Step 3: Relax the validator**
 
