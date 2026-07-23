@@ -136,6 +136,9 @@ export default function App() {
       const data = await responseJson(resp, 'Action failed')
       if (resp.status === 422) {
         const errors = Array.isArray(data?.detail?.errors) ? data.detail.errors : []
+        if (errors.length === 0) {
+          throw new Error(responseError(data, 'Could not save edits'))
+        }
         setFieldErrors((prev) => ({ ...prev, [sceneId]: errors }))
         return
       }
@@ -394,17 +397,17 @@ export default function App() {
         <section>
           <h2>Results</h2>
           {results.map((result) => (
-            <div key={result.candidate_id} style={{ margin: '0.75rem 0' }}>
+            <div key={result.scene_id || result.candidate_id} style={{ margin: '0.75rem 0' }}>
               {result.status === 'error' ? (
                 <span style={{ color: 'crimson' }}>
-                  Render failed for {result.candidate_id}
+                  Render failed for {result.candidate_id || result.scene_id}
                 </span>
               ) : result.clip_url ? (
                 <a href={result.clip_url} download>
-                  Download clip ({result.candidate_id})
+                  Download clip ({result.candidate_id || result.scene_id})
                 </a>
               ) : (
-                <span>Clip {result.candidate_id}</span>
+                <span>Clip {result.candidate_id || result.scene_id}</span>
               )}
               {result.status === 'fallback' && (
                 <div style={{ color: '#b45309', fontSize: '0.85rem' }}>

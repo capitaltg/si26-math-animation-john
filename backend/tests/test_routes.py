@@ -386,8 +386,42 @@ def test_render_renders_only_approved_from_stored_params(tmp_path):
     assert resp.status_code == 200
     clips = resp.json()["clips"]
     assert len(clips) == 1
+    assert clips[0]["scene_id"] == "s1"
     assert clips[0]["clip_url"].startswith("/clips/")
     extract.assert_not_called()
+
+
+def test_render_returns_manual_scene_results(tmp_path):
+    from app.main import create_app
+    from app.models.scene import Scene, TemplateName
+
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    _upload_candidate(client)
+    manual = Scene(
+        scene_id="manual-1",
+        manual_source_text="Show 3 + 4 on a number line.",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"start": 3, "steps": [{"operation": "add", "amount": 4}]},
+        status="approved",
+    )
+    _seed_scene(client, manual)
+
+    def fake_render(template, params, out):
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=fake_render):
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    assert resp.json()["clips"] == [{
+        "scene_id": "manual-1",
+        "candidate_id": None,
+        "status": "approved",
+        "clip_url": resp.json()["clips"][0]["clip_url"],
+        "fallback_reason": None,
+    }]
 
 
 def test_render_skips_rejected_scenes(tmp_path):

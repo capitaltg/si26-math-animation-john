@@ -65,7 +65,8 @@ class RenderPick(BaseModel):
 
 
 class ClipResult(BaseModel):
-    candidate_id: str
+    scene_id: str
+    candidate_id: str | None
     status: str
     clip_url: str | None = None
     fallback_reason: str | None = None
@@ -209,7 +210,7 @@ def render(session_id: str | None = Cookie(default=None)):
         try:
             _, params_cls = get_template(scene.template)
             params = params_cls.model_validate(scene.params)
-            output_path = session.output_dir / f"{scene.candidate_id}-{uuid4()}.mp4"
+            output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
             render_scene_to_mp4(scene.template, params, output_path)
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
@@ -219,6 +220,7 @@ def render(session_id: str | None = Cookie(default=None)):
             status = "error"
         results.append(
             ClipResult(
+                scene_id=scene.scene_id,
                 candidate_id=scene.candidate_id,
                 status=status,
                 clip_url=clip_url,

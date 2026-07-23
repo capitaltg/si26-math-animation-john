@@ -117,6 +117,7 @@ function installFetchMock({ secondUpload = false, clipStatus = 'approved', patch
     if (url === '/render') {
       return jsonResponse({
         clips: [{
+          scene_id: 's1',
           candidate_id: 'c1',
           status: clipStatus,
           clip_url: clipStatus === 'approved' ? '/clips/clip1' : null,
@@ -259,14 +260,13 @@ it('surfaces 422 field errors from a PATCH without crashing', async () => {
   await screen.findByText('start: must be non-negative')
 })
 
-it('does not crash when a 422 response has no errors array', async () => {
+it('shows a save error when a 422 response has no field errors array', async () => {
   installFetchMock({ patchStatus: 'malformed422' })
   await reachStoryboard()
 
   fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Save edits' }).disabled).toBe(false))
-  expect(screen.queryByText('start must be non-negative')).toBeNull()
+  await screen.findByText('start must be non-negative')
 })
 
 it('returns from results to visualization options', async () => {
