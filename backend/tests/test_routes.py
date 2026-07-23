@@ -615,3 +615,35 @@ def test_patch_unknown_scene_is_404():
     _upload_candidate(client)
     resp = client.patch("/storyboard/nope", json={"grade_level": 3})
     assert resp.status_code == 404
+
+
+def test_retry_reextracts_same_template_and_keeps_scene_id(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path), template="number_line")
+
+    fresh = Scene(
+        scene_id="ignored-new-id",
+        candidate_id="c1",
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        status="pending_review",
+        thumbnail_path=(tmp_path / "t.png"),
+    )
+
+    with patch("app.routes.assemble_scene", return_value=fresh) as assemble:
+        resp = client.post("/storyboard/s1/retry")
+
+    assert resp.status_code == 200
+    assert resp.json()["scene_id"] == "s1"  # replaced in place
+    # retried on the originally-picked template
+    assert assemble.call_args.kwargs["template"] == TemplateName.NUMBER_LINE
+
+
+def test_retry_unknown_scene_is_404():
+    client = _client()
+    _upload_candidate(client)
+    assert client.post("/storyboard/nope/retry").status_code == 404

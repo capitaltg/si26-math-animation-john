@@ -401,3 +401,29 @@ def edit_scene(
     )
     session.scenes[scene_id] = updated
     return _scene_out(updated, candidate)
+
+
+@router.post("/storyboard/{scene_id}/retry", response_model=SceneOut)
+def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = session.scenes.get(scene_id)
+    if scene is None:
+        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    candidate = session.candidates.get(scene.candidate_id)
+    template = session.scene_requested_template.get(scene_id)
+    if template is None:
+        raise HTTPException(status_code=400, detail="This scene cannot be retried")
+
+    fresh = assemble_scene(
+        candidate,
+        session.output_dir,
+        template=template,
+        grade=scene.grade_level,
+    )
+    updated = fresh.model_copy(
+        update={"scene_id": scene_id, "grade_overridden": scene.grade_overridden}
+    )
+    session.scenes[scene_id] = updated
+    return _scene_out(updated, candidate)
