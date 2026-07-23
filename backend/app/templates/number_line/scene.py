@@ -41,3 +41,10 @@ class NumberLineScene(Scene):
         if self.params is None:
             raise ValueError("NumberLineScene.params must be set before construct() runs")
         draw_number_line(self, self.params)
+
+
+from app.templates._shared.chained_scene import ChainedScene
+
+
+class ChainedNumberLineScene(ChainedScene):
+    draw_fn = staticmethod(draw_number_line)

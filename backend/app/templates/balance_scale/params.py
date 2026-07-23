@@ -17,3 +17,7 @@ class BalanceScaleParams(BaseModel):
         # of left_terms, so it need not appear literally in the source.
         components = [str(term) for term in self.left_terms]
         return [(str(self.right_total), components)]
+
+
+class ChainedBalanceScaleParams(BaseModel):
+    items: list[BalanceScaleParams] = Field(min_length=2, max_length=4)

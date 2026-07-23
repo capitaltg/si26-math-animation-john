@@ -29,3 +29,10 @@ class BalanceScaleScene(Scene):
         if self.params is None:
             raise ValueError("BalanceScaleScene.params must be set before construct() runs")
         draw_balance_scale(self, self.params)
+
+
+from app.templates._shared.chained_scene import ChainedScene
+
+
+class ChainedBalanceScaleScene(ChainedScene):
+    draw_fn = staticmethod(draw_balance_scale)

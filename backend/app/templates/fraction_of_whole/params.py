@@ -14,3 +14,7 @@ class FractionOfWholeParams(BaseModel):
 
     def grounding_number_tokens(self) -> list[str]:
         return [f"{self.numerator}/{self.denominator}"]
+
+
+class ChainedFractionOfWholeParams(BaseModel):
+    items: list[FractionOfWholeParams] = Field(min_length=2, max_length=4)

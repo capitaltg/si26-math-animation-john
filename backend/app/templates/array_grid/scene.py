@@ -24,3 +24,10 @@ class ArrayGridScene(Scene):
         if self.params is None:
             raise ValueError("ArrayGridScene.params must be set before construct() runs")
         draw_array_grid(self, self.params)
+
+
+from app.templates._shared.chained_scene import ChainedScene
+
+
+class ChainedArrayGridScene(ChainedScene):
+    draw_fn = staticmethod(draw_array_grid)

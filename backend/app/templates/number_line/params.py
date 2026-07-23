@@ -24,3 +24,7 @@ class NumberLineParams(BaseModel):
     def _check_guard(self):
         check_number_line_compatibility(self)
         return self
+
+
+class ChainedNumberLineParams(BaseModel):
+    items: list[NumberLineParams] = Field(min_length=2, max_length=4)

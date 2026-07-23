@@ -24,3 +24,7 @@ class FractionBarParams(BaseModel):
         tokens = [f"{self.start_numerator}/{self.denominator}"]
         tokens += [f"{step.numerator}/{self.denominator}" for step in self.steps]
         return tokens
+
+
+class ChainedFractionBarParams(BaseModel):
+    items: list[FractionBarParams] = Field(min_length=2, max_length=4)

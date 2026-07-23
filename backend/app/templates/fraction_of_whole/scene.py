@@ -24,3 +24,10 @@ class FractionOfWholeScene(Scene):
         if self.params is None:
             raise ValueError("FractionOfWholeScene.params must be set before construct() runs")
         draw_fraction_of_whole(self, self.params)
+
+
+from app.templates._shared.chained_scene import ChainedScene
+
+
+class ChainedFractionOfWholeScene(ChainedScene):
+    draw_fn = staticmethod(draw_fraction_of_whole)
