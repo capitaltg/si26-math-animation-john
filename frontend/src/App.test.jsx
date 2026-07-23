@@ -57,9 +57,9 @@ function jsonResponse(body, status = 200) {
   }
 }
 
-function installFetchMock({ secondUpload = false, clipStatus = 'approved' } = {}) {
+function installFetchMock({ secondUpload = false, clipStatus = 'approved', patchStatus = 'ok' } = {}) {
   let uploadCount = 0
-  const fetchMock = vi.fn(async (url) => {
+  const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/upload') {
       uploadCount += 1
       if (secondUpload && uploadCount === 2) {
@@ -90,8 +90,29 @@ function installFetchMock({ secondUpload = false, clipStatus = 'approved' } = {}
     if (url === '/storyboard') {
       return jsonResponse({ scenes: [pendingScene] })
     }
+    if (url === '/storyboard/s1' && init.method === 'PATCH') {
+      if (patchStatus === '422') {
+        return jsonResponse(
+          { detail: { errors: [{ loc: ['start'], msg: 'must be non-negative' }] } },
+          422,
+        )
+      }
+      if (patchStatus === 'malformed422') {
+        return jsonResponse({ detail: 'start must be non-negative' }, 422)
+      }
+      const body = JSON.parse(init.body)
+      return jsonResponse({
+        ...pendingScene,
+        params: body.params ?? pendingScene.params,
+        grade_level: body.grade_level ?? pendingScene.grade_level,
+        grade_overridden: body.grade_level !== undefined ? true : pendingScene.grade_overridden,
+      })
+    }
     if (url === '/storyboard/s1/approve') {
       return jsonResponse({ ...pendingScene, status: 'approved' })
+    }
+    if (url === '/storyboard/s1/reject') {
+      return jsonResponse({ ...pendingScene, status: 'rejected' })
     }
     if (url === '/render') {
       return jsonResponse({
@@ -198,6 +219,54 @@ it('shows an explicit message when one approved scene fails to render', async ()
 
   await screen.findByRole('heading', { name: 'Results' })
   expect(screen.getByText('Render failed for c1')).not.toBeNull()
+})
+
+it('saves edits and clears the dirty flag', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  fireEvent.change(screen.getByLabelText('Start:'), { target: { value: '5' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+
+  await waitFor(() => expect(screen.queryByText('Unsaved edits — Save first')).toBeNull())
+})
+
+it('rejects a scene', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  const sceneContainer = screen.getByText(pendingScene.detected_summary).parentElement
+  fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+
+  await waitFor(() => expect(sceneContainer.style.background).toContain('254, 242, 242'))
+})
+
+it('updates the grade level', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  fireEvent.change(screen.getByLabelText('Grade:'), { target: { value: '3' } })
+
+  await waitFor(() => expect(document.body.textContent).toContain('(overridden)'))
+})
+
+it('surfaces 422 field errors from a PATCH without crashing', async () => {
+  installFetchMock({ patchStatus: '422' })
+  await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+
+  await screen.findByText('start: must be non-negative')
+})
+
+it('does not crash when a 422 response has no errors array', async () => {
+  installFetchMock({ patchStatus: 'malformed422' })
+  await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save edits' }).disabled).toBe(false))
+  expect(screen.queryByText('start must be non-negative')).toBeNull()
 })
 
 it('returns from results to visualization options', async () => {

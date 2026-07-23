@@ -245,6 +245,8 @@ def _scene_out(scene: Scene, candidate) -> SceneOut:
     if scene.thumbnail_path is not None:
         thumb_id = store.register_thumbnail(scene.thumbnail_path)
         thumbnail_url = f"/thumbnails/{thumb_id}"
+    source_excerpt = candidate.source_excerpt if candidate else (scene.manual_source_text or "")
+    detected_summary = candidate.one_line_summary if candidate else ""
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -256,9 +258,18 @@ def _scene_out(scene: Scene, candidate) -> SceneOut:
         status=scene.status,
         fallback_reason=scene.fallback_reason,
         thumbnail_url=thumbnail_url,
-        source_excerpt=candidate.source_excerpt,
-        detected_summary=candidate.one_line_summary,
+        source_excerpt=source_excerpt,
+        detected_summary=detected_summary,
     )
+
+
+def _lookup_candidate(session, scene: Scene):
+    if not scene.candidate_id:
+        return None
+    candidate = session.candidates.get(scene.candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate no longer available for this scene")
+    return candidate
 
 
 @router.post("/storyboard", response_model=StoryboardResponse)
@@ -336,7 +347,7 @@ def edit_scene(
     scene = session.scenes.get(scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = session.candidates.get(scene.candidate_id)
+    candidate = _lookup_candidate(session, scene)
     if scene.template is None:
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
 
@@ -388,7 +399,7 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
     scene = session.scenes.get(scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = session.candidates.get(scene.candidate_id)
+    candidate = _lookup_candidate(session, scene)
     updated = scene.model_copy(update={"status": status})
     session.scenes[scene_id] = updated
     return _scene_out(updated, candidate)
@@ -412,7 +423,9 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     scene = session.scenes.get(scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = session.candidates.get(scene.candidate_id)
+    candidate = _lookup_candidate(session, scene)
+    if candidate is None:
+        raise HTTPException(status_code=400, detail="This scene cannot be retried")
     template = session.scene_requested_template.get(scene_id)
     if template is None:
         raise HTTPException(status_code=400, detail="This scene cannot be retried")

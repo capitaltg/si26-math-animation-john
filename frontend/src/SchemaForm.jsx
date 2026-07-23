@@ -23,7 +23,7 @@ function blankValue(schema, root) {
   return ''
 }
 
-function Field({ name, schema, root, value, onChange }) {
+function Field({ name, schema, root, value, onChange, disabled }) {
   const resolved = resolveRef(schema, root)
   const label = resolved.title || name
 
@@ -32,7 +32,7 @@ function Field({ name, schema, root, value, onChange }) {
     return (
       <label style={{ display: 'block', margin: '0.3rem 0' }}>
         {label}:{' '}
-        <select value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
+        <select value={value ?? ''} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
           {resolved.enum.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
@@ -49,6 +49,7 @@ function Field({ name, schema, root, value, onChange }) {
         <input
           type="number"
           value={value ?? ''}
+          disabled={disabled}
           onChange={(e) => {
             const raw = e.target.value
             onChange(raw === '' ? '' : Number(raw))
@@ -67,7 +68,7 @@ function Field({ name, schema, root, value, onChange }) {
     const itemIsObject = itemSchema.type === 'object' || !!itemSchema.properties
 
     return (
-      <fieldset style={{ margin: '0.4rem 0' }}>
+      <fieldset style={{ margin: '0.4rem 0' }} disabled={disabled}>
         <legend>{label}</legend>
         {rows.map((row, i) => (
           <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -76,6 +77,7 @@ function Field({ name, schema, root, value, onChange }) {
                 schema={itemSchema}
                 root={root}
                 value={row}
+                disabled={disabled}
                 onChange={(nextRow) => {
                   const next = rows.slice()
                   next[i] = nextRow
@@ -88,6 +90,7 @@ function Field({ name, schema, root, value, onChange }) {
                 schema={itemSchema}
                 root={root}
                 value={row}
+                disabled={disabled}
                 onChange={(nextValue) => {
                   const next = rows.slice()
                   next[i] = nextValue
@@ -98,6 +101,7 @@ function Field({ name, schema, root, value, onChange }) {
             {rows.length > minItems && (
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => onChange(rows.filter((_, j) => j !== i))}
               >
                 remove
@@ -108,6 +112,7 @@ function Field({ name, schema, root, value, onChange }) {
         {rows.length < maxItems && (
           <button
             type="button"
+            disabled={disabled}
             onClick={() => onChange([...rows, blankValue(itemSchema, root)])}
           >
             add item
@@ -124,13 +129,14 @@ function Field({ name, schema, root, value, onChange }) {
       <input
         type="text"
         value={value ?? ''}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       />
     </label>
   )
 }
 
-export default function SchemaForm({ schema, root, value, onChange }) {
+export default function SchemaForm({ schema, root, value, onChange, disabled }) {
   const rootSchema = root || schema
   const properties = schema.properties || {}
   return (
@@ -142,6 +148,7 @@ export default function SchemaForm({ schema, root, value, onChange }) {
           schema={propSchema}
           root={rootSchema}
           value={value?.[name]}
+          disabled={disabled}
           onChange={(fieldValue) => onChange({ ...value, [name]: fieldValue })}
         />
       ))}

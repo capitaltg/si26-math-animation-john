@@ -135,7 +135,8 @@ export default function App() {
       })
       const data = await responseJson(resp, 'Action failed')
       if (resp.status === 422) {
-        setFieldErrors((prev) => ({ ...prev, [sceneId]: data.detail.errors }))
+        const errors = Array.isArray(data?.detail?.errors) ? data.detail.errors : []
+        setFieldErrors((prev) => ({ ...prev, [sceneId]: errors }))
         return
       }
       if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
@@ -325,6 +326,7 @@ export default function App() {
                 <SchemaForm
                   schema={scene.params_schema}
                   value={drafts[scene.scene_id]}
+                  disabled={loading}
                   onChange={(next) =>
                     setDrafts((prev) => ({ ...prev, [scene.scene_id]: next }))
                   }
