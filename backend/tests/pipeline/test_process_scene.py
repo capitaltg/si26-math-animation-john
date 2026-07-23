@@ -1,415 +1,138 @@
-from unittest.mock import patch
+def test_assemble_scene_returns_pending_review_with_thumbnail(tmp_path):
+    from unittest.mock import patch
 
-from app.models.candidate import Candidate
-from app.models.scene import TemplateName
-
-
-def _candidate():
-    return Candidate(
-        candidate_id="c1",
-        source_excerpt="Sarah has 4 apples and buys 3 more, then gives 1 away.",
-        slide_index=0,
-        one_line_summary="Detected: 4 + 3 - 1",
-    )
-
-
-def _number_line_params():
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
     from app.templates.number_line.params import NumberLineParams, NumberLineStep
 
-    return NumberLineParams(
-        start=4,
-        steps=[NumberLineStep(operation="add", amount=3), NumberLineStep(operation="subtract", amount=1)],
+    candidate = Candidate(
+        candidate_id="c1",
+        source_excerpt="Sarah has 4 apples and buys 3 more.",
+        slide_index=0,
+        one_line_summary="Detected: 4 + 3",
+    )
+    params = NumberLineParams(start=4, steps=[NumberLineStep(operation="add", amount=3)])
+
+    with patch("app.pipeline.process_scene.extract_params", return_value=params), patch(
+        "app.pipeline.process_scene.render_scene_thumbnail"
+    ) as thumb:
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=1
+        )
+
+    assert scene.status == "pending_review"
+    assert scene.template == TemplateName.NUMBER_LINE
+    assert scene.thumbnail_path is not None
+    assert scene.params["start"] == 4
+    thumb.assert_called_once()
+
+
+def test_assemble_scene_falls_back_on_template_mismatch(tmp_path):
+    from unittest.mock import patch
+
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.extraction import TemplateMismatchError
+    from app.pipeline.process_scene import (
+        TEMPLATE_MISMATCH_REASON,
+        assemble_scene,
     )
 
-
-def test_fallback_render_failure_is_logged(tmp_path, caplog):
-    import logging
-
-    from app.pipeline.process_scene import process_scene
+    candidate = Candidate(
+        candidate_id="c2",
+        source_excerpt="A list of 30 spelling words.",
+        slide_index=0,
+        one_line_summary="Detected: word list",
+    )
 
     with patch(
-        "app.pipeline.process_scene.classify_candidate",
-        side_effect=RuntimeError("classify boom"),
-    ), patch(
-        "app.pipeline.process_scene.render_scene_to_mp4",
-        side_effect=RuntimeError("render boom"),
-    ), caplog.at_level(logging.WARNING, logger="app.pipeline.process_scene"):
-        scene = process_scene(_candidate(), tmp_path)
-
-    assert scene.status == "fallback"
-    assert scene.render_path is None
-    assert any(
-        r.name == "app.pipeline.process_scene"
-        and r.levelno >= logging.WARNING
-        and "text-card render failed" in r.message.lower()
-        for r in caplog.records
-    )
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_clean_success_returns_approved_scene(mock_classify, mock_extract, mock_render, tmp_path):
-    from app.pipeline.classification import ClassificationResult, TemplateOption
-    from app.pipeline.process_scene import process_scene
-
-    mock_classify.return_value = ClassificationResult(
-        options=[
-            TemplateOption(
-                template=TemplateName.NUMBER_LINE,
-                rationale="shows the operations as jumps",
-            ),
-            TemplateOption(
-                template=TemplateName.BALANCE_SCALE,
-                rationale="shows the equation as a balance",
-            ),
-        ],
-        grade_level=2,
-        ambiguous=False,
-    )
-    mock_extract.return_value = _number_line_params()
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(_candidate(), tmp_path)
-
-    assert scene.status == "approved"
-    assert scene.template == TemplateName.NUMBER_LINE
-    assert scene.render_path.parent == tmp_path
-    assert scene.render_path.suffix == ".mp4"
-    assert scene.fallback_reason is None
-    from app.templates.number_line.params import NumberLineParams
-
-    mock_extract.assert_called_once_with(_candidate().source_excerpt, NumberLineParams)
-    mock_render.assert_called_once_with(
-        TemplateName.NUMBER_LINE,
-        mock_extract.return_value,
-        scene.render_path,
-    )
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_explicit_template_and_grade_skip_classification(
-    mock_classify,
-    mock_extract,
-    mock_render,
-    tmp_path,
-):
-    from app.pipeline.process_scene import process_scene
-
-    mock_extract.return_value = _number_line_params()
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(
-        _candidate(),
-        tmp_path,
-        template=TemplateName.NUMBER_LINE,
-        grade=4,
-    )
-
-    assert scene.status == "approved"
-    assert scene.template == TemplateName.NUMBER_LINE
-    assert scene.grade_level == 4
-    mock_classify.assert_not_called()
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_explicit_template_without_grade_uses_default_and_skips_classification(
-    mock_classify,
-    mock_extract,
-    mock_render,
-    tmp_path,
-):
-    from app.pipeline.process_scene import DEFAULT_FALLBACK_GRADE, process_scene
-
-    mock_extract.return_value = _number_line_params()
-
-    scene = process_scene(
-        _candidate(),
-        tmp_path,
-        template=TemplateName.NUMBER_LINE,
-    )
-
-    assert scene.status == "approved"
-    assert scene.grade_level == DEFAULT_FALLBACK_GRADE
-    mock_classify.assert_not_called()
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-def test_repeated_approved_renders_use_distinct_output_paths(mock_extract, mock_render, tmp_path):
-    from app.pipeline.process_scene import process_scene
-
-    mock_extract.return_value = _number_line_params()
-
-    first = process_scene(_candidate(), tmp_path, template=TemplateName.NUMBER_LINE)
-    second = process_scene(_candidate(), tmp_path, template=TemplateName.NUMBER_LINE)
-
-    assert first.render_path != second.render_path
-    assert [call.args[2] for call in mock_render.call_args_list] == [
-        first.render_path,
-        second.render_path,
-    ]
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_repeated_fallback_renders_use_distinct_output_paths(mock_classify, mock_render, tmp_path):
-    from app.pipeline.classification import ClassificationResult
-    from app.pipeline.process_scene import process_scene
-
-    mock_classify.return_value = ClassificationResult(options=[], grade_level=3, ambiguous=True)
-
-    first = process_scene(_candidate(), tmp_path)
-    second = process_scene(_candidate(), tmp_path)
-
-    assert first.render_path != second.render_path
-    assert [call.args[2] for call in mock_render.call_args_list] == [
-        first.render_path,
-        second.render_path,
-    ]
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_text_card_choice_renders_directly_as_approved(mock_classify, mock_extract, mock_render, tmp_path):
-    """When text_card is the only structural fit, render it directly as an approved
-    scene rather than running numeric extraction that would only decline."""
-    from app.pipeline.classification import ClassificationResult, TemplateOption
-    from app.pipeline.process_scene import process_scene
-
-    mock_classify.return_value = ClassificationResult(
-        options=[TemplateOption(template=TemplateName.TEXT_CARD, rationale="static plot task")],
-        grade_level=3,
-        ambiguous=False,
-    )
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(_candidate(), tmp_path)
-
-    assert scene.status == "approved"
-    assert scene.template == TemplateName.TEXT_CARD
-    assert scene.fallback_reason is None
-    assert scene.render_path.parent == tmp_path
-    assert mock_extract.call_count == 0  # no numeric extraction for a text card
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-def test_explicit_text_card_template_skips_extraction(mock_extract, mock_render, tmp_path):
-    from app.pipeline.process_scene import process_scene
-
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(_candidate(), tmp_path, template=TemplateName.TEXT_CARD, grade=2)
-
-    assert scene.status == "approved"
-    assert scene.template == TemplateName.TEXT_CARD
-    assert scene.grade_level == 2
-    assert scene.fallback_reason is None
-    assert mock_extract.call_count == 0
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_ambiguous_classification_falls_back_without_extracting(mock_classify, mock_extract, mock_render, tmp_path):
-    from app.pipeline.classification import ClassificationResult
-    from app.pipeline.process_scene import CLASSIFICATION_AMBIGUOUS_REASON, process_scene
-
-    mock_classify.return_value = ClassificationResult(options=[], grade_level=3, ambiguous=True)
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(_candidate(), tmp_path)
+        "app.pipeline.process_scene.extract_params",
+        side_effect=TemplateMismatchError("no add/subtract sequence"),
+    ), patch("app.pipeline.process_scene.render_scene_thumbnail"):
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=3
+        )
 
     assert scene.status == "fallback"
     assert scene.template == TemplateName.TEXT_CARD
-    assert scene.fallback_reason == CLASSIFICATION_AMBIGUOUS_REASON
-    assert mock_extract.call_count == 0  # no blind retry against the same input
+    assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
+    assert scene.thumbnail_path is not None
 
 
-@patch("app.pipeline.process_scene.time.sleep")
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_validation_failure_retries_once_then_succeeds(mock_classify, mock_extract, mock_render, mock_sleep, tmp_path):
-    from app.pipeline.classification import ClassificationResult, TemplateOption
-    from app.pipeline.process_scene import process_scene
+def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
+    from unittest.mock import patch
 
-    mock_classify.return_value = ClassificationResult(
-        options=[
-            TemplateOption(
-                template=TemplateName.NUMBER_LINE,
-                rationale="shows the operations as jumps",
-            )
-        ],
-        grade_level=2,
-        ambiguous=False,
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
+
+    candidate = Candidate(
+        candidate_id="c3",
+        source_excerpt="Plot one half and three quarters on a number line.",
+        slide_index=0,
+        one_line_summary="Detected: static plotting task",
     )
-    mock_extract.side_effect = [ValueError("bad extraction"), _number_line_params()]
-    mock_render.return_value = tmp_path / "c1.mp4"
 
-    scene = process_scene(_candidate(), tmp_path)
+    with patch(
+        "app.pipeline.process_scene.extract_params",
+        side_effect=AssertionError("text cards must bypass extraction"),
+    ) as extract, patch("app.pipeline.process_scene.render_scene_thumbnail") as thumbnail:
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.TEXT_CARD, grade=3
+        )
 
-    assert scene.status == "approved"
-    assert mock_extract.call_count == 2
-    assert mock_sleep.call_count == 1
-
-
-@patch("app.pipeline.process_scene.time.sleep")
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_repeated_render_failure_falls_back_with_technical_reason(mock_classify, mock_extract, mock_render, mock_sleep, tmp_path):
-    from app.pipeline.classification import ClassificationResult, TemplateOption
-    from app.pipeline.process_scene import TECHNICAL_FAILURE_REASON, process_scene
-
-    mock_classify.return_value = ClassificationResult(
-        options=[
-            TemplateOption(
-                template=TemplateName.NUMBER_LINE,
-                rationale="shows the operations as jumps",
-            )
-        ],
-        grade_level=2,
-        ambiguous=False,
-    )
-    mock_extract.return_value = _number_line_params()
-    mock_render.side_effect = RuntimeError("manim boom")
-
-    scene = process_scene(_candidate(), tmp_path)
-
-    assert scene.status == "fallback"
+    assert scene.status == "pending_review"
     assert scene.template == TemplateName.TEXT_CARD
-    assert scene.fallback_reason.startswith(TECHNICAL_FAILURE_REASON)
-    assert mock_extract.call_count == 2  # retried once before falling back
-    assert scene.render_path is None  # even the fallback render failed
+    assert scene.fallback_reason is None
+    assert scene.params == {
+        "headline": "Detected: static plotting task",
+        "lines": ["Plot one half and three quarters on a number line."],
+    }
+    assert scene.thumbnail_path is not None
+    extract.assert_not_called()
+    thumbnail.assert_called_once()
 
 
-@patch("app.pipeline.process_scene.time.sleep")
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_persistent_contract_mismatch_reroutes_to_text_card(mock_classify, mock_extract, mock_render, mock_sleep, tmp_path):
-    """A negative running total is a template mismatch, not a technical failure,
-    so the user should still get a readable text card with an honest reason."""
-    from pydantic import ValidationError
+def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path):
+    from unittest.mock import patch
 
-    from app.pipeline.process_scene import TEMPLATE_MISMATCH_REASON, TECHNICAL_FAILURE_REASON, process_scene
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
     from app.templates.number_line.params import NumberLineParams, NumberLineStep
 
-    try:
-        NumberLineParams(
-            start=1,
-            steps=[NumberLineStep(operation="subtract", amount=2)],
-        )
-        raise AssertionError("expected a ValidationError for a negative running total")
-    except ValidationError as exc:
-        contract_error = exc
-
-    mock_extract.side_effect = contract_error
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(
-        _candidate(),
-        tmp_path,
-        template=TemplateName.NUMBER_LINE,
-        grade=1,
-    )
-
-    assert scene.status == "fallback"
-    assert scene.template == TemplateName.TEXT_CARD
-    assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
-    assert scene.fallback_reason != TECHNICAL_FAILURE_REASON
-    assert scene.render_path.parent == tmp_path  # content still rendered
-    assert scene.render_path.suffix == ".mp4"
-    assert mock_extract.call_count == 2  # retried once (extraction is nondeterministic)
-    mock_classify.assert_not_called()
-
-
-@patch("app.pipeline.process_scene.time.sleep")
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_template_mismatch_reroutes_to_text_card_without_retry(
-    mock_classify, mock_extract, mock_render, mock_sleep, tmp_path
-):
-    from app.pipeline.extraction import TemplateMismatchError
-    from app.pipeline.process_scene import TEMPLATE_MISMATCH_REASON, process_scene
-
-    mock_extract.side_effect = TemplateMismatchError("numbers not grounded: 2")
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(
-        _candidate(),
-        tmp_path,
-        template=TemplateName.NUMBER_LINE,
-        grade=1,
-    )
-
-    assert scene.status == "fallback"
-    assert scene.template == TemplateName.TEXT_CARD
-    assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
-    assert mock_extract.call_count == 1  # structural mismatch: no retry
-    assert mock_sleep.call_count == 0
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_blank_source_excerpt_falls_back_without_raising(mock_classify, mock_render, tmp_path):
-    from app.pipeline.classification import ClassificationResult
-    from app.pipeline.process_scene import process_scene
-
-    mock_classify.return_value = ClassificationResult(options=[], grade_level=3, ambiguous=True)
-    mock_render.return_value = tmp_path / "c1.mp4"
-
     candidate = Candidate(
-        candidate_id="c1", source_excerpt="   ", slide_index=0, one_line_summary="Detected: x"
-    )
-
-    scene = process_scene(candidate, tmp_path)
-
-    assert scene.status == "fallback"
-    assert scene.template == TemplateName.TEXT_CARD
-
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_whitespace_only_summary_falls_back_without_raising(mock_classify, mock_render, tmp_path):
-    from app.pipeline.classification import ClassificationResult
-    from app.pipeline.process_scene import process_scene
-
-    mock_classify.return_value = ClassificationResult(options=[], grade_level=3, ambiguous=True)
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    candidate = Candidate(
-        candidate_id="c1",
-        source_excerpt="Sarah has 4 apples and buys 3 more, then gives 1 away.",
+        candidate_id="c4",
+        source_excerpt="Sarah has 4 apples and buys 3 more.",
         slide_index=0,
-        one_line_summary="   ",
+        one_line_summary="Detected: 4 + 3",
+    )
+    params = NumberLineParams(
+        start=4,
+        steps=[NumberLineStep(operation="add", amount=3)],
     )
 
-    scene = process_scene(candidate, tmp_path)
+    def fail_number_line_preview(template, *_args):
+        if template == TemplateName.NUMBER_LINE:
+            raise RuntimeError("preview failed")
 
-    assert scene.status == "fallback"
-    assert scene.template == TemplateName.TEXT_CARD
+    with patch(
+        "app.pipeline.process_scene.extract_params", return_value=params
+    ) as extract, patch(
+        "app.pipeline.process_scene.render_scene_thumbnail",
+        side_effect=fail_number_line_preview,
+    ):
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=1
+        )
 
-
-@patch("app.pipeline.process_scene.render_scene_to_mp4")
-@patch("app.pipeline.process_scene.extract_params")
-@patch("app.pipeline.process_scene.classify_candidate")
-def test_classification_exception_falls_back_technically(mock_classify, mock_extract, mock_render, tmp_path):
-    from app.pipeline.process_scene import TECHNICAL_FAILURE_REASON, process_scene
-
-    mock_classify.side_effect = RuntimeError("bedrock down")
-    mock_render.return_value = tmp_path / "c1.mp4"
-
-    scene = process_scene(_candidate(), tmp_path)
-
-    assert scene.status == "fallback"
-    assert scene.fallback_reason.startswith(TECHNICAL_FAILURE_REASON)
-    assert mock_extract.call_count == 0
+    assert scene.status == "pending_review"
+    assert scene.template == TemplateName.NUMBER_LINE
+    assert scene.fallback_reason is None
+    assert scene.params == {
+        "start": 4,
+        "steps": [{"operation": "add", "amount": 3}],
+    }
+    assert scene.thumbnail_path is None
+    extract.assert_called_once()
