@@ -403,6 +403,29 @@ def edit_scene(
     return _scene_out(updated, candidate)
 
 
+def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> SceneOut:
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = session.scenes.get(scene_id)
+    if scene is None:
+        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    candidate = session.candidates.get(scene.candidate_id)
+    updated = scene.model_copy(update={"status": status})
+    session.scenes[scene_id] = updated
+    return _scene_out(updated, candidate)
+
+
+@router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
+def approve_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    return _set_scene_status(session_id, scene_id, "approved")
+
+
+@router.post("/storyboard/{scene_id}/reject", response_model=SceneOut)
+def reject_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    return _set_scene_status(session_id, scene_id, "rejected")
+
+
 @router.post("/storyboard/{scene_id}/retry", response_model=SceneOut)
 def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None

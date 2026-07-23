@@ -647,3 +647,51 @@ def test_retry_unknown_scene_is_404():
     client = _client()
     _upload_candidate(client)
     assert client.post("/storyboard/nope/retry").status_code == 404
+
+
+def test_approve_sets_status(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+    resp = client.post("/storyboard/s1/approve")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
+def test_reject_sets_status(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+    resp = client.post("/storyboard/s1/reject")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected"
+
+
+def test_approve_fallback_scene_keeps_reason(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidate(client)
+    fallback = Scene(
+        scene_id="s2",
+        candidate_id="c1",
+        template=TemplateName.TEXT_CARD,
+        grade_level=1,
+        params={"headline": "x", "lines": ["y"]},
+        status="fallback",
+        fallback_reason="did not fit the chosen template",
+        thumbnail_path=(tmp_path / "t.png"),
+    )
+    (tmp_path / "t.png").write_bytes(b"png")
+    _seed_scene(client, fallback)
+
+    resp = client.post("/storyboard/s2/approve")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+    assert resp.json()["fallback_reason"] == "did not fit the chosen template"
+
+
+def test_approve_unknown_scene_is_404():
+    client = _client()
+    _upload_candidate(client)
+    assert client.post("/storyboard/nope/approve").status_code == 404
