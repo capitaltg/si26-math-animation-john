@@ -32,7 +32,10 @@ def test_number_line_width_fits_within_frame_at_max_allowed_span():
 
     draw_number_line(scene, params)
 
-    assert scene.number_line.width <= config.frame_width
+    safe_left = -config.frame_width / 2 + FRAME_MARGIN
+    safe_right = config.frame_width / 2 - FRAME_MARGIN
+    assert scene.number_line.get_left()[0] >= safe_left
+    assert scene.number_line.get_right()[0] <= safe_right
 
 
 def test_large_value_labels_fit_inside_horizontal_frame():
@@ -46,5 +49,6 @@ def test_large_value_labels_fit_inside_horizontal_frame():
 
     safe_left = -config.frame_width / 2 + FRAME_MARGIN
     safe_right = config.frame_width / 2 - FRAME_MARGIN
+    assert len(scene.labels) == 2
     assert all(label.get_left()[0] >= safe_left for label in scene.labels)
     assert all(label.get_right()[0] <= safe_right for label in scene.labels)
