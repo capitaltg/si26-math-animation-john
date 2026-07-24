@@ -24,6 +24,11 @@ def test_run_multiplicative_chain_rejects_non_exact_division():
         run_multiplicative_chain(10, [("divide", 3)])
 
 
+def test_run_multiplicative_chain_rejects_zero_divisor():
+    with pytest.raises(ValueError):
+        run_multiplicative_chain(10, [("divide", 0)])
+
+
 def test_run_multiplicative_chain_rejects_non_positive_start():
     with pytest.raises(ValueError):
         run_multiplicative_chain(0, [("multiply", 5)])
