@@ -1,5 +1,15 @@
 from manim import *
 
+from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
+
+
+def build_number_line_label(marker, value):
+    label = Text(str(value))
+    fit_width(label)
+    label.next_to(marker, UP)
+    label.shift_onto_screen(buff=FRAME_MARGIN)
+    return label
+
 
 def _number_line_values(params):
     running = params.start
@@ -32,7 +42,7 @@ def _animate_number_line_steps(scene, params):
         scene.play(Create(arrow))
         scene.current_problem_arrows.append(arrow)
         new_marker = Dot(scene.number_line.number_to_point(new_value), color=RED)
-        new_label = Text(str(new_value)).next_to(new_marker, UP)
+        new_label = build_number_line_label(new_marker, new_value)
         scene.play(Transform(scene.marker, new_marker), Transform(scene.label, new_label))
         running = new_value
         scene.running_value = running
@@ -43,10 +53,12 @@ def draw_number_line(scene, params, value_range=None):
 
     low, high = value_range or (min(values) - 2, max(values) + 2)
     line = NumberLine(x_range=[low, high, 1], include_numbers=True)
+    fit_width(line)
+    line.shift_onto_screen(buff=FRAME_MARGIN)
     scene.play(Create(line))
 
     marker = Dot(line.number_to_point(params.start), color=RED)
-    label = Text(str(params.start)).next_to(marker, UP)
+    label = build_number_line_label(marker, params.start)
     scene.play(FadeIn(marker), Write(label))
 
     scene.number_line = line

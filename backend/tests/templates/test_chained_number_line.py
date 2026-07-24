@@ -185,7 +185,15 @@ def test_continuation_greys_completed_arrows_and_tracks_new_arrows(monkeypatch):
             return value
 
     class FakeText:
+        width = 1
+
+        def scale(self, _factor):
+            return self
+
         def next_to(self, _mobject, _direction):
+            return self
+
+        def shift_onto_screen(self, *, buff):
             return self
 
     completed_arrow = FakeArrow()
