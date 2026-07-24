@@ -1,5 +1,6 @@
 from manim import *
 
+from app.templates._shared.chain_math import format_operation_caption, run_additive_chain
 from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
 
 
@@ -11,13 +12,17 @@ def build_number_line_label(marker, value):
     return label
 
 
+def build_operation_caption(a, operation, b, result):
+    caption = Text(format_operation_caption(a, operation, b, result))
+    fit_width(caption)
+    caption.to_edge(DOWN, buff=FRAME_MARGIN)
+    return caption
+
+
 def _number_line_values(params):
-    running = params.start
-    values = [running]
-    for step in params.steps:
-        running = running + step.amount if step.operation == "add" else running - step.amount
-        values.append(running)
-    return values
+    return run_additive_chain(
+        params.start, [(step.operation, step.amount) for step in params.steps]
+    )
 
 
 def number_line_continues_from(previous, current):
@@ -43,7 +48,14 @@ def _animate_number_line_steps(scene, params):
         scene.current_problem_arrows.append(arrow)
         new_marker = Dot(scene.number_line.number_to_point(new_value), color=RED)
         new_label = build_number_line_label(new_marker, new_value)
-        scene.play(Transform(scene.marker, new_marker), Transform(scene.label, new_label))
+        new_caption = build_operation_caption(running, step.operation, step.amount, new_value)
+        transforms = [Transform(scene.marker, new_marker), Transform(scene.label, new_label)]
+        if scene.op_caption is None:
+            scene.play(*transforms, Write(new_caption))
+        else:
+            transforms.append(Transform(scene.op_caption, new_caption))
+            scene.play(*transforms)
+        scene.op_caption = new_caption
         running = new_value
         scene.running_value = running
 
@@ -66,6 +78,7 @@ def draw_number_line(scene, params, value_range=None):
     scene.label = label
     scene.running_value = params.start
     scene.current_problem_arrows = []
+    scene.op_caption = None
     _animate_number_line_steps(scene, params)
 
     scene.wait(1)

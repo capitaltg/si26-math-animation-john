@@ -49,6 +49,24 @@ def test_large_value_labels_fit_inside_horizontal_frame():
 
     safe_left = -config.frame_width / 2 + FRAME_MARGIN
     safe_right = config.frame_width / 2 - FRAME_MARGIN
-    assert len(scene.labels) == 2
+    assert len(scene.labels) == 3
     assert all(label.get_left()[0] >= safe_left for label in scene.labels)
     assert all(label.get_right()[0] <= safe_right for label in scene.labels)
+
+
+def test_operation_captions_render_each_step_in_order():
+    params = NumberLineParams(
+        start=4,
+        steps=[
+            NumberLineStep(operation="add", amount=3),
+            NumberLineStep(operation="subtract", amount=2),
+        ],
+    )
+    scene = _StubScene()
+
+    draw_number_line(scene, params)
+
+    captions = [
+        label.original_text for label in scene.labels if "=" in label.original_text
+    ]
+    assert captions == ["4 + 3 = 7", "7 - 2 = 5"]
