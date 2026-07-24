@@ -722,7 +722,8 @@ def test_chain_rejects_fewer_than_two_ids():
     client = _client()
     _upload_candidate(client)
     resp = client.post("/storyboard/chain", json={"scene_ids": ["s1"]})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "A chain must contain between 2 and 4 scenes"
 
 
 def test_chain_rejects_more_than_four_ids():
@@ -731,7 +732,8 @@ def test_chain_rejects_more_than_four_ids():
     resp = client.post(
         "/storyboard/chain", json={"scene_ids": ["s1", "s2", "s3", "s4", "s5"]}
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "A chain must contain between 2 and 4 scenes"
 
 
 def test_chain_rejects_duplicate_ids(tmp_path):
@@ -869,9 +871,15 @@ def test_chain_splices_into_earliest_screen_position(tmp_path):
     assert session.scene_order == [new_id, "b"]
 
 
-def test_chain_uses_screen_order_when_request_order_is_reversed(tmp_path):
+def test_chain_preserves_request_order_for_content_and_screen_order_for_restoration(tmp_path):
     client = _client()
-    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+    c3_candidate = _candidate("c3").model_copy(
+        update={
+            "source_excerpt": "Nine minus two.",
+            "one_line_summary": "Detected: 9 - 2",
+        }
+    )
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), c3_candidate])
     a = _number_line_scene(tmp_path).model_copy(
         update={
             "scene_id": "a",
@@ -884,6 +892,8 @@ def test_chain_uses_screen_order_when_request_order_is_reversed(tmp_path):
         update={
             "scene_id": "c",
             "candidate_id": "c3",
+            "grade_level": 6,
+            "grade_overridden": True,
             "params": {"start": 9, "steps": [{"operation": "subtract", "amount": 2}]},
         }
     )
@@ -895,8 +905,20 @@ def test_chain_uses_screen_order_when_request_order_is_reversed(tmp_path):
         resp = client.post("/storyboard/chain", json={"scene_ids": ["c", "a"]})
 
     assert resp.status_code == 200
-    assert resp.json()["candidate_ids"] == ["c1", "c3"]
-    assert [item["start"] for item in resp.json()["params"]["items"]] == [1, 9]
+    body = resp.json()
+    assert body["candidate_ids"] == ["c3", "c1"]
+    assert [item["start"] for item in body["params"]["items"]] == [9, 1]
+    assert body["source_excerpt"] == (
+        "Nine minus two. / Sarah has 4 apples and buys 3 more."
+    )
+    assert body["detected_summary"] == "Detected: 9 - 2 / Detected: 4 + 3"
+    assert body["grade_level"] == 6
+    assert body["grade_overridden"] is True
+
+    from app.routes import store
+    session = store.get(client.cookies.get("session_id"))
+    assert session.scene_order == [body["scene_id"], "b"]
+    assert session.scene_chain_members[body["scene_id"]] == ["a", "c"]
 
 
 def test_ungroup_restores_original_scenes_at_same_position(tmp_path):

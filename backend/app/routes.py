@@ -104,7 +104,7 @@ class StoryboardRequest(BaseModel):
 
 
 class ChainRequest(BaseModel):
-    scene_ids: list[str] = Field(min_length=2, max_length=4)
+    scene_ids: list[str]
 
 
 class StoryboardResponse(BaseModel):
@@ -384,6 +384,12 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
+    if not 2 <= len(request.scene_ids) <= 4:
+        raise HTTPException(
+            status_code=400,
+            detail="A chain must contain between 2 and 4 scenes",
+        )
+
     if len(request.scene_ids) != len(set(request.scene_ids)):
         raise HTTPException(status_code=400, detail="Duplicate scene ids are not allowed")
 
@@ -409,7 +415,6 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
             )
         scenes.append(scene)
 
-    scenes.sort(key=lambda scene: session.scene_order.index(scene.scene_id))
     template = scenes[0].template
     if any(scene.template != template for scene in scenes):
         raise HTTPException(status_code=400, detail="All combined scenes must share one template")
@@ -443,7 +448,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
         thumbnail_path=thumb_path,
     )
 
-    screen_order_ids = [scene.scene_id for scene in scenes]
+    screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
     earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
     for sid in request.scene_ids:
         session.scene_order.remove(sid)

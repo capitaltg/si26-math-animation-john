@@ -193,6 +193,7 @@ export default function App() {
     checkedScenes.every(
       (s) =>
         s.status === 'pending_review' &&
+        !!s.candidate_id &&
         !s.candidate_ids &&
         !sceneIsDirty(s, drafts) &&
         s.template === checkedScenes[0]?.template,
@@ -225,6 +226,12 @@ export default function App() {
         next[data.scene_id] = data.params
         return next
       })
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        for (const id of checkedSceneIds) delete next[id]
+        next[data.scene_id] = null
+        return next
+      })
       setChainSelected({})
     } catch (err) {
       setError(err.message)
@@ -255,7 +262,12 @@ export default function App() {
         for (const scene of data.scenes) next[scene.scene_id] = scene.params
         return next
       })
-      setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next[sceneId]
+        for (const scene of data.scenes) next[scene.scene_id] = null
+        return next
+      })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -388,7 +400,8 @@ export default function App() {
           {storyboard.map((scene) => {
             const isDirty = sceneIsDirty(scene, drafts)
             const isChain = !!scene.candidate_ids
-            const combinable = scene.status === 'pending_review' && !isChain
+            const combinable =
+              scene.status === 'pending_review' && !!scene.candidate_id && !isChain
             return (
             <div
               key={scene.scene_id}
