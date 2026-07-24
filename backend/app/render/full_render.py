@@ -25,6 +25,10 @@ def render_chained_scene_to_mp4(template: TemplateName, params: BaseModel, outpu
     return _run_render_worker(template, params, output_path, mode="full", chained=True)
 
 
+def render_chained_scene_thumbnail(template: TemplateName, params: BaseModel, output_path: Path) -> Path:
+    return _run_render_worker(template, params, output_path, mode="thumbnail", chained=True)
+
+
 def _run_render_worker(
     template: TemplateName, params: BaseModel, output_path: Path, mode: str, chained: bool
 ) -> Path:

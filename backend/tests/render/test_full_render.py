@@ -71,3 +71,25 @@ def test_render_chained_number_line_scene_produces_mp4(tmp_path):
     assert result_path == output_path
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_render_chained_number_line_scene_produces_thumbnail(tmp_path):
+    from app.render.full_render import render_chained_scene_thumbnail
+    from app.templates.number_line.params import (
+        ChainedNumberLineParams,
+        NumberLineParams,
+        NumberLineStep,
+    )
+
+    params = ChainedNumberLineParams(items=[
+        NumberLineParams(start=1, steps=[NumberLineStep(operation="add", amount=2)]),
+        NumberLineParams(start=5, steps=[NumberLineStep(operation="subtract", amount=1)]),
+    ])
+    output_path = tmp_path / "chain-thumb.png"
+
+    result_path = render_chained_scene_thumbnail(TemplateName.NUMBER_LINE, params, output_path)
+
+    assert result_path == output_path
+    assert output_path.exists()
+    assert output_path.suffix == ".png"
+    assert output_path.stat().st_size > 0
