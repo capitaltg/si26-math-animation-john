@@ -915,3 +915,58 @@ def test_ungroup_unknown_or_non_chain_scene_is_404(tmp_path):
 
     resp = client.post("/storyboard/nope/ungroup")
     assert resp.status_code == 404
+
+
+def _chained_number_line_scene(candidate_ids=("c1", "c2")):
+    from app.models.scene import Scene, TemplateName
+
+    return Scene(
+        scene_id="s1",
+        candidate_ids=list(candidate_ids),
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"items": [
+            {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+            {"start": 5, "steps": [{"operation": "subtract", "amount": 1}]},
+        ]},
+        status="pending_review",
+    )
+
+
+def test_patch_chained_scene_valid_item_edit_re_renders_thumbnail():
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    _seed_scene(client, _chained_number_line_scene())
+
+    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"items": [
+                {"start": 10, "steps": [{"operation": "add", "amount": 1}]},
+                {"start": 5, "steps": [{"operation": "subtract", "amount": 1}]},
+            ]}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["params"]["items"][0]["start"] == 10
+    thumb.assert_called_once()
+
+
+def test_patch_chained_scene_invalid_item_returns_422():
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    _seed_scene(client, _chained_number_line_scene())
+
+    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"items": [
+                # start=1 then subtract 5 -> running total goes negative -> guard rejects.
+                {"start": 1, "steps": [{"operation": "subtract", "amount": 5}]},
+                {"start": 5, "steps": [{"operation": "subtract", "amount": 1}]},
+            ]}},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["errors"]
+    thumb.assert_not_called()

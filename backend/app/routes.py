@@ -496,14 +496,20 @@ def edit_scene(
     new_params = scene.params
     new_thumb = scene.thumbnail_path
     if request.params is not None:
-        _, params_cls = get_template(scene.template)
+        if scene.candidate_ids:
+            _, params_cls = get_chained_template(scene.template)
+        else:
+            _, params_cls = get_template(scene.template)
         try:
             params = params_cls.model_validate(request.params)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=_field_errors(exc))
         out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
         try:
-            render_scene_thumbnail(scene.template, params, out)
+            if scene.candidate_ids:
+                render_chained_scene_thumbnail(scene.template, params, out)
+            else:
+                render_scene_thumbnail(scene.template, params, out)
         except Exception as exc:
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")
