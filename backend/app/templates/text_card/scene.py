@@ -1,6 +1,6 @@
 from manim import *
 
-from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_to_box
+from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_to_frame
 
 BODY_GAP = 0.6
 
@@ -13,11 +13,7 @@ def build_text_card_mobjects(params):
 
     card = VGroup(headline, lines)
     card.arrange(DOWN, buff=BODY_GAP)
-    fit_to_box(
-        card,
-        max_width=config.frame_width - 2 * FRAME_MARGIN,
-        max_height=config.frame_height - 2 * FRAME_MARGIN,
-    )
+    fit_to_frame(card)
     card.to_edge(UP, buff=FRAME_MARGIN)
 
     return headline, lines

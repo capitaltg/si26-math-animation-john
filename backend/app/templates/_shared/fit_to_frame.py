@@ -19,6 +19,20 @@ def fit_to_box(mobject, *, max_width=None, max_height=None):
     return mobject
 
 
+def safe_width():
+    return config.frame_width - 2 * FRAME_MARGIN
+
+
+def safe_height():
+    return config.frame_height - 2 * FRAME_MARGIN
+
+
 def fit_width(mobject, max_width=None):
-    max_width = config.frame_width - 2 * FRAME_MARGIN if max_width is None else max_width
+    max_width = safe_width() if max_width is None else max_width
     return fit_to_box(mobject, max_width=max_width)
+
+
+def fit_to_frame(mobject, *, max_width=None, max_height=None):
+    max_width = safe_width() if max_width is None else max_width
+    max_height = safe_height() if max_height is None else max_height
+    return fit_to_box(mobject, max_width=max_width, max_height=max_height)
