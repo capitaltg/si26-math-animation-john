@@ -825,6 +825,28 @@ def test_chain_rejects_text_card_template(tmp_path):
     assert "text_card" in resp.json()["detail"].lower()
 
 
+def test_chain_rejects_reusing_absorbed_constituent_scene_id(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    c = _number_line_scene(tmp_path).model_copy(update={"scene_id": "c", "candidate_id": "c3"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+    _seed_scene(client, c)
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        first = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
+    assert first.status_code == 200
+
+    # "a" was absorbed into the chained scene above and removed from scene_order,
+    # but its Scene object is deliberately kept around for ungroup. Re-submitting
+    # it here must be rejected cleanly, not crash with an unhandled ValueError.
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "c"]})
+
+    assert resp.status_code == 400
+
+
 def test_chain_splices_into_earliest_screen_position(tmp_path):
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])

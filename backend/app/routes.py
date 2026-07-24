@@ -354,6 +354,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
     session.scenes.clear()
     session.scene_order.clear()
     session.scene_requested_template.clear()
+    session.scene_chain_members.clear()
 
     scenes_out: list[SceneOut] = []
     for candidate, classification, template in validated:
@@ -394,6 +395,11 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
                 status_code=400,
                 detail=f"Scene {scene_id} cannot be combined into a chain",
             )
+        if scene_id not in session.scene_order:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} is no longer available for combining",
+            )
         scenes.append(scene)
 
     template = scenes[0].template
@@ -413,7 +419,10 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     chained_params = chained_params_cls(items=items)
 
     thumb_path = session.output_dir / f"chain-{uuid4()}.png"
-    render_chained_scene_thumbnail(template, chained_params, thumb_path)
+    try:
+        render_chained_scene_thumbnail(template, chained_params, thumb_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
 
     new_scene = Scene(
         scene_id=str(uuid4()),
