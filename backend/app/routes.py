@@ -319,6 +319,13 @@ def _lookup_candidates(session, scene: Scene) -> list[Candidate]:
     return [candidate] if candidate else []
 
 
+def _lookup_active_scene(session, scene_id: str) -> Scene:
+    scene = session.scenes.get(scene_id)
+    if scene is None or scene_id not in session.scene_order:
+        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    return scene
+
+
 @router.post("/storyboard", response_model=StoryboardResponse)
 def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
@@ -402,6 +409,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
             )
         scenes.append(scene)
 
+    scenes.sort(key=lambda scene: session.scene_order.index(scene.scene_id))
     template = scenes[0].template
     if any(scene.template != template for scene in scenes):
         raise HTTPException(status_code=400, detail="All combined scenes must share one template")
@@ -435,7 +443,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
         thumbnail_path=thumb_path,
     )
 
-    screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
+    screen_order_ids = [scene.scene_id for scene in scenes]
     earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
     for sid in request.scene_ids:
         session.scene_order.remove(sid)
@@ -493,9 +501,7 @@ def edit_scene(
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    scene = _lookup_active_scene(session, scene_id)
     candidates = _lookup_candidates(session, scene)
     if scene.template is None:
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
@@ -551,9 +557,7 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    scene = _lookup_active_scene(session, scene_id)
     candidates = _lookup_candidates(session, scene)
     updated = scene.model_copy(update={"status": status})
     session.scenes[scene_id] = updated
@@ -575,9 +579,7 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    scene = _lookup_active_scene(session, scene_id)
     candidate = _lookup_candidate(session, scene)
     if candidate is None:
         raise HTTPException(status_code=400, detail="This scene cannot be retried")

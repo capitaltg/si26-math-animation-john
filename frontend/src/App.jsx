@@ -148,6 +148,9 @@ export default function App() {
       if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
       setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
       replaceScene(data, { resetDraft })
+      if (data.status !== 'pending_review' || data.candidate_ids) {
+        setChainSelected((prev) => ({ ...prev, [sceneId]: false }))
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -187,7 +190,13 @@ export default function App() {
   const canCombine =
     checkedScenes.length >= 2 &&
     checkedScenes.length <= 4 &&
-    checkedScenes.every((s) => s.template === checkedScenes[0]?.template)
+    checkedScenes.every(
+      (s) =>
+        s.status === 'pending_review' &&
+        !s.candidate_ids &&
+        !sceneIsDirty(s, drafts) &&
+        s.template === checkedScenes[0]?.template,
+    )
 
   async function handleCombineScenes() {
     if (!canCombine) return

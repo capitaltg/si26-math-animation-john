@@ -49,6 +49,18 @@ const pendingScene = {
   detected_summary: candidate.one_line_summary,
 }
 
+const pendingScene2 = {
+  ...pendingScene,
+  scene_id: 's2',
+  candidate_id: 'c2',
+  source_excerpt: 'Nine minus two.',
+  detected_summary: 'Detected: 9 - 2',
+  params: {
+    start: 9,
+    steps: [{ operation: 'subtract', amount: 2 }],
+  },
+}
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -57,7 +69,12 @@ function jsonResponse(body, status = 200) {
   }
 }
 
-function installFetchMock({ secondUpload = false, clipStatus = 'approved', patchStatus = 'ok' } = {}) {
+function installFetchMock({
+  secondUpload = false,
+  clipStatus = 'approved',
+  patchStatus = 'ok',
+  storyboardScenes = [pendingScene],
+} = {}) {
   let uploadCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/upload') {
@@ -88,7 +105,7 @@ function installFetchMock({ secondUpload = false, clipStatus = 'approved', patch
       })
     }
     if (url === '/storyboard') {
-      return jsonResponse({ scenes: [pendingScene] })
+      return jsonResponse({ scenes: storyboardScenes })
     }
     if (url === '/storyboard/s1' && init.method === 'PATCH') {
       if (patchStatus === '422') {
@@ -170,6 +187,34 @@ it('blocks rendering when an approved scene has unsaved edits', async () => {
   fireEvent.change(screen.getByLabelText('Start:'), { target: { value: '5' } })
 
   expect(renderButton.disabled).toBe(true)
+})
+
+it('does not combine selected scenes while one has unsaved edits', async () => {
+  installFetchMock({ storyboardScenes: [pendingScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+  expect(screen.getByRole('button', { name: 'Combine 2 into one scene' })).not.toBeNull()
+
+  fireEvent.change(screen.getAllByLabelText('Start:')[0], { target: { value: '5' } })
+
+  expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
+})
+
+it('removes a selected scene from combine eligibility after approval', async () => {
+  installFetchMock({ storyboardScenes: [pendingScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+  fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0])
+
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
+  })
 })
 
 it('clears the prior storyboard when a new deck is uploaded', async () => {

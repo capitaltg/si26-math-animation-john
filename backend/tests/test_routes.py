@@ -2,6 +2,7 @@
 import io
 from unittest.mock import patch
 
+import pytest
 from botocore.exceptions import NoCredentialsError
 from fastapi.testclient import TestClient
 from pptx import Presentation
@@ -868,6 +869,36 @@ def test_chain_splices_into_earliest_screen_position(tmp_path):
     assert session.scene_order == [new_id, "b"]
 
 
+def test_chain_uses_screen_order_when_request_order_is_reversed(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+    a = _number_line_scene(tmp_path).model_copy(
+        update={
+            "scene_id": "a",
+            "candidate_id": "c1",
+            "params": {"start": 1, "steps": [{"operation": "add", "amount": 1}]},
+        }
+    )
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    c = _number_line_scene(tmp_path).model_copy(
+        update={
+            "scene_id": "c",
+            "candidate_id": "c3",
+            "params": {"start": 9, "steps": [{"operation": "subtract", "amount": 2}]},
+        }
+    )
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+    _seed_scene(client, c)
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        resp = client.post("/storyboard/chain", json={"scene_ids": ["c", "a"]})
+
+    assert resp.status_code == 200
+    assert resp.json()["candidate_ids"] == ["c1", "c3"]
+    assert [item["start"] for item in resp.json()["params"]["items"]] == [1, 9]
+
+
 def test_ungroup_restores_original_scenes_at_same_position(tmp_path):
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
@@ -926,6 +957,32 @@ def test_ungroup_restores_true_screen_order_when_request_order_is_reversed(tmp_p
     assert session.scene_order == ["a", "c", "b"]
     assert new_id not in session.scenes
     assert new_id not in session.scene_chain_members
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("patch", "/storyboard/a", {"grade_level": 4}),
+        ("post", "/storyboard/a/approve", None),
+        ("post", "/storyboard/a/reject", None),
+        ("post", "/storyboard/a/retry", None),
+    ],
+)
+def test_absorbed_scene_cannot_be_mutated(method, path, body, tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    _seed_scene(client, a, template="number_line")
+    _seed_scene(client, b, template="number_line")
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
+    assert chain_resp.status_code == 200
+
+    resp = client.request(method, path, json=body)
+
+    assert resp.status_code == 404
 
 
 def test_ungroup_unknown_or_non_chain_scene_is_404(tmp_path):
