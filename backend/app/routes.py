@@ -418,12 +418,13 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
         thumbnail_path=thumb_path,
     )
 
+    screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
     earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
     for sid in request.scene_ids:
         session.scene_order.remove(sid)
     session.scene_order.insert(earliest_index, new_scene.scene_id)
     session.scenes[new_scene.scene_id] = new_scene
-    session.scene_chain_members[new_scene.scene_id] = list(request.scene_ids)
+    session.scene_chain_members[new_scene.scene_id] = screen_order_ids
 
     candidates = _lookup_candidates(session, new_scene)
     return _scene_out(new_scene, candidates)
