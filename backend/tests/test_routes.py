@@ -801,6 +801,29 @@ def test_chain_rejects_mismatched_templates(tmp_path):
     assert resp.status_code == 400
 
 
+def test_chain_rejects_text_card_template(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    scene1 = Scene(
+        scene_id="s1", candidate_id="c1", template=TemplateName.TEXT_CARD,
+        grade_level=1, params={"headline": "x", "lines": ["y"]},
+        status="pending_review",
+    )
+    scene2 = Scene(
+        scene_id="s2", candidate_id="c2", template=TemplateName.TEXT_CARD,
+        grade_level=1, params={"headline": "x", "lines": ["y"]},
+        status="pending_review",
+    )
+    _seed_scene(client, scene1)
+    _seed_scene(client, scene2)
+
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+    assert resp.status_code == 400
+    assert "text_card" in resp.json()["detail"].lower()
+
+
 def test_chain_splices_into_earliest_screen_position(tmp_path):
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])

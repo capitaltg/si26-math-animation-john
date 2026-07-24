@@ -388,8 +388,15 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     if any(scene.template != template for scene in scenes):
         raise HTTPException(status_code=400, detail="All combined scenes must share one template")
 
+    try:
+        _, chained_params_cls = get_chained_template(template)
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Template {template.value} cannot be combined into a chain",
+        )
+
     _, params_cls = get_template(template)
-    _, chained_params_cls = get_chained_template(template)
     items = [params_cls.model_validate(scene.params) for scene in scenes]
     chained_params = chained_params_cls(items=items)
 
