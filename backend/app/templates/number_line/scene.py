@@ -1,5 +1,7 @@
 from manim import *
 
+from app.templates._shared.fit_to_frame import fit_width
+
 
 def _number_line_values(params):
     running = params.start
@@ -43,6 +45,7 @@ def draw_number_line(scene, params, value_range=None):
 
     low, high = value_range or (min(values) - 2, max(values) + 2)
     line = NumberLine(x_range=[low, high, 1], include_numbers=True)
+    fit_width(line)
     scene.play(Create(line))
 
     marker = Dot(line.number_to_point(params.start), color=RED)
