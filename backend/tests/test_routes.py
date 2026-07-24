@@ -418,6 +418,7 @@ def test_render_returns_manual_scene_results(tmp_path):
     assert resp.json()["clips"] == [{
         "scene_id": "manual-1",
         "candidate_id": None,
+        "candidate_ids": None,
         "status": "approved",
         "clip_url": resp.json()["clips"][0]["clip_url"],
         "fallback_reason": None,
@@ -970,3 +971,26 @@ def test_patch_chained_scene_invalid_item_returns_422():
     assert resp.status_code == 422
     assert resp.json()["detail"]["errors"]
     thumb.assert_not_called()
+
+
+def test_render_chained_scene_uses_chained_render_path(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    chained = _chained_number_line_scene().model_copy(update={"status": "approved"})
+    _seed_scene(client, chained)
+
+    def fake_render(template, params, out):
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch(
+        "app.routes.render_chained_scene_to_mp4", side_effect=fake_render
+    ) as chained_render, patch("app.routes.render_scene_to_mp4") as solo_render:
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    clips = resp.json()["clips"]
+    assert clips[0]["candidate_ids"] == ["c1", "c2"]
+    assert clips[0]["clip_url"].startswith("/clips/")
+    chained_render.assert_called_once()
+    solo_render.assert_not_called()

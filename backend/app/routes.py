@@ -16,6 +16,7 @@ from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
     render_chained_scene_thumbnail,
+    render_chained_scene_to_mp4,
     render_scene_thumbnail,
     render_scene_to_mp4,
 )
@@ -72,6 +73,7 @@ class RenderPick(BaseModel):
 class ClipResult(BaseModel):
     scene_id: str
     candidate_id: str | None
+    candidate_ids: list[str] | None = None
     status: str
     clip_url: str | None = None
     fallback_reason: str | None = None
@@ -222,10 +224,15 @@ def render(session_id: str | None = Cookie(default=None)):
     for scene in approved:
         clip_url = None
         try:
-            _, params_cls = get_template(scene.template)
-            params = params_cls.model_validate(scene.params)
             output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
-            render_scene_to_mp4(scene.template, params, output_path)
+            if scene.candidate_ids:
+                _, params_cls = get_chained_template(scene.template)
+                params = params_cls.model_validate(scene.params)
+                render_chained_scene_to_mp4(scene.template, params, output_path)
+            else:
+                _, params_cls = get_template(scene.template)
+                params = params_cls.model_validate(scene.params)
+                render_scene_to_mp4(scene.template, params, output_path)
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
             status = "fallback" if scene.fallback_reason else "approved"
@@ -236,6 +243,7 @@ def render(session_id: str | None = Cookie(default=None)):
             ClipResult(
                 scene_id=scene.scene_id,
                 candidate_id=scene.candidate_id,
+                candidate_ids=scene.candidate_ids,
                 status=status,
                 clip_url=clip_url,
                 fallback_reason=scene.fallback_reason,
