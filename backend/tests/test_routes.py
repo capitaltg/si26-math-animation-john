@@ -646,3 +646,37 @@ def test_approve_unknown_scene_is_404():
     client = _client()
     _upload_candidate(client)
     assert client.post("/storyboard/nope/approve").status_code == 404
+
+
+def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"png")
+    chained = Scene(
+        scene_id="s1",
+        candidate_ids=["c1", "c2"],
+        template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"items": [
+            {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+            {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        ]},
+        status="pending_review",
+        thumbnail_path=thumb,
+    )
+    _seed_scene(client, chained)
+
+    resp = client.post("/storyboard/s1/approve")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidate_ids"] == ["c1", "c2"]
+    assert body["candidate_id"] is None
+    assert body["source_excerpt"] == (
+        "Sarah has 4 apples and buys 3 more. / Sarah has 4 apples and buys 3 more."
+    )
+    assert body["detected_summary"] == "Detected: 4 + 3 / Detected: 4 + 3"
+    assert body["params_schema"]["properties"]["items"]["type"] == "array"

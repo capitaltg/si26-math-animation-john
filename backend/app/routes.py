@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
+from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
@@ -15,7 +16,7 @@ from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.session import SessionStore
-from app.templates.registry import get_template
+from app.templates.registry import get_chained_template, get_template
 
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
@@ -79,6 +80,7 @@ class RenderResponse(BaseModel):
 class SceneOut(BaseModel):
     scene_id: str
     candidate_id: str | None
+    candidate_ids: list[str] | None = None
     template: str | None
     grade_level: int
     grade_overridden: bool
@@ -238,20 +240,28 @@ def get_clip(clip_id: str):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
-def _scene_out(scene: Scene, candidate) -> SceneOut:
+def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
     schema: dict = {}
     if scene.template is not None:
-        _, params_cls = get_template(scene.template)
+        if scene.candidate_ids:
+            _, params_cls = get_chained_template(scene.template)
+        else:
+            _, params_cls = get_template(scene.template)
         schema = params_cls.model_json_schema()
     thumbnail_url = None
     if scene.thumbnail_path is not None:
         thumb_id = store.register_thumbnail(scene.thumbnail_path)
         thumbnail_url = f"/thumbnails/{thumb_id}"
-    source_excerpt = candidate.source_excerpt if candidate else (scene.manual_source_text or "")
-    detected_summary = candidate.one_line_summary if candidate else ""
+    if candidates:
+        source_excerpt = " / ".join(c.source_excerpt for c in candidates)
+        detected_summary = " / ".join(c.one_line_summary for c in candidates)
+    else:
+        source_excerpt = scene.manual_source_text or ""
+        detected_summary = ""
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
+        candidate_ids=scene.candidate_ids,
         template=scene.template.value if scene.template else None,
         grade_level=scene.grade_level,
         grade_overridden=scene.grade_overridden,
@@ -272,6 +282,21 @@ def _lookup_candidate(session, scene: Scene):
     if candidate is None:
         raise HTTPException(status_code=404, detail="Candidate no longer available for this scene")
     return candidate
+
+
+def _lookup_candidates(session, scene: Scene) -> list[Candidate]:
+    if scene.candidate_ids:
+        candidates = []
+        for candidate_id in scene.candidate_ids:
+            candidate = session.candidates.get(candidate_id)
+            if candidate is None:
+                raise HTTPException(
+                    status_code=404, detail="Candidate no longer available for this scene"
+                )
+            candidates.append(candidate)
+        return candidates
+    candidate = _lookup_candidate(session, scene)
+    return [candidate] if candidate else []
 
 
 @router.post("/storyboard", response_model=StoryboardResponse)
@@ -321,7 +346,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scenes[scene.scene_id] = scene
         session.scene_order.append(scene.scene_id)
         session.scene_requested_template[scene.scene_id] = template
-        scenes_out.append(_scene_out(scene, candidate))
+        scenes_out.append(_scene_out(scene, [candidate]))
     return StoryboardResponse(scenes=scenes_out)
 
 
@@ -349,7 +374,7 @@ def edit_scene(
     scene = session.scenes.get(scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = _lookup_candidate(session, scene)
+    candidates = _lookup_candidates(session, scene)
     if scene.template is None:
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
 
@@ -391,7 +416,7 @@ def edit_scene(
         }
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, candidates)
 
 
 def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> SceneOut:
@@ -401,10 +426,10 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
     scene = session.scenes.get(scene_id)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = _lookup_candidate(session, scene)
+    candidates = _lookup_candidates(session, scene)
     updated = scene.model_copy(update={"status": status})
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
@@ -442,4 +467,4 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         update={"scene_id": scene_id, "grade_overridden": scene.grade_overridden}
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, [candidate])
