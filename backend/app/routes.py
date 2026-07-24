@@ -14,7 +14,11 @@ from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
-from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
+from app.render.full_render import (
+    render_chained_scene_thumbnail,
+    render_scene_thumbnail,
+    render_scene_to_mp4,
+)
 from app.session import SessionStore
 from app.templates.registry import get_chained_template, get_template
 
@@ -95,6 +99,10 @@ class SceneOut(BaseModel):
 
 class StoryboardRequest(BaseModel):
     picks: list[RenderPick] = Field(max_length=MAX_BATCH_SIZE)
+
+
+class ChainRequest(BaseModel):
+    scene_ids: list[str] = Field(min_length=2, max_length=4)
 
 
 class StoryboardResponse(BaseModel):
@@ -348,6 +356,66 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scene_requested_template[scene.scene_id] = template
         scenes_out.append(_scene_out(scene, [candidate]))
     return StoryboardResponse(scenes=scenes_out)
+
+
+@router.post("/storyboard/chain", response_model=SceneOut)
+def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+
+    if len(request.scene_ids) != len(set(request.scene_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate scene ids are not allowed")
+
+    scenes = []
+    for scene_id in request.scene_ids:
+        scene = session.scenes.get(scene_id)
+        if scene is None:
+            raise HTTPException(status_code=400, detail=f"Unknown scene {scene_id}")
+        if scene.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} must be pending_review to combine",
+            )
+        if not scene.candidate_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} cannot be combined into a chain",
+            )
+        scenes.append(scene)
+
+    template = scenes[0].template
+    if any(scene.template != template for scene in scenes):
+        raise HTTPException(status_code=400, detail="All combined scenes must share one template")
+
+    _, params_cls = get_template(template)
+    _, chained_params_cls = get_chained_template(template)
+    items = [params_cls.model_validate(scene.params) for scene in scenes]
+    chained_params = chained_params_cls(items=items)
+
+    thumb_path = session.output_dir / f"chain-{uuid4()}.png"
+    render_chained_scene_thumbnail(template, chained_params, thumb_path)
+
+    new_scene = Scene(
+        scene_id=str(uuid4()),
+        candidate_ids=[scene.candidate_id for scene in scenes],
+        template=template,
+        grade_level=scenes[0].grade_level,
+        grade_overridden=scenes[0].grade_overridden,
+        params=chained_params.model_dump(mode="json"),
+        status="pending_review",
+        thumbnail_path=thumb_path,
+    )
+
+    earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
+    for sid in request.scene_ids:
+        session.scene_order.remove(sid)
+    session.scene_order.insert(earliest_index, new_scene.scene_id)
+    session.scenes[new_scene.scene_id] = new_scene
+    session.scene_chain_members[new_scene.scene_id] = list(request.scene_ids)
+
+    candidates = _lookup_candidates(session, new_scene)
+    return _scene_out(new_scene, candidates)
 
 
 @router.get("/thumbnails/{thumb_id}")

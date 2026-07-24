@@ -680,3 +680,143 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
     )
     assert body["detected_summary"] == "Detected: 4 + 3 / Detected: 4 + 3"
     assert body["params_schema"]["properties"]["items"]["type"] == "array"
+
+
+def test_chain_combines_two_scenes_into_one(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    scene1 = Scene(
+        scene_id="s1", candidate_id="c1", template=TemplateName.NUMBER_LINE,
+        grade_level=1, params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        status="pending_review",
+    )
+    scene2 = Scene(
+        scene_id="s2", candidate_id="c2", template=TemplateName.NUMBER_LINE,
+        grade_level=1, params={"start": 5, "steps": [{"operation": "subtract", "amount": 1}]},
+        status="pending_review",
+    )
+    _seed_scene(client, scene1)
+    _seed_scene(client, scene2)
+
+    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+        resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candidate_ids"] == ["c1", "c2"]
+    assert body["status"] == "pending_review"
+    assert body["template"] == "number_line"
+    thumb.assert_called_once()
+
+    from app.routes import store
+    session = store.get(client.cookies.get("session_id"))
+    assert session.scene_order == [body["scene_id"]]
+    assert session.scene_chain_members[body["scene_id"]] == ["s1", "s2"]
+
+
+def test_chain_rejects_fewer_than_two_ids():
+    client = _client()
+    _upload_candidate(client)
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1"]})
+    assert resp.status_code == 422
+
+
+def test_chain_rejects_more_than_four_ids():
+    client = _client()
+    _upload_candidate(client)
+    resp = client.post(
+        "/storyboard/chain", json={"scene_ids": ["s1", "s2", "s3", "s4", "s5"]}
+    )
+    assert resp.status_code == 422
+
+
+def test_chain_rejects_duplicate_ids(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s1"]})
+    assert resp.status_code == 400
+    assert "duplicate" in resp.json()["detail"].lower()
+
+
+def test_chain_rejects_unknown_scene_id(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "does-not-exist"]})
+    assert resp.status_code == 400
+
+
+def test_chain_rejects_non_pending_review_scene(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    approved = _number_line_scene(tmp_path).model_copy(update={"status": "approved"})
+    pending = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "s2", "candidate_id": "c2"}
+    )
+    _seed_scene(client, approved)
+    _seed_scene(client, pending)
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+    assert resp.status_code == 400
+
+
+def test_chain_rejects_already_chained_scene(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    already_chained = Scene(
+        scene_id="s1", candidate_ids=["ca", "cb"], template=TemplateName.NUMBER_LINE,
+        grade_level=1,
+        params={"items": [
+            {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+            {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        ]},
+        status="pending_review",
+    )
+    pending = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "s2", "candidate_id": "c2"}
+    )
+    _seed_scene(client, already_chained)
+    _seed_scene(client, pending)
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+    assert resp.status_code == 400
+
+
+def test_chain_rejects_mismatched_templates(tmp_path):
+    from app.models.scene import Scene, TemplateName
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    number_line = _number_line_scene(tmp_path)
+    array_grid = Scene(
+        scene_id="s2", candidate_id="c2", template=TemplateName.ARRAY_GRID,
+        grade_level=1, params={"rows": 2, "cols": 3}, status="pending_review",
+    )
+    _seed_scene(client, number_line)
+    _seed_scene(client, array_grid)
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+    assert resp.status_code == 400
+
+
+def test_chain_splices_into_earliest_screen_position(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    c = _number_line_scene(tmp_path).model_copy(update={"scene_id": "c", "candidate_id": "c3"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+    _seed_scene(client, c)
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "c"]})
+
+    assert resp.status_code == 200
+    new_id = resp.json()["scene_id"]
+
+    from app.routes import store
+    session = store.get(client.cookies.get("session_id"))
+    assert session.scene_order == [new_id, "b"]
