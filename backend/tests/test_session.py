@@ -137,3 +137,11 @@ def test_thumbnail_registry_evicts_oldest_over_cap(tmp_path):
     store.register_thumbnail(tmp_path / "b.png")
     store.register_thumbnail(tmp_path / "c.png")
     assert store.get_thumbnail(first) is None
+
+
+def test_session_starts_with_empty_chain_members(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path)
+    session = store.create([])
+    assert session.scene_chain_members == {}
