@@ -843,3 +843,44 @@ def test_chain_splices_into_earliest_screen_position(tmp_path):
     from app.routes import store
     session = store.get(client.cookies.get("session_id"))
     assert session.scene_order == [new_id, "b"]
+
+
+def test_ungroup_restores_original_scenes_at_same_position(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    c = _number_line_scene(tmp_path).model_copy(update={"scene_id": "c", "candidate_id": "c3"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+    _seed_scene(client, c)
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "c"]})
+    new_id = chain_resp.json()["scene_id"]
+
+    resp = client.post(f"/storyboard/{new_id}/ungroup")
+
+    assert resp.status_code == 200
+    scenes = resp.json()["scenes"]
+    assert [s["scene_id"] for s in scenes] == ["a", "c"]
+    assert scenes[0]["candidate_id"] == "c1"
+    assert scenes[1]["candidate_id"] == "c3"
+
+    from app.routes import store
+    session = store.get(client.cookies.get("session_id"))
+    assert session.scene_order == ["a", "c", "b"]
+    assert new_id not in session.scenes
+    assert new_id not in session.scene_chain_members
+
+
+def test_ungroup_unknown_or_non_chain_scene_is_404(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    resp = client.post("/storyboard/s1/ungroup")
+    assert resp.status_code == 404
+
+    resp = client.post("/storyboard/nope/ungroup")
+    assert resp.status_code == 404

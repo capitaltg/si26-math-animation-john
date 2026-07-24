@@ -109,6 +109,10 @@ class StoryboardResponse(BaseModel):
     scenes: list[SceneOut]
 
 
+class UngroupResponse(BaseModel):
+    scenes: list[SceneOut]
+
+
 class SceneEditRequest(BaseModel):
     params: dict | None = None
     grade_level: int | None = None
@@ -423,6 +427,31 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
 
     candidates = _lookup_candidates(session, new_scene)
     return _scene_out(new_scene, candidates)
+
+
+@router.post("/storyboard/{scene_id}/ungroup", response_model=UngroupResponse)
+def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    members = session.scene_chain_members.get(scene_id)
+    if members is None:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} is not a combined scene")
+
+    index = session.scene_order.index(scene_id)
+    session.scene_order.pop(index)
+    for offset, member_id in enumerate(members):
+        session.scene_order.insert(index + offset, member_id)
+
+    del session.scenes[scene_id]
+    del session.scene_chain_members[scene_id]
+
+    restored = []
+    for member_id in members:
+        member_scene = session.scenes[member_id]
+        candidates = _lookup_candidates(session, member_scene)
+        restored.append(_scene_out(member_scene, candidates))
+    return UngroupResponse(scenes=restored)
 
 
 @router.get("/thumbnails/{thumb_id}")
