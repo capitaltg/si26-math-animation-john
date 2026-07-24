@@ -46,11 +46,35 @@ def build_ambiguous_phrasing_deck(path: Path) -> None:
     presentation.save(path)
 
 
+def build_chain_test_deck(path: Path) -> None:
+    """Three NUMBER_LINE-friendly problems on separate slides — upload this to test chaining."""
+    presentation, layout = _new_presentation()
+
+    slide1 = presentation.slides.add_slide(layout)
+    slide1.shapes.title.text = "Problem 1"
+    slide1.placeholders[1].text = (
+        "A frog is sitting on 3. It jumps forward 4 spaces. Where does it land?"
+    )
+
+    slide2 = presentation.slides.add_slide(layout)
+    slide2.shapes.title.text = "Problem 2"
+    slide2.placeholders[1].text = "Start at 7. Move back 5. What number are you on?"
+
+    slide3 = presentation.slides.add_slide(layout)
+    slide3.shapes.title.text = "Problem 3"
+    slide3.placeholders[1].text = (
+        "A snail starts at 2. It crawls forward 6. What number does it reach?"
+    )
+
+    presentation.save(path)
+
+
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     build_zero_candidate_deck(FIXTURES_DIR / "zero_candidate_deck.pptx")
     build_distractor_heavy_deck(FIXTURES_DIR / "distractor_heavy_deck.pptx")
     build_ambiguous_phrasing_deck(FIXTURES_DIR / "ambiguous_phrasing_deck.pptx")
+    build_chain_test_deck(FIXTURES_DIR / "chain_test_deck.pptx")
     print(f"Wrote fixtures to {FIXTURES_DIR}")
 
 
