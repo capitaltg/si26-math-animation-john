@@ -8,14 +8,20 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
+from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
-from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
+from app.render.full_render import (
+    render_chained_scene_thumbnail,
+    render_chained_scene_to_mp4,
+    render_scene_thumbnail,
+    render_scene_to_mp4,
+)
 from app.session import SessionStore
-from app.templates.registry import get_template
+from app.templates.registry import get_chained_template, get_template
 
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
@@ -67,6 +73,7 @@ class RenderPick(BaseModel):
 class ClipResult(BaseModel):
     scene_id: str
     candidate_id: str | None
+    candidate_ids: list[str] | None = None
     status: str
     clip_url: str | None = None
     fallback_reason: str | None = None
@@ -79,6 +86,7 @@ class RenderResponse(BaseModel):
 class SceneOut(BaseModel):
     scene_id: str
     candidate_id: str | None
+    candidate_ids: list[str] | None = None
     template: str | None
     grade_level: int
     grade_overridden: bool
@@ -95,7 +103,15 @@ class StoryboardRequest(BaseModel):
     picks: list[RenderPick] = Field(max_length=MAX_BATCH_SIZE)
 
 
+class ChainRequest(BaseModel):
+    scene_ids: list[str]
+
+
 class StoryboardResponse(BaseModel):
+    scenes: list[SceneOut]
+
+
+class UngroupResponse(BaseModel):
     scenes: list[SceneOut]
 
 
@@ -208,10 +224,15 @@ def render(session_id: str | None = Cookie(default=None)):
     for scene in approved:
         clip_url = None
         try:
-            _, params_cls = get_template(scene.template)
-            params = params_cls.model_validate(scene.params)
             output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
-            render_scene_to_mp4(scene.template, params, output_path)
+            if scene.candidate_ids:
+                _, params_cls = get_chained_template(scene.template)
+                params = params_cls.model_validate(scene.params)
+                render_chained_scene_to_mp4(scene.template, params, output_path)
+            else:
+                _, params_cls = get_template(scene.template)
+                params = params_cls.model_validate(scene.params)
+                render_scene_to_mp4(scene.template, params, output_path)
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
             status = "fallback" if scene.fallback_reason else "approved"
@@ -222,6 +243,7 @@ def render(session_id: str | None = Cookie(default=None)):
             ClipResult(
                 scene_id=scene.scene_id,
                 candidate_id=scene.candidate_id,
+                candidate_ids=scene.candidate_ids,
                 status=status,
                 clip_url=clip_url,
                 fallback_reason=scene.fallback_reason,
@@ -238,20 +260,28 @@ def get_clip(clip_id: str):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
-def _scene_out(scene: Scene, candidate) -> SceneOut:
+def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
     schema: dict = {}
     if scene.template is not None:
-        _, params_cls = get_template(scene.template)
+        if scene.candidate_ids:
+            _, params_cls = get_chained_template(scene.template)
+        else:
+            _, params_cls = get_template(scene.template)
         schema = params_cls.model_json_schema()
     thumbnail_url = None
     if scene.thumbnail_path is not None:
         thumb_id = store.register_thumbnail(scene.thumbnail_path)
         thumbnail_url = f"/thumbnails/{thumb_id}"
-    source_excerpt = candidate.source_excerpt if candidate else (scene.manual_source_text or "")
-    detected_summary = candidate.one_line_summary if candidate else ""
+    if candidates:
+        source_excerpt = " / ".join(c.source_excerpt for c in candidates)
+        detected_summary = " / ".join(c.one_line_summary for c in candidates)
+    else:
+        source_excerpt = scene.manual_source_text or ""
+        detected_summary = ""
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
+        candidate_ids=scene.candidate_ids,
         template=scene.template.value if scene.template else None,
         grade_level=scene.grade_level,
         grade_overridden=scene.grade_overridden,
@@ -272,6 +302,28 @@ def _lookup_candidate(session, scene: Scene):
     if candidate is None:
         raise HTTPException(status_code=404, detail="Candidate no longer available for this scene")
     return candidate
+
+
+def _lookup_candidates(session, scene: Scene) -> list[Candidate]:
+    if scene.candidate_ids:
+        candidates = []
+        for candidate_id in scene.candidate_ids:
+            candidate = session.candidates.get(candidate_id)
+            if candidate is None:
+                raise HTTPException(
+                    status_code=404, detail="Candidate no longer available for this scene"
+                )
+            candidates.append(candidate)
+        return candidates
+    candidate = _lookup_candidate(session, scene)
+    return [candidate] if candidate else []
+
+
+def _lookup_active_scene(session, scene_id: str) -> Scene:
+    scene = session.scenes.get(scene_id)
+    if scene is None or scene_id not in session.scene_order:
+        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    return scene
 
 
 @router.post("/storyboard", response_model=StoryboardResponse)
@@ -309,6 +361,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
     session.scenes.clear()
     session.scene_order.clear()
     session.scene_requested_template.clear()
+    session.scene_chain_members.clear()
 
     scenes_out: list[SceneOut] = []
     for candidate, classification, template in validated:
@@ -321,8 +374,115 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scenes[scene.scene_id] = scene
         session.scene_order.append(scene.scene_id)
         session.scene_requested_template[scene.scene_id] = template
-        scenes_out.append(_scene_out(scene, candidate))
+        scenes_out.append(_scene_out(scene, [candidate]))
     return StoryboardResponse(scenes=scenes_out)
+
+
+@router.post("/storyboard/chain", response_model=SceneOut)
+def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+
+    if not 2 <= len(request.scene_ids) <= 4:
+        raise HTTPException(
+            status_code=400,
+            detail="A chain must contain between 2 and 4 scenes",
+        )
+
+    if len(request.scene_ids) != len(set(request.scene_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate scene ids are not allowed")
+
+    scenes = []
+    for scene_id in request.scene_ids:
+        scene = session.scenes.get(scene_id)
+        if scene is None:
+            raise HTTPException(status_code=400, detail=f"Unknown scene {scene_id}")
+        if scene.status != "pending_review":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} must be pending_review to combine",
+            )
+        if not scene.candidate_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} cannot be combined into a chain",
+            )
+        if scene_id not in session.scene_order:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scene {scene_id} is no longer available for combining",
+            )
+        scenes.append(scene)
+
+    template = scenes[0].template
+    if any(scene.template != template for scene in scenes):
+        raise HTTPException(status_code=400, detail="All combined scenes must share one template")
+
+    try:
+        _, chained_params_cls = get_chained_template(template)
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Template {template.value} cannot be combined into a chain",
+        )
+
+    _, params_cls = get_template(template)
+    items = [params_cls.model_validate(scene.params) for scene in scenes]
+    chained_params = chained_params_cls(items=items)
+
+    thumb_path = session.output_dir / f"chain-{uuid4()}.png"
+    try:
+        render_chained_scene_thumbnail(template, chained_params, thumb_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
+
+    new_scene = Scene(
+        scene_id=str(uuid4()),
+        candidate_ids=[scene.candidate_id for scene in scenes],
+        template=template,
+        grade_level=scenes[0].grade_level,
+        grade_overridden=scenes[0].grade_overridden,
+        params=chained_params.model_dump(mode="json"),
+        status="pending_review",
+        thumbnail_path=thumb_path,
+    )
+
+    screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
+    earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
+    for sid in request.scene_ids:
+        session.scene_order.remove(sid)
+    session.scene_order.insert(earliest_index, new_scene.scene_id)
+    session.scenes[new_scene.scene_id] = new_scene
+    session.scene_chain_members[new_scene.scene_id] = screen_order_ids
+
+    candidates = _lookup_candidates(session, new_scene)
+    return _scene_out(new_scene, candidates)
+
+
+@router.post("/storyboard/{scene_id}/ungroup", response_model=UngroupResponse)
+def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    members = session.scene_chain_members.get(scene_id)
+    if members is None:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} is not a combined scene")
+
+    index = session.scene_order.index(scene_id)
+    session.scene_order.pop(index)
+    for offset, member_id in enumerate(members):
+        session.scene_order.insert(index + offset, member_id)
+
+    del session.scenes[scene_id]
+    del session.scene_chain_members[scene_id]
+
+    restored = []
+    for member_id in members:
+        member_scene = session.scenes[member_id]
+        candidates = _lookup_candidates(session, member_scene)
+        restored.append(_scene_out(member_scene, candidates))
+    return UngroupResponse(scenes=restored)
 
 
 @router.get("/thumbnails/{thumb_id}")
@@ -346,10 +506,8 @@ def edit_scene(
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = _lookup_candidate(session, scene)
+    scene = _lookup_active_scene(session, scene_id)
+    candidates = _lookup_candidates(session, scene)
     if scene.template is None:
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
 
@@ -366,14 +524,20 @@ def edit_scene(
     new_params = scene.params
     new_thumb = scene.thumbnail_path
     if request.params is not None:
-        _, params_cls = get_template(scene.template)
+        if scene.candidate_ids:
+            _, params_cls = get_chained_template(scene.template)
+        else:
+            _, params_cls = get_template(scene.template)
         try:
             params = params_cls.model_validate(request.params)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=_field_errors(exc))
         out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
         try:
-            render_scene_thumbnail(scene.template, params, out)
+            if scene.candidate_ids:
+                render_chained_scene_thumbnail(scene.template, params, out)
+            else:
+                render_scene_thumbnail(scene.template, params, out)
         except Exception as exc:
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")
@@ -391,20 +555,18 @@ def edit_scene(
         }
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, candidates)
 
 
 def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> SceneOut:
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
-    candidate = _lookup_candidate(session, scene)
+    scene = _lookup_active_scene(session, scene_id)
+    candidates = _lookup_candidates(session, scene)
     updated = scene.model_copy(update={"status": status})
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
@@ -422,9 +584,7 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    scene = session.scenes.get(scene_id)
-    if scene is None:
-        raise HTTPException(status_code=404, detail=f"Unknown scene {scene_id}")
+    scene = _lookup_active_scene(session, scene_id)
     candidate = _lookup_candidate(session, scene)
     if candidate is None:
         raise HTTPException(status_code=400, detail="This scene cannot be retried")
@@ -442,4 +602,4 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         update={"scene_id": scene_id, "grade_overridden": scene.grade_overridden}
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, candidate)
+    return _scene_out(updated, [candidate])

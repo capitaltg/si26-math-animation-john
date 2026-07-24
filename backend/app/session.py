@@ -22,6 +22,7 @@ class Session:
     scenes: dict[str, Scene] = field(default_factory=dict)
     scene_order: list[str] = field(default_factory=list)
     scene_requested_template: dict[str, TemplateName] = field(default_factory=dict)
+    scene_chain_members: dict[str, list[str]] = field(default_factory=dict)
 
 
 class SessionStore:

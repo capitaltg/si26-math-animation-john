@@ -28,6 +28,7 @@ export default function App() {
   const [storyboard, setStoryboard] = useState(null)
   const [drafts, setDrafts] = useState({})       // scene_id -> edited params
   const [fieldErrors, setFieldErrors] = useState({})  // scene_id -> [{loc,msg}]
+  const [chainSelected, setChainSelected] = useState({})  // scene_id -> bool, combine checkboxes
 
   async function handleUpload(event) {
     event.preventDefault()
@@ -41,6 +42,7 @@ export default function App() {
     setStoryboard(null)
     setDrafts({})
     setFieldErrors({})
+    setChainSelected({})
     const form = new FormData()
     form.append('file', file)
     try {
@@ -111,6 +113,7 @@ export default function App() {
       if (!resp.ok) throw new Error(responseError(data, 'Storyboard failed'))
       setStoryboard(data.scenes)
       setDrafts(Object.fromEntries(data.scenes.map((s) => [s.scene_id, s.params])))
+      setChainSelected({})
     } catch (err) {
       setError(err.message)
     } finally {
@@ -145,6 +148,9 @@ export default function App() {
       if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
       setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
       replaceScene(data, { resetDraft })
+      if (data.status !== 'pending_review' || data.candidate_ids) {
+        setChainSelected((prev) => ({ ...prev, [sceneId]: false }))
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -172,6 +178,102 @@ export default function App() {
   const retryScene = (id) => sceneAction(id, '/retry', { method: 'POST' }, { resetDraft: true })
   const approveScene = (id) => sceneAction(id, '/approve', { method: 'POST' })
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
+
+  function toggleChainSelect(sceneId) {
+    setChainSelected((previous) => ({ ...previous, [sceneId]: !previous[sceneId] }))
+  }
+
+  const checkedSceneIds = storyboard
+    ? storyboard.filter((s) => chainSelected[s.scene_id]).map((s) => s.scene_id)
+    : []
+  const checkedScenes = storyboard ? storyboard.filter((s) => chainSelected[s.scene_id]) : []
+  const canCombine =
+    checkedScenes.length >= 2 &&
+    checkedScenes.length <= 4 &&
+    checkedScenes.every(
+      (s) =>
+        s.status === 'pending_review' &&
+        !!s.candidate_id &&
+        !s.candidate_ids &&
+        !sceneIsDirty(s, drafts) &&
+        s.template === checkedScenes[0]?.template,
+    )
+
+  async function handleCombineScenes() {
+    if (!canCombine) return
+    setError(null)
+    setLoading(true)
+    try {
+      const resp = await fetch('/storyboard/chain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ scene_ids: checkedSceneIds }),
+      })
+      const data = await responseJson(resp, 'Could not combine scenes')
+      if (!resp.ok) throw new Error(responseError(data, 'Could not combine scenes'))
+      setStoryboard((prev) => {
+        const firstIndex = Math.min(
+          ...checkedSceneIds.map((id) => prev.findIndex((s) => s.scene_id === id)),
+        )
+        const next = prev.filter((s) => !checkedSceneIds.includes(s.scene_id))
+        next.splice(firstIndex, 0, data)
+        return next
+      })
+      setDrafts((prev) => {
+        const next = { ...prev }
+        for (const id of checkedSceneIds) delete next[id]
+        next[data.scene_id] = data.params
+        return next
+      })
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        for (const id of checkedSceneIds) delete next[id]
+        next[data.scene_id] = null
+        return next
+      })
+      setChainSelected({})
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleUngroupScene(sceneId) {
+    setError(null)
+    setLoading(true)
+    try {
+      const resp = await fetch(`/storyboard/${sceneId}/ungroup`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await responseJson(resp, 'Could not ungroup scene')
+      if (!resp.ok) throw new Error(responseError(data, 'Could not ungroup scene'))
+      setStoryboard((prev) => {
+        const index = prev.findIndex((s) => s.scene_id === sceneId)
+        const next = prev.filter((s) => s.scene_id !== sceneId)
+        next.splice(index, 0, ...data.scenes)
+        return next
+      })
+      setDrafts((prev) => {
+        const next = { ...prev }
+        delete next[sceneId]
+        for (const scene of data.scenes) next[scene.scene_id] = scene.params
+        return next
+      })
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next[sceneId]
+        for (const scene of data.scenes) next[scene.scene_id] = null
+        return next
+      })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function handleRender() {
     if (storyboard?.some((scene) => scene.status === 'approved' && sceneIsDirty(scene, drafts))) {
@@ -286,8 +388,20 @@ export default function App() {
       {storyboard && !results && (
         <section>
           <h2>Storyboard review</h2>
+
+          {canCombine && (
+            <div style={{ margin: '0.5rem 0' }}>
+              <button onClick={handleCombineScenes} disabled={loading}>
+                Combine {checkedScenes.length} into one scene
+              </button>
+            </div>
+          )}
+
           {storyboard.map((scene) => {
             const isDirty = sceneIsDirty(scene, drafts)
+            const isChain = !!scene.candidate_ids
+            const combinable =
+              scene.status === 'pending_review' && !!scene.candidate_id && !isChain
             return (
             <div
               key={scene.scene_id}
@@ -304,7 +418,24 @@ export default function App() {
                     : 'white',
               }}
             >
+              {combinable && (
+                <label style={{ display: 'block', marginBottom: '0.3rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!chainSelected[scene.scene_id]}
+                    disabled={loading}
+                    onChange={() => toggleChainSelect(scene.scene_id)}
+                  />
+                  {' '}Combine with other selected scenes
+                </label>
+              )}
+
               <strong>{scene.detected_summary}</strong>
+              {isChain && (
+                <span style={{ color: '#666', fontSize: '0.8rem' }}>
+                  {' '}(combined: {scene.candidate_ids.join(', ')})
+                </span>
+              )}
               <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                 {scene.source_excerpt}
               </div>
@@ -359,7 +490,13 @@ export default function App() {
 
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <button onClick={() => saveEdits(scene.scene_id)} disabled={loading}>Save edits</button>
-                <button onClick={() => retryScene(scene.scene_id)} disabled={loading}>Retry</button>
+                {isChain ? (
+                  <button onClick={() => handleUngroupScene(scene.scene_id)} disabled={loading}>
+                    Ungroup
+                  </button>
+                ) : (
+                  <button onClick={() => retryScene(scene.scene_id)} disabled={loading}>Retry</button>
+                )}
                 <button
                   onClick={() => approveScene(scene.scene_id)}
                   disabled={loading || isDirty}
@@ -396,32 +533,36 @@ export default function App() {
       {results && (
         <section>
           <h2>Results</h2>
-          {results.map((result) => (
-            <div key={result.scene_id || result.candidate_id} style={{ margin: '0.75rem 0' }}>
-              {result.status === 'error' ? (
-                <span style={{ color: 'crimson' }}>
-                  Render failed for {result.candidate_id || result.scene_id}
-                </span>
-              ) : result.clip_url ? (
-                <a href={result.clip_url} download>
-                  Download clip ({result.candidate_id || result.scene_id})
-                </a>
-              ) : (
-                <span>Clip {result.candidate_id || result.scene_id}</span>
-              )}
-              {result.status === 'fallback' && (
-                <div style={{ color: '#b45309', fontSize: '0.85rem' }}>
-                  Fallback: {result.fallback_reason}
-                </div>
-              )}
-            </div>
-          ))}
+          {results.map((result) => {
+            const ids = result.candidate_ids || [result.candidate_id || result.scene_id]
+            return (
+              <div key={result.scene_id || result.candidate_id} style={{ margin: '0.75rem 0' }}>
+                {result.status === 'error' ? (
+                  <span style={{ color: 'crimson' }}>
+                    Render failed for {ids.join(', ')}
+                  </span>
+                ) : result.clip_url ? (
+                  <a href={result.clip_url} download>
+                    Download clip ({ids.join(', ')})
+                  </a>
+                ) : (
+                  <span>Clip {ids.join(', ')}</span>
+                )}
+                {result.status === 'fallback' && (
+                  <div style={{ color: '#b45309', fontSize: '0.85rem' }}>
+                    Fallback: {result.fallback_reason}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           <button
             onClick={() => {
               setResults(null)
               setStoryboard(null)
               setDrafts({})
               setFieldErrors({})
+              setChainSelected({})
               setError(null)
             }}
           >

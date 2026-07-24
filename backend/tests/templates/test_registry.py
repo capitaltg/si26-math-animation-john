@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_get_template_returns_scene_and_params_classes():
     from app.models.scene import TemplateName
     from app.templates.registry import get_template
@@ -29,3 +32,23 @@ def test_get_template_returns_fraction_of_whole_scene_and_params():
 
     assert scene_cls is FractionOfWholeScene
     assert params_cls is FractionOfWholeParams
+
+
+def test_get_chained_template_returns_chained_pairs():
+    from app.models.scene import TemplateName
+    from app.templates.registry import get_chained_template
+    from app.templates.number_line.params import ChainedNumberLineParams
+    from app.templates.number_line.scene import ChainedNumberLineScene
+
+    scene_cls, params_cls = get_chained_template(TemplateName.NUMBER_LINE)
+
+    assert scene_cls is ChainedNumberLineScene
+    assert params_cls is ChainedNumberLineParams
+
+
+def test_get_chained_template_rejects_text_card():
+    from app.models.scene import TemplateName
+    from app.templates.registry import get_chained_template
+
+    with pytest.raises(KeyError):
+        get_chained_template(TemplateName.TEXT_CARD)

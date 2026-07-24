@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import App from './App'
@@ -49,6 +49,55 @@ const pendingScene = {
   detected_summary: candidate.one_line_summary,
 }
 
+const pendingScene2 = {
+  ...pendingScene,
+  scene_id: 's2',
+  candidate_id: 'c2',
+  source_excerpt: 'Nine minus two.',
+  detected_summary: 'Detected: 9 - 2',
+  params: {
+    start: 9,
+    steps: [{ operation: 'subtract', amount: 2 }],
+  },
+}
+
+const chainedScene = {
+  ...pendingScene,
+  scene_id: 'chain-1',
+  candidate_id: null,
+  candidate_ids: ['c1', 'c2'],
+  params: {
+    items: [pendingScene.params, pendingScene2.params],
+  },
+  params_schema: {
+    type: 'object',
+    properties: {
+      items: {
+        title: 'Items',
+        type: 'array',
+        minItems: 2,
+        maxItems: 4,
+        items: { $ref: '#/$defs/NumberLineParams' },
+      },
+    },
+    $defs: {
+      NumberLineParams: pendingScene.params_schema,
+      ...pendingScene.params_schema.$defs,
+    },
+  },
+  source_excerpt: `${pendingScene.source_excerpt} / ${pendingScene2.source_excerpt}`,
+  detected_summary: `${pendingScene.detected_summary} / ${pendingScene2.detected_summary}`,
+}
+
+const manualSourceScene = {
+  ...pendingScene2,
+  scene_id: 'manual-1',
+  candidate_id: null,
+  candidate_ids: null,
+  source_excerpt: 'A manually entered problem.',
+  detected_summary: '',
+}
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -57,7 +106,12 @@ function jsonResponse(body, status = 200) {
   }
 }
 
-function installFetchMock({ secondUpload = false, clipStatus = 'approved', patchStatus = 'ok' } = {}) {
+function installFetchMock({
+  secondUpload = false,
+  clipStatus = 'approved',
+  patchStatus = 'ok',
+  storyboardScenes = [pendingScene],
+} = {}) {
   let uploadCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/upload') {
@@ -88,7 +142,13 @@ function installFetchMock({ secondUpload = false, clipStatus = 'approved', patch
       })
     }
     if (url === '/storyboard') {
-      return jsonResponse({ scenes: [pendingScene] })
+      return jsonResponse({ scenes: storyboardScenes })
+    }
+    if (url === '/storyboard/chain' && init.method === 'POST') {
+      return jsonResponse(chainedScene)
+    }
+    if (url === '/storyboard/chain-1/ungroup' && init.method === 'POST') {
+      return jsonResponse({ scenes: [pendingScene, pendingScene2] })
     }
     if (url === '/storyboard/s1' && init.method === 'PATCH') {
       if (patchStatus === '422') {
@@ -170,6 +230,99 @@ it('blocks rendering when an approved scene has unsaved edits', async () => {
   fireEvent.change(screen.getByLabelText('Start:'), { target: { value: '5' } })
 
   expect(renderButton.disabled).toBe(true)
+})
+
+it('does not combine selected scenes while one has unsaved edits', async () => {
+  installFetchMock({ storyboardScenes: [pendingScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+  expect(screen.getByRole('button', { name: 'Combine 2 into one scene' })).not.toBeNull()
+
+  fireEvent.change(screen.getAllByLabelText('Start:')[0], { target: { value: '5' } })
+
+  expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
+})
+
+it('removes a selected scene from combine eligibility after approval', async () => {
+  installFetchMock({ storyboardScenes: [pendingScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+  fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0])
+
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
+  })
+})
+
+it('combines eligible scenes and ungroups them back into their original position', async () => {
+  const fetchMock = installFetchMock({
+    patchStatus: '422',
+    storyboardScenes: [pendingScene, manualSourceScene, pendingScene2],
+  })
+  await reachStoryboard()
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save edits' })[0])
+  await screen.findByText('start: must be non-negative')
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Combine 2 into one scene' }))
+
+  await screen.findByText(chainedScene.detected_summary)
+  const chainCall = fetchMock.mock.calls.find(([url]) => url === '/storyboard/chain')
+  expect(JSON.parse(chainCall[1].body)).toEqual({ scene_ids: ['s1', 's2'] })
+  expect(screen.queryByText(pendingScene.detected_summary)).toBeNull()
+  expect(screen.queryByText(pendingScene2.detected_summary)).toBeNull()
+  expect(screen.getByRole('button', { name: 'Ungroup' })).not.toBeNull()
+  expect(
+    within(screen.getByText(chainedScene.detected_summary).parentElement)
+      .queryByRole('button', { name: 'Retry' }),
+  ).toBeNull()
+  expect(screen.queryByText('start: must be non-negative')).toBeNull()
+  expect(
+    screen.getByText(chainedScene.detected_summary).compareDocumentPosition(
+      screen.getByText(manualSourceScene.source_excerpt),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Ungroup' }))
+
+  await screen.findByText(pendingScene.detected_summary)
+  expect(screen.getByText(pendingScene2.detected_summary)).not.toBeNull()
+  expect(
+    within(screen.getByText(pendingScene.detected_summary).parentElement)
+      .getByRole('button', { name: 'Retry' }),
+  ).not.toBeNull()
+  expect(
+    within(screen.getByText(pendingScene2.detected_summary).parentElement)
+      .getByRole('button', { name: 'Retry' }),
+  ).not.toBeNull()
+  expect(screen.queryByRole('button', { name: 'Ungroup' })).toBeNull()
+  expect(screen.queryByText('start: must be non-negative')).toBeNull()
+  expect(
+    screen.getByText(pendingScene2.detected_summary).compareDocumentPosition(
+      screen.getByText(manualSourceScene.source_excerpt),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/storyboard/chain-1/ungroup',
+    expect.objectContaining({ method: 'POST', credentials: 'include' }),
+  )
+})
+
+it('does not offer manual-source pending scenes for combining', async () => {
+  installFetchMock({ storyboardScenes: [pendingScene, manualSourceScene] })
+  await reachStoryboard()
+
+  expect(screen.getAllByLabelText('Combine with other selected scenes')).toHaveLength(1)
+  expect(screen.queryByRole('button', { name: /Combine 2 into one scene/ })).toBeNull()
 })
 
 it('clears the prior storyboard when a new deck is uploaded', async () => {

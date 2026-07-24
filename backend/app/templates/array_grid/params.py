@@ -11,3 +11,7 @@ class ArrayGridParams(BaseModel):
     def _check_guard(self):
         check_array_grid_compatibility(self)
         return self
+
+
+class ChainedArrayGridParams(BaseModel):
+    items: list[ArrayGridParams] = Field(min_length=2, max_length=4)
