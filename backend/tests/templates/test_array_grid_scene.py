@@ -1,4 +1,4 @@
-from manim import Text
+from manim import Text, VGroup
 
 from app.models.scene import TemplateName
 from app.render.full_render import render_scene_to_mp4
@@ -50,6 +50,53 @@ def test_multiplicative_chain_shows_running_total_and_operation_captions():
         "2 × 3 = 6",
         "12 ÷ 2 = 6",
     ]
+
+
+class _MobjectTrackingScene:
+    def __init__(self):
+        self.mobjects = []
+
+    def play(self, *animations):
+        for animation in animations:
+            mobject = getattr(animation, "mobject", None)
+            target = getattr(animation, "target_mobject", None)
+            is_replacement = getattr(animation, "replace_mobject_with_target_in_scene", False)
+            if mobject is not None and mobject not in self.mobjects:
+                self.mobjects.append(mobject)
+            if is_replacement and mobject is not None and target is not None:
+                self.mobjects.remove(mobject)
+                self.mobjects.append(target)
+            elif target is not None and mobject is None and target not in self.mobjects:
+                # introducer animations (Write/FadeIn/Create) expose their content via .mobject; this branch is a safety net only
+                self.mobjects.append(target)
+
+    def wait(self, _duration):
+        pass
+
+
+def test_no_ghosted_mobjects_survive_a_three_step_chain():
+    params = ArrayGridParams(
+        rows=1,
+        cols=3,
+        steps=[
+            ArrayGridStep(operation="multiply", factor=4),
+            ArrayGridStep(operation="divide", factor=2),
+            ArrayGridStep(operation="multiply", factor=5),
+        ],
+    )
+    scene = _MobjectTrackingScene()
+
+    draw_array_grid(scene, params)
+
+    surviving_grids = [mobject for mobject in scene.mobjects if isinstance(mobject, VGroup)]
+    surviving_texts = [mobject for mobject in scene.mobjects if isinstance(mobject, Text)]
+
+    assert len(surviving_grids) == 1
+    assert len(surviving_texts) == 2
+    assert {text.original_text for text in surviving_texts} == {
+        "6 × 5 = 30",  # the final operation caption
+        "10 × 3 = 30",  # the final running-total label
+    }
 
 
 def test_array_grid_chain_renders_to_mp4(tmp_path):

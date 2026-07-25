@@ -39,7 +39,7 @@ def draw_fraction_bar(scene, params):
     for step, value in zip(params.steps, values[1:]):
         new_label = Text(f"{value}/{denominator}").scale(0.6).next_to(cells, UP)
         new_caption = build_fraction_caption(current, step.operation, step.numerator, value, denominator)
-        caption_animation = Write(new_caption) if caption is None else Transform(caption, new_caption)
+        caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
 
         if value > current:
             scene.play(

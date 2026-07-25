@@ -58,11 +58,11 @@ def draw_array_grid(scene, params):
         new_label = build_grid_total_label(new_rows, cols, total)
         new_label.next_to(new_dots, UP)
         new_caption = build_operation_caption(current_total, step.operation, step.factor, total)
-        caption_animation = Write(new_caption) if caption is None else Transform(caption, new_caption)
+        caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
 
         scene.play(
-            Transform(dots, new_dots),
-            Transform(label, new_label),
+            ReplacementTransform(dots, new_dots),
+            ReplacementTransform(label, new_label),
             caption_animation,
         )
         dots, label, caption = new_dots, new_label, new_caption

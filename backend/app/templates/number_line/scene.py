@@ -53,7 +53,7 @@ def _animate_number_line_steps(scene, params):
         if scene.op_caption is None:
             scene.play(*transforms, Write(new_caption))
         else:
-            transforms.append(Transform(scene.op_caption, new_caption))
+            transforms.append(ReplacementTransform(scene.op_caption, new_caption))
             scene.play(*transforms)
         scene.op_caption = new_caption
         running = new_value
