@@ -25,7 +25,10 @@ def test_run_multiplicative_chain_rejects_non_exact_division():
 
 
 def test_run_multiplicative_chain_rejects_zero_divisor():
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError,
+        match=r"^Division by zero: 10 / 0 is not a whole number$",
+    ):
         run_multiplicative_chain(10, [("divide", 0)])
 
 

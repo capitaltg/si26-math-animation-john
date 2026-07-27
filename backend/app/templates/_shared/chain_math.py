@@ -21,7 +21,9 @@ def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[int
             running = running * factor
         else:
             if factor == 0:
-                raise ValueError("Division by zero")
+                raise ValueError(
+                    f"Division by zero: {running} / {factor} is not a whole number"
+                )
             if running % factor != 0:
                 raise ValueError(
                     f"Non-exact division: {running} / {factor} is not a whole number"

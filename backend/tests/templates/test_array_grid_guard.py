@@ -59,9 +59,8 @@ def test_non_positive_factor_is_rejected():
 def test_valid_multiplicative_chain_passes():
     from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
 
-    # rows*cols=6, ×2 -> 12 (4 rows), ÷4 -> 3 (1 row) — every intermediate
-    # total stays divisible by the fixed cols=3, unlike ÷3 here which would
-    # leave a total (4) that doesn't divide evenly by cols.
+    # rows*cols=6, ×2 -> 12, ÷4 -> 3 — each state has a deterministic
+    # renderable factor pair within the per-axis bound.
     params = ArrayGridParams(
         rows=2,
         cols=3,
@@ -98,6 +97,16 @@ def test_chain_intermediate_exceeding_axis_bound_is_rejected():
     with pytest.raises(ValidationError):
         ArrayGridParams(
             rows=2, cols=2, steps=[ArrayGridStep(operation="multiply", factor=50)]
+        )
+
+
+def test_chain_intermediate_without_bounded_factor_pair_is_rejected():
+    from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
+
+    with pytest.raises(ValidationError, match="no renderable factor pair"):
+        ArrayGridParams(
+            start=1,
+            steps=[ArrayGridStep(operation="multiply", factor=13)],
         )
 
 
