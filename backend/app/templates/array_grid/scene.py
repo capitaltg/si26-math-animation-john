@@ -32,7 +32,9 @@ def build_operation_caption(a, operation, b, result):
 def draw_array_grid(scene, params):
     if not params.steps:
         dots = build_grid_dots(params.rows, params.cols)
-        label = Text(f"{params.rows} x {params.cols}").to_edge(UP)
+        label = Text(f"{params.rows} x {params.cols}")
+        fit_width(label)
+        label.to_edge(UP, buff=FRAME_MARGIN)
 
         scene.play(Write(label))
         scene.play(LaggedStart(*[FadeIn(d) for d in dots], lag_ratio=0.02))

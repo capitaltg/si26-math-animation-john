@@ -1,5 +1,7 @@
 from manim import *
 
+from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
+
 
 def draw_balance_scale(scene, params):
     left_a, left_b = params.left_terms
@@ -10,14 +12,20 @@ def draw_balance_scale(scene, params):
     left_pan = Circle(radius=0.5, color=BLUE).move_to(beam.get_left() + DOWN * 1.2)
     right_pan = Circle(radius=0.5, color=BLUE).move_to(beam.get_right() + DOWN * 1.2)
 
-    left_label = Text(f"{left_a} + {left_b}").scale(0.6).move_to(left_pan)
-    right_label = Text(f"{right}").scale(0.6).move_to(right_pan)
+    left_label = Text(f"{left_a} + {left_b}").scale(0.6)
+    fit_width(left_label, max_width=left_pan.width)
+    left_label.move_to(left_pan)
+    right_label = Text(f"{right}").scale(0.6)
+    fit_width(right_label, max_width=right_pan.width)
+    right_label.move_to(right_pan)
 
     scene.play(Create(beam), Create(fulcrum))
     scene.play(Create(left_pan), Create(right_pan))
     scene.play(Write(left_label), Write(right_label))
 
-    equation = Text(f"{left_a} + {left_b} = {right}").scale(0.8).to_edge(DOWN)
+    equation = Text(f"{left_a} + {left_b} = {right}").scale(0.8)
+    fit_width(equation)
+    equation.to_edge(DOWN, buff=FRAME_MARGIN)
     scene.play(Write(equation))
     scene.wait(1)
 
