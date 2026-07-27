@@ -1,12 +1,15 @@
+from app.templates._shared.chain_math import run_multiplicative_chain
+from app.templates.array_grid.layout import grid_dimensions
+
+
 def check_array_grid_compatibility(params) -> None:
-    if params.rows <= 0 or params.cols <= 0:
-        raise ValueError("Array grid rows and cols must be positive")
-    if params.rows > 12 or params.cols > 12:
-        raise ValueError(
-            f"Array grid axis too long to fit the frame ({params.rows}x{params.cols}; "
-            "max 12 per axis)"
-        )
-    if params.rows * params.cols > 144:
-        raise ValueError(
-            f"Array grid too large to render clearly ({params.rows}x{params.cols} > 144 cells)"
-        )
+    if not params.steps:
+        grid_dimensions(params.starting_total())
+        return
+
+    totals = run_multiplicative_chain(
+        params.starting_total(),
+        [(step.operation, step.factor) for step in params.steps],
+    )
+    for total in totals:
+        grid_dimensions(total)

@@ -144,3 +144,21 @@ def test_fraction_bar_override_emits_fraction_strings():
     )
 
     assert check_params_grounded(params, "3/6 + 1/6 + 2/6 = ?") == []
+
+
+def test_array_grid_chain_grounds_start_and_factors_without_dimensions():
+    from app.pipeline.grounding import check_params_grounded
+    from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
+
+    params = ArrayGridParams(
+        start=24,
+        steps=[
+            ArrayGridStep(operation="divide", factor=3),
+            ArrayGridStep(operation="multiply", factor=2),
+        ],
+    )
+
+    assert check_params_grounded(
+        params,
+        "Start with 24 counters, divide by 3, then multiply by 2.",
+    ) == []

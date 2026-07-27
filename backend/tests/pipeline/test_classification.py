@@ -169,6 +169,13 @@ def test_classification_prompt_requests_every_compatible_template_ranked(mock_ca
     assert "single operation" in system_prompt.lower()
 
 
+def test_array_grid_contract_requires_each_chain_state_to_fit_a_grid():
+    from app.pipeline.classification import _TEMPLATE_CONTRACTS
+
+    assert "source-stated starting total" in _TEMPLATE_CONTRACTS
+    assert "renderable grid" in _TEMPLATE_CONTRACTS
+
+
 @patch("app.pipeline.classification.call_with_tool")
 def test_classification_prompt_excludes_static_plots_from_number_line(mock_call):
     from app.pipeline.classification import classify_candidate

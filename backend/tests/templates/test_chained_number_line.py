@@ -196,6 +196,9 @@ def test_continuation_greys_completed_arrows_and_tracks_new_arrows(monkeypatch):
         def shift_onto_screen(self, *, buff):
             return self
 
+        def to_edge(self, _direction, buff=None):
+            return self
+
     completed_arrow = FakeArrow()
     new_arrow = FakeArrow()
     marker = object()
@@ -208,6 +211,7 @@ def test_continuation_greys_completed_arrows_and_tracks_new_arrows(monkeypatch):
         label=label,
         running_value=7,
         current_problem_arrows=[completed_arrow],
+        op_caption=None,
         play=lambda *animations: plays.append(animations),
         wait=lambda _duration: None,
     )
@@ -232,6 +236,11 @@ def test_continuation_greys_completed_arrows_and_tracks_new_arrows(monkeypatch):
         number_line_scene_module,
         "Transform",
         lambda source, target: ("transform", source, target),
+    )
+    monkeypatch.setattr(
+        number_line_scene_module,
+        "Write",
+        lambda mobject: ("write", mobject),
     )
 
     continue_number_line(scene, params)
