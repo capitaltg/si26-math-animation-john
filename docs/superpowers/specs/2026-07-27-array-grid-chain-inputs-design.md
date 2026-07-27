@@ -117,4 +117,3 @@ Regression coverage will be added before production changes:
 - Static `{rows, cols}` behavior and labels remain unchanged.
 - Existing caption, ghost-mobject, render-smoke, extraction, and grounding
   tests continue to pass.
-
