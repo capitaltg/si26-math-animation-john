@@ -16,6 +16,10 @@ def text_status_active():
     return text("status IN ('queued', 'running')")
 
 
+def text_tag_current():
+    return text("is_current = 1")
+
+
 class FallbackObservation(Base):
     __tablename__ = "fallback_observations"
     __table_args__ = (
@@ -38,8 +42,13 @@ class FallbackObservation(Base):
 class FingerprintTag(Base):
     __tablename__ = "fingerprint_tags"
     __table_args__ = (
-        UniqueConstraint("observation_id", "fingerprint_version", name="uq_tag_observation_version"),
         Index("ix_fingerprint_tags_key", "fingerprint_key"),
+        Index(
+            "uq_current_tag_per_observation",
+            "observation_id",
+            unique=True,
+            sqlite_where=text_tag_current(),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

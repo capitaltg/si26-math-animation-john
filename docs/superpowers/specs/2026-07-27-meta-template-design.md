@@ -112,7 +112,7 @@ hash and relative key, never an arbitrary filesystem path.
 | Table | Purpose and required fields |
 |---|---|
 | `fallback_observations` | Append-only structural fallback log, one immutable row per `(candidate_id, observation_kind)`: `id`, `candidate_id`, `source_excerpt`, `grade_level`, `observation_kind`, nullable reviewer-supplied `expected_result_json`, `excluded` (bool, default false), nullable `excluded_reason`, nullable `excluded_by`, nullable `excluded_at`, `created_at`. Fingerprint tagging lives in `fingerprint_tags`, not here, so retagging never mutates or duplicates this row. |
-| `fingerprint_tags` | Versioned tag history, append-only: `id`, `observation_id` (FK), `fingerprint_version`, structured `fingerprint_json`, canonical `fingerprint_key`, `tagger_model_id`, `tagger_prompt_version`, `is_current` (bool), `created_at`. Retagging (new model/prompt/schema version) inserts a new row per observation and flips `is_current`; it never edits a prior tag. Unique on `(observation_id, fingerprint_version)`. Clustering and threshold counts join on `is_current = true` and `fallback_observations.excluded = false`. |
+| `fingerprint_tags` | Versioned tag history, append-only: `id`, `observation_id` (FK), `fingerprint_version`, structured `fingerprint_json`, canonical `fingerprint_key`, `tagger_model_id`, `tagger_prompt_version`, `is_current` (bool), `created_at`. Retagging (new model/prompt/schema version) inserts a new row per observation and flips `is_current`; it never edits a prior tag. A partial unique index permits at most one `is_current = true` row per observation while allowing multiple tag revisions under the same fingerprint schema version. Clustering and threshold counts join on `is_current = true` and `fallback_observations.excluded = false`. |
 | `generation_jobs` | Durable job state: fingerprint identity, triggering observation IDs, `status` (`queued`, `running`, `succeeded`, `failed`, `needs_manual_authoring`), `attempt`, lease owner/expiry, cooldown deadline, error summary, timestamps. A partial unique index permits at most one `queued` or `running` job per fingerprint. |
 | `template_drafts` | One immutable proposal per revision: fingerprint identity, version number, params schema, guard spec, animation spec, classifier bullet, `artifact_hash`, validation report, status, parent draft, reviewer feedback, timestamps. Proposal content is never updated in place. |
 | `template_reviews` | Append-only human decisions and fixture annotations: draft ID, decision, reviewer label, mathematical-semantics confirmation, feedback, timestamp. |
@@ -176,12 +176,13 @@ canonical key. The tagger is still probabilistic and can misclassify a shape; th
 spec claims only that serialization and matching are deterministic, not that
 semantic tagging is infallible.
 
-Each tagging pass writes one row to `fingerprint_tags`, recording the model ID,
-prompt version, and fingerprint schema version used. Changing any of those does
-not silently regroup old observations: an explicit offline retag migration adds
-a new `fingerprint_tags` row per observation under the new version and flips
-`is_current`, rather than mutating the original tag. `fallback_observations`
-itself never changes shape or duplicates — only its tag history grows.
+Each successful tagging pass writes one row to `fingerprint_tags`, recording the
+model ID, prompt version, and fingerprint schema version used. Changing any of
+those does not silently regroup old observations: an explicit offline retag
+migration adds a new `fingerprint_tags` row per observation and flips
+`is_current`, even when the closed fingerprint schema version did not change.
+`fallback_observations` itself never changes shape or duplicates — only its tag
+history grows.
 Reviewers can mark an observation `excluded` (with a reason) when it was
 tagged incorrectly; v1 does not provide fuzzy merge/split operations.
 
@@ -337,12 +338,18 @@ most five refinement rounds before the job becomes `needs_manual_authoring`.
 
 ### 7. Idempotent job triggering
 
-Observation insertion and threshold evaluation occur in one transaction:
+Observation ingestion, tagging, and threshold evaluation use separate durability
+boundaries so network calls never hold SQLite's single-writer lock:
 
-1. Insert the observation with its idempotency key, or return the existing row.
-2. Count eligible observations for the canonical fingerprint.
-3. Do nothing when an enabled version or active job already exists.
-4. When the threshold is met, insert one `queued` job under the partial unique
+1. Insert and commit the observation with its idempotency key, or load the
+   existing row.
+2. If it has no current tag, call Bedrock outside a database transaction with
+   bounded backoff, then insert and commit the immutable tag revision.
+3. In a new transaction, count eligible observations for the canonical
+   fingerprint.
+4. Do nothing when an enabled version, successful job, active job, or exhausted
+   manual-authoring job already exists.
+5. When the threshold is met, insert one `queued` job under the partial unique
    fingerprint constraint.
 
 A separate worker claims jobs using a lease. Expired leases can be reclaimed.

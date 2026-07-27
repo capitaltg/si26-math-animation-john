@@ -382,6 +382,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
             classification=classification,
             picked_template=template,
             scene_status=scene.status,
+            failure_kind=scene.failure_kind,
         )
     return StoryboardResponse(scenes=scenes_out)
 

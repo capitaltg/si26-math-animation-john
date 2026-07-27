@@ -27,6 +27,7 @@ class Scene(BaseModel):
     stated_answer: Fraction | None = None
     status: Literal["pending_review", "approved", "rejected", "fallback"] = "pending_review"
     fallback_reason: str | None = None
+    failure_kind: Literal["render_failure"] | None = None
     thumbnail_path: Path | None = None
     render_path: Path | None = None
 

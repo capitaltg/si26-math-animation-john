@@ -11,13 +11,17 @@ class TextCardReason(str, Enum):
     MANUAL_SELECTION = "manual_selection"
     AMBIGUOUS_OR_NON_PROBLEM = "ambiguous_or_non_problem"
     TECHNICAL_FAILURE = "technical_failure"
+    RENDER_FAILURE = "render_failure"
 
 
 def classify_text_card_reason(
     classification: ClassificationResult,
     picked_template: TemplateName,
     scene_status: str,
+    failure_kind: str | None = None,
 ) -> TextCardReason | None:
+    if failure_kind == "render_failure":
+        return TextCardReason.RENDER_FAILURE
     # A mismatch/technical fallback surfaces as status="fallback"; it is never a
     # structural gap in the template catalogue.
     if scene_status == "fallback":

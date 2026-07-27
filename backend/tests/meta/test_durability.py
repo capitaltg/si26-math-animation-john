@@ -124,5 +124,8 @@ def test_failure_cooldown_prevents_retry_storm(engine):
             backoff_base_seconds=60, max_attempts=5, now=t0,
         )
         s.flush()
-        # Immediately after failing, the job is in cooldown and cannot be reclaimed.
+        # Failed rows are terminal and cannot reclaim themselves.
         assert jobs.claim_next_job(s, owner="w1", lease_seconds=300, now=t0) is None
+        assert jobs.claim_next_job(
+            s, owner="w1", lease_seconds=300, now=t0.replace(hour=13)
+        ) is None

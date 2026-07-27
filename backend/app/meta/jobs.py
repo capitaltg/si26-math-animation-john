@@ -66,6 +66,15 @@ def has_enabled_version(session: Session, fingerprint_key: str) -> bool:
     return False
 
 
+def latest_job(session: Session, fingerprint_key: str) -> GenerationJob | None:
+    return session.execute(
+        select(GenerationJob)
+        .where(GenerationJob.fingerprint_key == fingerprint_key)
+        .order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def evaluate_and_enqueue(
     session: Session,
     *,
@@ -76,6 +85,7 @@ def evaluate_and_enqueue(
     threshold: int,
     new_id: str,
     now: datetime,
+    max_attempts: int = 5,
 ) -> GenerationJob | None:
     if has_enabled_version(session, fingerprint_key):
         return None
@@ -84,6 +94,21 @@ def evaluate_and_enqueue(
     if count_eligible_observations(session, fingerprint_key) < threshold:
         return None
 
+    prior_job = latest_job(session, fingerprint_key)
+    attempt = 0
+    if prior_job is not None:
+        if prior_job.status in (JOB_SUCCEEDED, JOB_NEEDS_MANUAL):
+            return None
+        if prior_job.status == JOB_FAILED:
+            if prior_job.attempt >= max_attempts:
+                return None
+            if prior_job.cooldown_until is not None and prior_job.cooldown_until > now:
+                return None
+            prior_ids = set(json.loads(prior_job.trigger_observation_ids))
+            if not set(trigger_observation_ids) - prior_ids:
+                return None
+            attempt = prior_job.attempt
+
     job = GenerationJob(
         id=new_id,
         fingerprint_key=fingerprint_key,
@@ -91,7 +116,7 @@ def evaluate_and_enqueue(
         fingerprint_json=fingerprint_json,
         trigger_observation_ids=json.dumps(trigger_observation_ids),
         status=JOB_QUEUED,
-        attempt=0,
+        attempt=attempt,
         created_at=now,
         updated_at=now,
     )
@@ -181,7 +206,7 @@ def fail_job(
         new_status = JOB_NEEDS_MANUAL
         cooldown = None
     else:
-        new_status = JOB_QUEUED
+        new_status = JOB_FAILED
         cooldown = now + timedelta(seconds=backoff_base_seconds * (2 ** (next_attempt - 1)))
 
     result = session.execute(

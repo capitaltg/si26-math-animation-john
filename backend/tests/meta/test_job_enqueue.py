@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,16 +19,16 @@ def _now():
     return datetime(2026, 7, 27, tzinfo=timezone.utc)
 
 
-def _seed_cluster(session, key, n, excluded_last=False):
+def _seed_cluster(session, key, n, excluded_last=False, start=0):
     ids = []
-    for i in range(n):
+    for i in range(start, start + n):
         obs = models.FallbackObservation(
             id=f"obs-{key}-{i}",
             candidate_id=f"cand-{key}-{i}",
             source_excerpt="x",
             grade_level=3,
             observation_kind="unsupported_shape",
-            excluded=(excluded_last and i == n - 1),
+            excluded=(excluded_last and i == start + n - 1),
             created_at=_now(),
         )
         tag = models.FingerprintTag(
@@ -99,3 +99,96 @@ def test_second_enqueue_is_noop_when_active_job_exists(session):
     assert first is not None
     assert second is None
     assert session.query(models.GenerationJob).count() == 1
+
+
+def test_failed_job_requires_new_observation_and_expired_cooldown(session):
+    original_ids = _seed_cluster(session, "k1", 5)
+    failed_at = _now()
+    session.add(
+        models.GenerationJob(
+            id="failed-job",
+            fingerprint_key="k1",
+            fingerprint_version=1,
+            fingerprint_json="{}",
+            trigger_observation_ids=json.dumps(original_ids),
+            status=models.JOB_FAILED,
+            attempt=1,
+            cooldown_until=failed_at + timedelta(seconds=60),
+            created_at=failed_at,
+            updated_at=failed_at,
+        )
+    )
+    session.flush()
+
+    no_new_observation = jobs.evaluate_and_enqueue(
+        session,
+        fingerprint_key="k1",
+        fingerprint_version=1,
+        fingerprint_json="{}",
+        trigger_observation_ids=original_ids,
+        threshold=5,
+        new_id="retry-too-early",
+        now=failed_at + timedelta(seconds=120),
+    )
+    assert no_new_observation is None
+
+    extra_ids = _seed_cluster(session, "k1", 1, start=5)
+    all_ids = [*original_ids, *extra_ids]
+    still_in_cooldown = jobs.evaluate_and_enqueue(
+        session,
+        fingerprint_key="k1",
+        fingerprint_version=1,
+        fingerprint_json="{}",
+        trigger_observation_ids=all_ids,
+        threshold=5,
+        new_id="retry-in-cooldown",
+        now=failed_at + timedelta(seconds=30),
+    )
+    assert still_in_cooldown is None
+
+    retry = jobs.evaluate_and_enqueue(
+        session,
+        fingerprint_key="k1",
+        fingerprint_version=1,
+        fingerprint_json="{}",
+        trigger_observation_ids=all_ids,
+        threshold=5,
+        new_id="retry-job",
+        now=failed_at + timedelta(seconds=60),
+    )
+    assert retry is not None
+    assert retry.status == models.JOB_QUEUED
+    assert retry.attempt == 1
+
+
+def test_succeeded_job_does_not_retrigger(session):
+    ids = _seed_cluster(session, "k1", 5)
+    session.add(
+        models.GenerationJob(
+            id="completed-job",
+            fingerprint_key="k1",
+            fingerprint_version=1,
+            fingerprint_json="{}",
+            trigger_observation_ids=json.dumps(ids),
+            status=models.JOB_SUCCEEDED,
+            attempt=0,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+    )
+    session.flush()
+    new_ids = [*ids, *_seed_cluster(session, "k1", 1, start=5)]
+
+    assert (
+        jobs.evaluate_and_enqueue(
+            session,
+            fingerprint_key="k1",
+            fingerprint_version=1,
+            fingerprint_json="{}",
+            trigger_observation_ids=new_ids,
+            threshold=5,
+            new_id="unexpected-job",
+            now=_now() + timedelta(seconds=60),
+        )
+        is None
+    )

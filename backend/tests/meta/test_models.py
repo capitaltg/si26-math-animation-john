@@ -40,6 +40,33 @@ def test_observation_unique_on_candidate_and_kind(session):
         session.flush()
 
 
+def test_partial_unique_allows_one_current_tag_per_observation(session):
+    observation = models.FallbackObservation(
+        id="obs-current",
+        candidate_id="cand-current",
+        source_excerpt="2/5 + 1/5",
+        grade_level=3,
+        observation_kind="unsupported_shape",
+        created_at=_now(),
+    )
+    session.add(observation)
+    session.flush()
+    common = dict(
+        observation_id=observation.id,
+        fingerprint_json="{}",
+        fingerprint_key="k1",
+        tagger_model_id="m",
+        tagger_prompt_version="v1",
+        is_current=True,
+        created_at=_now(),
+    )
+    session.add(models.FingerprintTag(id="t1", fingerprint_version=1, **common))
+    session.add(models.FingerprintTag(id="t2", fingerprint_version=2, **common))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
 def test_partial_unique_allows_one_active_job(session):
     common = dict(
         fingerprint_key="k1",

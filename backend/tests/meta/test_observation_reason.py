@@ -45,6 +45,19 @@ def test_fallback_status_is_technical_failure():
     )
 
 
+def test_render_failure_is_not_an_unsupported_shape():
+    c = _classification(options=[TemplateName.TEXT_CARD])
+    assert (
+        classify_text_card_reason(
+            c,
+            TemplateName.TEXT_CARD,
+            "pending_review",
+            failure_kind="render_failure",
+        )
+        is TextCardReason.RENDER_FAILURE
+    )
+
+
 def test_non_text_card_pick_returns_none():
     c = _classification(options=[TemplateName.ARRAY_GRID, TemplateName.TEXT_CARD])
     assert classify_text_card_reason(c, TemplateName.ARRAY_GRID, "pending_review") is None

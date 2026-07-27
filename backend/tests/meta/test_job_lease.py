@@ -77,7 +77,7 @@ def test_complete_requires_owner(session):
     assert session.get(models.GenerationJob, "job-1").status == models.JOB_SUCCEEDED
 
 
-def test_fail_backs_off_then_gives_up(session):
+def test_fail_becomes_terminal_with_cooldown(session):
     _queued(session)
     jobs.claim_next_job(session, owner="w1", lease_seconds=300, now=_t(0))
     session.flush()
@@ -86,10 +86,11 @@ def test_fail_backs_off_then_gives_up(session):
         backoff_base_seconds=60, max_attempts=3, now=_t(1),
     )
     job = session.get(models.GenerationJob, "job-1")
-    assert job.status == models.JOB_QUEUED
+    assert job.status == models.JOB_FAILED
     assert job.attempt == 1
     assert job.cooldown_until == _t(1) + timedelta(seconds=60)  # 60 * 2**0
     assert job.lease_owner is None
+    assert jobs.claim_next_job(session, owner="w2", lease_seconds=300, now=_t(10)) is None
 
 
 def test_fail_reaches_manual_authoring(session):

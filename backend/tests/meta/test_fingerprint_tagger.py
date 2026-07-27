@@ -39,7 +39,7 @@ def test_tag_candidate_validates_bedrock_output(monkeypatch):
     assert captured["tools"][0]["schema"] == fingerprint.FINGERPRINT_TOOL_SCHEMA
 
 
-def test_store_tag_flips_previous_current(session):
+def test_store_tag_allows_same_schema_version_retag(session):
     now = datetime(2026, 7, 27, tzinfo=timezone.utc)
     # Create the observation first
     session.add(
@@ -53,19 +53,14 @@ def test_store_tag_flips_previous_current(session):
         )
     )
     session.flush()
-    # Seed a prior "current" tag directly at the ORM layer (bypassing store_tag
-    # and the Fingerprint model, whose fingerprint_version is Literal[1] in
-    # Phase 1) so it carries a *different* fingerprint_version than the new
-    # tag store_tag is about to insert. This avoids uq_tag_observation_version
-    # while still exercising the real flip: store_tag's UPDATE flips every
-    # is_current=True row for the observation, regardless of that row's version.
+    # Prompt/model revisions can retag under the same fingerprint schema version.
     session.add(
         models.FingerprintTag(
             id="tag-old",
             observation_id="obs-1",
-            fingerprint_version=0,
-            fingerprint_json="{}",
-            fingerprint_key="stale-key",
+            fingerprint_version=1,
+            fingerprint_json=_fp().model_dump_json(),
+            fingerprint_key=fingerprint.canonical_fingerprint_key(_fp()),
             tagger_model_id="m0",
             tagger_prompt_version="v0",
             is_current=True,
@@ -90,3 +85,4 @@ def test_store_tag_flips_previous_current(session):
     assert len(tags) == 2  # append-only: the prior row is retained, not deleted
     assert len(current) == 1
     assert current[0].id == "tag-new"
+    assert tags[0].fingerprint_version == tags[1].fingerprint_version == 1

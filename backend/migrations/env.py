@@ -1,14 +1,24 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import URL, engine_from_config, pool
 
+from app.config import get_settings
 from app.meta.db import Base
 from app.meta import models  # noqa: F401  (register tables on Base.metadata)
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+db_path = Path(get_settings().meta_db_path)
+db_path.parent.mkdir(parents=True, exist_ok=True)
+database_url = URL.create("sqlite", database=str(db_path)).render_as_string(
+    hide_password=False
+)
+# ConfigParser treats percent signs as interpolation markers.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
