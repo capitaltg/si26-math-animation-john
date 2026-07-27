@@ -111,7 +111,8 @@ hash and relative key, never an arbitrary filesystem path.
 
 | Table | Purpose and required fields |
 |---|---|
-| `fallback_observations` | Append-only structural fallback log: `id`, `candidate_id`, `source_excerpt`, `grade_level`, `observation_kind`, `fingerprint_version`, structured `fingerprint_json`, canonical `fingerprint_key`, nullable reviewer-supplied `expected_result_json`, `tagger_model_id`, `tagger_prompt_version`, `created_at`. |
+| `fallback_observations` | Append-only structural fallback log, one immutable row per `(candidate_id, observation_kind)`: `id`, `candidate_id`, `source_excerpt`, `grade_level`, `observation_kind`, nullable reviewer-supplied `expected_result_json`, `excluded` (bool, default false), nullable `excluded_reason`, nullable `excluded_by`, nullable `excluded_at`, `created_at`. Fingerprint tagging lives in `fingerprint_tags`, not here, so retagging never mutates or duplicates this row. |
+| `fingerprint_tags` | Versioned tag history, append-only: `id`, `observation_id` (FK), `fingerprint_version`, structured `fingerprint_json`, canonical `fingerprint_key`, `tagger_model_id`, `tagger_prompt_version`, `is_current` (bool), `created_at`. Retagging (new model/prompt/schema version) inserts a new row per observation and flips `is_current`; it never edits a prior tag. Unique on `(observation_id, fingerprint_version)`. Clustering and threshold counts join on `is_current = true` and `fallback_observations.excluded = false`. |
 | `generation_jobs` | Durable job state: fingerprint identity, triggering observation IDs, `status` (`queued`, `running`, `succeeded`, `failed`, `needs_manual_authoring`), `attempt`, lease owner/expiry, cooldown deadline, error summary, timestamps. A partial unique index permits at most one `queued` or `running` job per fingerprint. |
 | `template_drafts` | One immutable proposal per revision: fingerprint identity, version number, params schema, guard spec, animation spec, classifier bullet, `artifact_hash`, validation report, status, parent draft, reviewer feedback, timestamps. Proposal content is never updated in place. |
 | `template_reviews` | Append-only human decisions and fixture annotations: draft ID, decision, reviewer label, mathematical-semantics confirmation, feedback, timestamp. |
@@ -120,10 +121,15 @@ hash and relative key, never an arbitrary filesystem path.
 
 Database rows and artifact files have explicit retention:
 
-- Observations and review records are retained.
-- Rejected/superseded draft media may be garbage-collected after 30 days.
-- An artifact referenced by a draft, approved version, validation report, or
-  pinned scene cannot be deleted.
+- Observations and review records are retained indefinitely as rows; a row is
+  never deleted, only marked `excluded`.
+- An artifact is protected from deletion while it backs an approved
+  `template_versions` row, a draft in `pending_review` or `validating`, or is
+  referenced by a pinned scene.
+- Rejected, `failed_validation`, and superseded draft artifacts are not
+  protected once none of the above holds, so their media may be
+  garbage-collected after 30 days. The draft row itself is retained for audit
+  history; its media path is marked purged rather than the row being deleted.
 - Startup reconciliation flags missing/corrupt artifacts and disables affected
   versions rather than silently regenerating them.
 
@@ -170,11 +176,21 @@ canonical key. The tagger is still probabilistic and can misclassify a shape; th
 spec claims only that serialization and matching are deterministic, not that
 semantic tagging is infallible.
 
-Every observation records the model ID, prompt version, and fingerprint schema
-version. Changing any of those does not silently regroup old observations.
-Instead, an explicit offline retag migration creates new versioned tags. Reviewers
-can mark an incorrectly tagged observation as excluded; v1 does not provide fuzzy
-merge/split operations.
+Each tagging pass writes one row to `fingerprint_tags`, recording the model ID,
+prompt version, and fingerprint schema version used. Changing any of those does
+not silently regroup old observations: an explicit offline retag migration adds
+a new `fingerprint_tags` row per observation under the new version and flips
+`is_current`, rather than mutating the original tag. `fallback_observations`
+itself never changes shape or duplicates — only its tag history grows.
+Reviewers can mark an observation `excluded` (with a reason) when it was
+tagged incorrectly; v1 does not provide fuzzy merge/split operations.
+
+The six fingerprint dimensions are deliberately fine-grained, which trades
+recall for precision: many distinct exact-match keys means a given cluster may
+take longer to reach threshold, but avoids grouping structurally different
+problems under one proposed template. This is an accepted v1 tradeoff; if
+thresholds prove too slow to reach in practice, widen a dimension (e.g. bucket
+`step_count` into ranges) rather than switching to fuzzy matching.
 
 ### 4. Declarative template contract
 
@@ -229,10 +245,20 @@ it never evaluates strings as code.
 
 The animation DSL is a bounded tree of reviewed primitives:
 
-- layout: row, column, overlay, align, padding;
-- math visuals: number line, grid, bar, set of objects, shape partition, label;
-- animation: appear, highlight, transform between declared nodes, wait;
+- layout: row, column, overlay, align, padding, sequence (timed
+  one-after-another), parallel (timed together);
+- math visuals: number line, grid, bar, set of objects, shape partition,
+  arrow/connector, brace, tally marks, label;
+- animation: appear, highlight, transform between declared nodes,
+  move-along-path, camera focus within fixed bounds, wait;
 - style tokens chosen from a fixed theme palette.
+
+This list is deliberately not exhaustive on day one — it is the actual lever
+for "good animation" coverage without ever executing generated code. Adding a
+primitive is a normal human-authored, reviewed code change (a new case in
+`DynamicTemplateScene` plus a DSL schema version bump), the same trust
+boundary as adding a seventh hand-written template today. Bedrock only ever
+composes existing reviewed primitives; it can never introduce a new one.
 
 Each node references params or the closed expression DSL. The DSL cannot express
 imports, Python names, arbitrary file paths, URLs, shell commands, environment
@@ -250,7 +276,13 @@ Bedrock may propose a params schema, predicates, and examples, but AI-proposed
 expected answers never count as verified fixtures.
 
 Before a draft can enter `pending_review`, its fingerprint cluster must have at
-least the configured threshold of real observations. Before it can be approved:
+least the configured threshold of real observations. This threshold and the
+minimum fixture count below are the same configured constant (default 5,
+`FINGERPRINT_OBSERVATION_THRESHOLD` in `app/config.py`) — a cluster large
+enough to trigger generation is by construction large enough to supply its
+minimum fixtures. If the cluster grows past the threshold before review
+completes, the reviewer chooses which observations to confirm. Before a draft
+can be approved:
 
 1. A reviewer supplies or confirms `expected_result_json` for at least five
    representative real observations, including every example shown in the
@@ -337,24 +369,36 @@ state, preview, and final render:
 ```
 
 Static templates use a versioned static reference derived from their contract
-version; dynamic templates use `template_versions.id`.
+version: each static template module defines a hand-bumped `CONTRACT_VERSION:
+int` constant, incremented whenever a human changes that template's
+`guard.py`/`scene.py`/`params.py`. Its static ref is
+`static:<template_name>:<contract_version>`, with `artifact_hash` computed once
+at process startup as the SHA-256 of that template's own source files.
+Dynamic templates use `template_versions.id` and its stored `artifact_hash`.
 
-The migration covers every template-bearing boundary:
-
-- `Scene.template`;
-- `TemplateOption.template`;
-- `ClassificationResult` tool schemas;
-- `RenderPick`;
-- session requested-template mappings;
-- registry lookup functions;
-- render function signatures and worker arguments;
-- API request/response models and frontend option state.
+Only `Scene.template` needs the full `TemplateRef` triple (`{name, version_id,
+artifact_hash}`) — it is the one place identity must survive a session, a
+republish, or a revocation, so a previously-previewed scene keeps rendering
+the exact version it was pinned to, with the hash available to detect
+artifact drift or corruption. Upstream of scene creation —
+`TemplateOption.template`, `ClassificationResult` tool schemas, `RenderPick`,
+and session requested-template mappings — only need `{name, version_id}`:
+enough to pin which immutable version was live at classification time,
+without carrying a hash through short-lived, in-memory state. Frontend option
+state only needs the name for display; it never needs a version_id or hash.
+Registry lookup functions and render function/worker arguments accept
+whichever of these three shapes the caller holds and resolve to the full
+`TemplateRef` (verifying `artifact_hash`) at render time — a caller lacking a
+precomputed hash may pass just `{name, version_id}`, and `get_template` looks
+up and verifies the stored hash itself. A plain unvalidated string from
+Bedrock is still never used directly as a registry key.
 
 At classification time, the server loads one enabled-template snapshot and
 builds the Bedrock tool schema with a closed enum containing static names plus
-that snapshot's dynamic names. Each returned option is resolved to the snapshot's
-immutable version before it leaves classification. A plain unvalidated string
-from Bedrock is never used as a registry key.
+that snapshot's dynamic names. Each returned option is resolved to the
+snapshot's `version_id` before it leaves classification, giving every
+downstream consumer a stable `{name, version_id}` pin even before a `Scene`
+exists.
 
 `get_template(ref)` checks the artifact hash, loads the exact immutable version,
 and returns `DynamicTemplateScene` plus the cached params class and compiled DSL.
