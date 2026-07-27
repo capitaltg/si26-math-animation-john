@@ -41,7 +41,7 @@ def canonical_fingerprint_key(fp: Fingerprint) -> str:
 
 from datetime import datetime
 
-from sqlalchemy import delete, update
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -78,13 +78,6 @@ def store_tag(
         update(FingerprintTag)
         .where(FingerprintTag.observation_id == observation_id, FingerprintTag.is_current.is_(True))
         .values(is_current=False)
-    )
-    # Delete any existing tag with the same fingerprint_version to enforce unique constraint
-    session.execute(
-        delete(FingerprintTag).where(
-            FingerprintTag.observation_id == observation_id,
-            FingerprintTag.fingerprint_version == fingerprint.fingerprint_version,
-        )
     )
     tag = FingerprintTag(
         id=new_id,

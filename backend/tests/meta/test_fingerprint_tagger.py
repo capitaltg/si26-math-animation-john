@@ -53,30 +53,40 @@ def test_store_tag_flips_previous_current(session):
         )
     )
     session.flush()
+    # Seed a prior "current" tag directly at the ORM layer (bypassing store_tag
+    # and the Fingerprint model, whose fingerprint_version is Literal[1] in
+    # Phase 1) so it carries a *different* fingerprint_version than the new
+    # tag store_tag is about to insert. This avoids uq_tag_observation_version
+    # while still exercising the real flip: store_tag's UPDATE flips every
+    # is_current=True row for the observation, regardless of that row's version.
+    session.add(
+        models.FingerprintTag(
+            id="tag-old",
+            observation_id="obs-1",
+            fingerprint_version=0,
+            fingerprint_json="{}",
+            fingerprint_key="stale-key",
+            tagger_model_id="m0",
+            tagger_prompt_version="v0",
+            is_current=True,
+            created_at=now,
+        )
+    )
+    session.flush()
+
     fingerprint.store_tag(
         session,
         observation_id="obs-1",
         fingerprint=_fp(),
         tagger_model_id="m1",
         tagger_prompt_version="v1",
-        new_id="tag-1",
+        new_id="tag-new",
         created_at=now,
     )
     session.flush()
-    fingerprint.store_tag(
-        session,
-        observation_id="obs-1",
-        fingerprint=_fp(),
-        tagger_model_id="m2",
-        tagger_prompt_version="v2",
-        new_id="tag-2",
-        created_at=now,
-    )
-    session.flush()
+
     tags = session.query(models.FingerprintTag).order_by(models.FingerprintTag.id).all()
-    # store_tag uses fingerprint_version from the fingerprint; two rows with the same
-    # version would violate uq_tag_observation_version, so this test uses is_current
-    # semantics on distinct ids and asserts only one stays current.
     current = [t for t in tags if t.is_current]
+    assert len(tags) == 2  # append-only: the prior row is retained, not deleted
     assert len(current) == 1
-    assert current[0].id == "tag-2"
+    assert current[0].id == "tag-new"
