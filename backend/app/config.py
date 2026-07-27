@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     aws_session_token: str | None = None
     session_cookie_secure: bool = False
 
+    # meta-template system (Phase 1) — all disabled by default
+    meta_templates_enabled: bool = False
+    meta_codegen_enabled: bool = False
+    meta_db_path: Path = BACKEND_ROOT / "var" / "meta.db"
+    fingerprint_observation_threshold: int = 5
+    fingerprint_tagger_prompt_version: str = "v1"
+    job_lease_seconds: int = 300
+    job_backoff_base_seconds: int = 60
+    job_max_attempts: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:
