@@ -1,9 +1,10 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, event, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.meta.models import (
     JOB_QUEUED,
@@ -13,6 +14,28 @@ from app.meta.models import (
     GenerationJob,
 )
 from app.meta.models import JOB_FAILED, JOB_NEEDS_MANUAL, JOB_SUCCEEDED  # noqa: F401
+
+_NAIVE_UTC_COLUMNS = ("lease_expires_at", "cooldown_until")
+
+
+@event.listens_for(GenerationJob, "load")
+def _reattach_utc_on_load(job: GenerationJob, _context) -> None:
+    """Normalize naive datetimes read back from SQLite to UTC-aware.
+
+    SQLite has no native timezone storage: SQLAlchemy's sqlite dialect always
+    hands back naive datetimes on read, regardless of the timezone=True flag
+    on the column. That breaks equality comparisons against tz-aware values
+    (jobs.py constructs and compares leases/cooldowns using aware UTC
+    datetimes throughout). This ORM-level "load" hook re-attaches UTC tzinfo
+    immediately after a row is populated, so every read of GenerationJob is
+    aware end to end without needing a custom column type in models.py.
+    Uses set_committed_value so this normalization never marks the object
+    dirty (it's not a real change relative to what the DB just returned).
+    """
+    for col in _NAIVE_UTC_COLUMNS:
+        value = job.__dict__.get(col)
+        if value is not None and value.tzinfo is None:
+            set_committed_value(job, col, value.replace(tzinfo=timezone.utc))
 
 
 def count_eligible_observations(session: Session, fingerprint_key: str) -> int:
@@ -115,11 +138,15 @@ def claim_next_job(
             lease_expires_at=lease_expires,
             updated_at=now,
         )
+        .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
         return None  # lost the race; caller may retry
-    session.expire(candidate)
-    return session.get(GenerationJob, candidate.id)
+    candidate.status = JOB_RUNNING
+    candidate.lease_owner = owner
+    candidate.lease_expires_at = lease_expires
+    candidate.updated_at = now
+    return candidate
 
 
 def complete_job(session: Session, *, job_id: str, owner: str, now: datetime) -> bool:
