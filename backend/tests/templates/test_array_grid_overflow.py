@@ -1,4 +1,4 @@
-from manim import config
+from manim import config, tempconfig
 
 from app.templates._shared.fit_to_frame import FRAME_MARGIN
 from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
@@ -20,21 +20,26 @@ class _StubScene:
         pass
 
 
-def _assert_within_safe_width(mobject):
+def _assert_within_safe_frame(mobject):
     safe_left = -config.frame_width / 2 + FRAME_MARGIN
     safe_right = config.frame_width / 2 - FRAME_MARGIN
+    safe_bottom = -config.frame_height / 2 + FRAME_MARGIN
+    safe_top = config.frame_height / 2 - FRAME_MARGIN
     assert mobject.get_left()[0] >= safe_left
     assert mobject.get_right()[0] <= safe_right
+    assert mobject.get_bottom()[1] >= safe_bottom
+    assert mobject.get_top()[1] <= safe_top
 
 
 def test_static_grid_at_max_dimensions_label_fits_within_frame():
     params = ArrayGridParams(rows=12, cols=12)
     scene = _StubScene()
 
-    draw_array_grid(scene, params)
+    with tempconfig({"frame_width": 2.0}):
+        draw_array_grid(scene, params)
 
-    assert scene.labels[0].original_text == "12 x 12"
-    _assert_within_safe_width(scene.labels[0])
+        assert scene.labels[0].original_text == "12 x 12"
+        _assert_within_safe_frame(scene.labels[0])
 
 
 def test_chain_at_max_total_labels_fit_within_frame():
@@ -50,4 +55,4 @@ def test_chain_at_max_total_labels_fit_within_frame():
     draw_array_grid(scene, params)
 
     for label in scene.labels:
-        _assert_within_safe_width(label)
+        _assert_within_safe_frame(label)

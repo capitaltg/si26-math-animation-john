@@ -1,4 +1,4 @@
-from manim import Text, config
+from manim import Text, config, tempconfig
 
 from app.templates._shared.fit_to_frame import FRAME_MARGIN
 from app.templates.fraction_of_whole.params import FractionOfWholeParams
@@ -24,10 +24,11 @@ def test_label_fits_within_frame_at_max_denominator():
     params = FractionOfWholeParams(numerator=11, denominator=12)
     scene = _StubScene()
 
-    draw_fraction_of_whole(scene, params)
+    with tempconfig({"frame_width": 1.5}):
+        draw_fraction_of_whole(scene, params)
 
-    safe_left = -config.frame_width / 2 + FRAME_MARGIN
-    safe_right = config.frame_width / 2 - FRAME_MARGIN
-    assert len(scene.labels) == 1
-    assert scene.labels[0].get_left()[0] >= safe_left
-    assert scene.labels[0].get_right()[0] <= safe_right
+        safe_left = -config.frame_width / 2 + FRAME_MARGIN
+        safe_right = config.frame_width / 2 - FRAME_MARGIN
+        assert len(scene.labels) == 1
+        assert scene.labels[0].get_left()[0] >= safe_left
+        assert scene.labels[0].get_right()[0] <= safe_right

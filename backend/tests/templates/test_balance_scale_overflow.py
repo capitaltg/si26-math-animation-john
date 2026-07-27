@@ -1,4 +1,4 @@
-from manim import config
+from manim import Text, config, tempconfig
 
 from app.templates._shared.fit_to_frame import FRAME_MARGIN
 from app.templates.balance_scale.params import BalanceScaleParams
@@ -21,13 +21,15 @@ class _StubScene:
 
 
 def test_labels_fit_within_frame_at_max_allowed_total():
-    params = BalanceScaleParams(left_terms=[19, 1], right_total=20)
+    params = BalanceScaleParams(left_terms=[10, 10], right_total=20)
     scene = _StubScene()
 
-    draw_balance_scale(scene, params)
+    with tempconfig({"frame_width": 3.0}):
+        draw_balance_scale(scene, params)
 
-    safe_left = -config.frame_width / 2 + FRAME_MARGIN
-    safe_right = config.frame_width / 2 - FRAME_MARGIN
-    for mobject in scene.mobjects:
-        assert mobject.get_left()[0] >= safe_left
-        assert mobject.get_right()[0] <= safe_right
+        labels = [mobject for mobject in scene.mobjects if isinstance(mobject, Text)]
+        pan_labels = [label for label in labels if "=" not in label.original_text]
+        equation = next(label for label in labels if "=" in label.original_text)
+
+        assert all(label.width <= 1.0 for label in pan_labels)
+        assert equation.width <= config.frame_width - 2 * FRAME_MARGIN

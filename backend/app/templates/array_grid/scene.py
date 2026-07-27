@@ -1,7 +1,7 @@
 from manim import *
 
 from app.templates._shared.chain_math import format_operation_caption, run_multiplicative_chain
-from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
+from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_to_frame, fit_width
 from app.templates.array_grid.layout import grid_dimensions
 
 
@@ -29,6 +29,18 @@ def build_operation_caption(a, operation, b, result):
     return caption
 
 
+def fit_grid_with_label(dots, label):
+    group = VGroup(dots, label)
+    fit_to_frame(group)
+
+    safe_top = config.frame_height / 2 - FRAME_MARGIN
+    safe_bottom = -config.frame_height / 2 + FRAME_MARGIN
+    if group.get_top()[1] > safe_top:
+        group.shift(DOWN * (group.get_top()[1] - safe_top))
+    elif group.get_bottom()[1] < safe_bottom:
+        group.shift(UP * (safe_bottom - group.get_bottom()[1]))
+
+
 def draw_array_grid(scene, params):
     if not params.steps:
         dots = build_grid_dots(params.rows, params.cols)
@@ -50,6 +62,7 @@ def draw_array_grid(scene, params):
     dots = build_grid_dots(rows, cols)
     label = build_grid_total_label(rows, cols, totals[0])
     label.next_to(dots, UP)
+    fit_grid_with_label(dots, label)
     scene.play(Write(label))
     scene.play(LaggedStart(*[FadeIn(d) for d in dots], lag_ratio=0.02))
 
@@ -61,6 +74,7 @@ def draw_array_grid(scene, params):
         new_dots.move_to(dots.get_center())
         new_label = build_grid_total_label(new_rows, new_cols, total)
         new_label.next_to(new_dots, UP)
+        fit_grid_with_label(new_dots, new_label)
         new_caption = build_operation_caption(current_total, step.operation, step.factor, total)
         caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
 

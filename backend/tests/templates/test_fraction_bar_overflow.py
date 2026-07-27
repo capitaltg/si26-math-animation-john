@@ -1,4 +1,4 @@
-from manim import Text, config
+from manim import Text, config, tempconfig
 
 from app.templates._shared.fit_to_frame import FRAME_MARGIN
 from app.templates.fraction_bar.params import FractionBarParams, FractionStep
@@ -31,11 +31,12 @@ def test_running_total_labels_fit_within_frame_at_max_renderable_units():
     )
     scene = _StubScene()
 
-    draw_fraction_bar(scene, params)
+    with tempconfig({"frame_width": 1.2}):
+        draw_fraction_bar(scene, params)
 
-    safe_left = -config.frame_width / 2 + FRAME_MARGIN
-    safe_right = config.frame_width / 2 - FRAME_MARGIN
-    assert len(scene.labels) > 0
-    for label in scene.labels:
-        assert label.get_left()[0] >= safe_left
-        assert label.get_right()[0] <= safe_right
+        safe_left = -config.frame_width / 2 + FRAME_MARGIN
+        safe_right = config.frame_width / 2 - FRAME_MARGIN
+        assert len(scene.labels) > 0
+        for label in scene.labels:
+            assert label.get_left()[0] >= safe_left - 1e-9
+            assert label.get_right()[0] <= safe_right + 1e-9
