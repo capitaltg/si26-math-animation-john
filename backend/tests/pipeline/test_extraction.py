@@ -192,6 +192,30 @@ def test_extract_accepts_grounded_fraction_bar(mock_call):
     assert params.denominator == 6
 
 
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_accepts_generic_grounded_array_grid_chain(mock_call):
+    from app.pipeline.extraction import extract_params
+    from app.templates.array_grid.params import ArrayGridParams
+
+    mock_call.return_value = (
+        "report_params",
+        {
+            "start": 24,
+            "steps": [
+                {"operation": "divide", "factor": 3},
+                {"operation": "multiply", "factor": 2},
+            ],
+        },
+    )
+
+    params = extract_params(
+        "Start with 24 counters, divide by 3, then multiply by 2.",
+        ArrayGridParams,
+    )
+
+    assert params.starting_total() == 24
+
+
 @patch("app.pipeline.bedrock_client.get_bedrock_client")
 @patch("app.pipeline.bedrock_client.get_settings")
 def test_call_with_tool_offers_all_tools_and_returns_fired_name(mock_settings, mock_get_client):
