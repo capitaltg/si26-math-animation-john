@@ -300,6 +300,47 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
 
 
+def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
+    # meta_templates_enabled defaults to False, so the storyboard route must behave
+    # exactly as before — record_unsupported_shape returns immediately. We
+    # monkeypatch it here only to observe that the wiring calls it; the real
+    # flag-off short-circuit is covered separately in tests/meta/test_ingest.py.
+    from app.models.scene import Scene, TemplateName
+
+    calls = []
+    import app.routes as routes
+
+    monkeypatch.setattr(routes, "record_unsupported_shape", lambda **kw: calls.append(kw))
+
+    client = _client()
+    _upload_candidate(client)
+    _options_then(client)
+
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"png")
+    fake = Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateName.TEXT_CARD,
+        grade_level=1,
+        params={"headline": "x", "lines": ["y"]},
+        status="pending_review",
+        thumbnail_path=thumb,
+    )
+
+    with patch("app.routes.assemble_scene", return_value=fake):
+        resp = client.post(
+            "/storyboard",
+            json={"picks": [{"candidate_id": "c1", "template": "text_card"}]},
+        )
+
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["candidate_id"] == "c1"
+    assert calls[0]["picked_template"] == TemplateName.TEXT_CARD
+    assert calls[0]["scene_status"] == "pending_review"
+
+
 def test_thumbnail_endpoint_serves_png(tmp_path):
     from app.routes import store
 

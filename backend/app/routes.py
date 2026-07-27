@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
+from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
 from app.models.scene import Scene, TemplateName
 from app.pipeline.classification import classify_candidate
@@ -375,6 +376,13 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scene_order.append(scene.scene_id)
         session.scene_requested_template[scene.scene_id] = template
         scenes_out.append(_scene_out(scene, [candidate]))
+        record_unsupported_shape(
+            candidate_id=candidate.candidate_id,
+            source_excerpt=candidate.source_excerpt,
+            classification=classification,
+            picked_template=template,
+            scene_status=scene.status,
+        )
     return StoryboardResponse(scenes=scenes_out)
 
 
