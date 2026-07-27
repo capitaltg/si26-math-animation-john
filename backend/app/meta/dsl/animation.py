@@ -1,9 +1,17 @@
+from dataclasses import dataclass
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.meta.dsl.expression import ExpressionNode
-from app.meta.dsl.limits import MAX_LABEL_TEXT_LENGTH
+from app.meta.dsl.errors import DslValidationError
+from app.meta.dsl.expression import ExpressionNode, compile_expression
+from app.meta.dsl.limits import (
+    MAX_ANIMATION_DEPTH,
+    MAX_ANIMATION_NODES,
+    MAX_ANIMATION_STEPS,
+    MAX_LABEL_TEXT_LENGTH,
+    MAX_TOTAL_DURATION_SECONDS,
+)
 
 StyleToken = Literal["primary", "secondary", "accent", "muted", "success", "warning"]
 
@@ -164,3 +172,83 @@ class AnimationDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
     animation_version: Literal[1] = 1
     root: AnimationNode
+
+
+_CONTAINER_KINDS = {"row", "column", "overlay", "sequence", "parallel"}
+_SINGLE_CHILD_KINDS = {"align", "padding"}
+_VISUAL_EXPRESSION_FIELDS = {
+    "number_line": ("minimum", "maximum", "marker_value"),
+    "grid": ("rows", "cols"),
+    "bar": ("filled", "total"),
+    "object_set": ("count",),
+    "shape_partition": ("parts", "shaded"),
+    "tally_marks": ("count",),
+}
+_REF_FIELDS = ("target_ref", "from_ref", "to_ref", "path_ref")
+_TIMED_ACTION_KINDS = {"appear", "highlight", "transform", "move_along_path", "camera_focus"}
+
+
+@dataclass(frozen=True)
+class CompiledAnimation:
+    document: AnimationDocument
+    refs: frozenset[str]
+    total_duration_seconds: float
+
+
+def _children_of(node) -> list:
+    if node.kind in _CONTAINER_KINDS:
+        return node.children if hasattr(node, "children") else list(node.steps)
+    if node.kind in _SINGLE_CHILD_KINDS:
+        return [node.child]
+    return []
+
+
+def compile_animation_document(document: AnimationDocument, known_fields: frozenset[str]) -> CompiledAnimation:
+    declared_refs: set[str] = set()
+    referenced_refs: set[str] = set()
+    node_count = 0
+    duration = 0.0
+
+    def walk(node, depth: int) -> None:
+        nonlocal node_count, duration
+        node_count += 1
+        if node_count > MAX_ANIMATION_NODES:
+            raise DslValidationError("too_many_nodes", f"max {MAX_ANIMATION_NODES} exceeded")
+        if depth > MAX_ANIMATION_DEPTH:
+            raise DslValidationError("animation_too_deep", f"max depth {MAX_ANIMATION_DEPTH} exceeded")
+
+        if node.ref is not None:
+            if node.ref in declared_refs:
+                raise DslValidationError("duplicate_ref", node.ref)
+            declared_refs.add(node.ref)
+
+        for field_name in _REF_FIELDS:
+            if hasattr(node, field_name):
+                referenced_refs.add(getattr(node, field_name))
+
+        for field_name in _VISUAL_EXPRESSION_FIELDS.get(node.kind, ()):
+            compile_expression(getattr(node, field_name), known_fields)
+
+        if node.kind == "wait":
+            duration += node.seconds
+        elif node.kind in _TIMED_ACTION_KINDS:
+            duration += 1.0
+
+        children = _children_of(node)
+        if node.kind in ("sequence", "parallel") and len(children) > MAX_ANIMATION_STEPS:
+            raise DslValidationError("too_many_steps", f"max {MAX_ANIMATION_STEPS} exceeded")
+        for child in children:
+            walk(child, depth + 1)
+
+    walk(document.root, 0)
+
+    dangling = referenced_refs - declared_refs
+    if dangling:
+        raise DslValidationError("dangling_ref", ", ".join(sorted(dangling)))
+
+    if duration > MAX_TOTAL_DURATION_SECONDS:
+        raise DslValidationError(
+            "total_duration_exceeded", f"{duration}s exceeds {MAX_TOTAL_DURATION_SECONDS}s"
+        )
+
+    return CompiledAnimation(document=document, refs=frozenset(declared_refs), total_duration_seconds=duration)
