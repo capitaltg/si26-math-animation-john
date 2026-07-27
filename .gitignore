@@ -24,6 +24,9 @@ media/
 backend/scripts/_benchmark_output/
 eval/fixtures/*.pptx
 
+# meta-template local SQLite store
+backend/var/
+
 # SDD scratch (not committed)
 .superpowers/
 .worktrees/
