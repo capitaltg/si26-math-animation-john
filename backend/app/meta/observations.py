@@ -32,3 +32,44 @@ def classify_text_card_reason(
     if classification.ambiguous or classification.problem_kind == "not_a_problem":
         return TextCardReason.AMBIGUOUS_OR_NON_PROBLEM
     return TextCardReason.UNSUPPORTED_SHAPE
+
+
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.meta.models import FallbackObservation
+
+
+def record_observation(
+    session: Session,
+    *,
+    new_id: str,
+    candidate_id: str,
+    source_excerpt: str,
+    grade_level: int,
+    observation_kind: str,
+    created_at: datetime,
+) -> tuple[FallbackObservation, bool]:
+    existing = session.execute(
+        select(FallbackObservation).where(
+            FallbackObservation.candidate_id == candidate_id,
+            FallbackObservation.observation_kind == observation_kind,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+
+    row = FallbackObservation(
+        id=new_id,
+        candidate_id=candidate_id,
+        source_excerpt=source_excerpt,
+        grade_level=grade_level,
+        observation_kind=observation_kind,
+        excluded=False,
+        created_at=created_at,
+    )
+    session.add(row)
+    session.flush()
+    return row, True
