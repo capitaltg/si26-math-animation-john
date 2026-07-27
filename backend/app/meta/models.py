@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.meta.db import Base
@@ -43,7 +43,7 @@ class FingerprintTag(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    observation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    observation_id: Mapped[str] = mapped_column(String(36), ForeignKey("fallback_observations.id"), nullable=False)
     fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False)
     fingerprint_json: Mapped[str] = mapped_column(Text, nullable=False)
     fingerprint_key: Mapped[str] = mapped_column(String(256), nullable=False)
