@@ -66,6 +66,36 @@ def test_concurrent_threshold_crossing_creates_one_job(engine):
     s2.close()
 
 
+def test_evaluate_and_enqueue_recovers_from_integrity_error(engine, monkeypatch):
+    # Seed an existing active job for the fingerprint_key directly, then bypass
+    # the has_active_job() guard that would normally short-circuit before the
+    # insert — this forces evaluate_and_enqueue's real INSERT to collide with
+    # the partial unique index, exercising the actual
+    # `except IntegrityError: session.rollback(); return None` branch that no
+    # other test in this suite reaches.
+    with db.meta_session() as s:
+        s.add(models.GenerationJob(
+            id="existing-active", fingerprint_key="k1", fingerprint_version=1,
+            fingerprint_json="{}", trigger_observation_ids="[]",
+            status=models.JOB_QUEUED, attempt=0, created_at=_now(), updated_at=_now(),
+        ))
+
+    monkeypatch.setattr(jobs, "has_active_job", lambda *args, **kwargs: False)
+
+    with db.meta_session() as s:
+        result = jobs.evaluate_and_enqueue(
+            s, fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+            trigger_observation_ids=[], threshold=0, new_id="new-job", now=_now(),
+        )
+        assert result is None
+
+    with db.meta_session() as s:
+        # The pre-existing job survives untouched; the rollback didn't
+        # corrupt or remove it, and no second row was inserted for this key.
+        jobs_for_key = s.query(models.GenerationJob).filter_by(fingerprint_key="k1").all()
+        assert [j.id for j in jobs_for_key] == ["existing-active"]
+
+
 def test_restart_preserves_rows(engine, tmp_path, monkeypatch):
     with db.meta_session() as s:
         _seed_cluster(s, "k1", 3)
