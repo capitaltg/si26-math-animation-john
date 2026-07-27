@@ -1,10 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.meta.dsl.expression import FieldRefNode, LiteralNode
-from app.meta.dsl.guard import GuardDocument, PositivePredicate, RangePredicate, compile_guard
+from app.meta.dsl.errors import DslValidationError
+from app.meta.dsl.expression import FieldRefNode
+from app.meta.dsl.guard import DivisibleByPredicate, GuardDocument, PositivePredicate, compile_guard
 from app.meta.dsl.params import (
     ArrayFieldSpec,
+    DecimalFieldSpec,
     EnumFieldSpec,
     IntegerFieldSpec,
     ParamsDocument,
@@ -122,3 +124,91 @@ def test_duplicate_field_names_rejected():
                 IntegerFieldSpec(name="a", label="A2", description="", minimum=1, maximum=5),
             ],
         )
+
+
+def test_required_scalar_field_rejects_omission():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="numerator", label="N", description="", minimum=1, maximum=20),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("numerator"))
+    assert Params.model_fields["numerator"].is_required() is True
+    with pytest.raises(ValidationError):
+        Params.model_validate({})
+
+
+def test_required_array_field_rejects_omission():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="numerator", label="N", description="", minimum=1, maximum=20),
+            ArrayFieldSpec(
+                name="terms",
+                label="Terms",
+                description="",
+                min_items=1,
+                max_items=3,
+                item_fields=[IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99)],
+            ),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("numerator"))
+    assert Params.model_fields["terms"].is_required() is True
+    with pytest.raises(ValidationError):
+        Params.model_validate({"numerator": 5})
+
+
+def test_guard_evaluation_error_surfaces_as_validation_error_not_dsl_error():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="numerator", label="N", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="divisor", label="D", description="", minimum=0, maximum=20),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            DivisibleByPredicate(
+                value=FieldRefNode(field="numerator"),
+                divisor=FieldRefNode(field="divisor"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"numerator", "divisor"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    with pytest.raises(ValidationError):
+        Params.model_validate({"numerator": 5, "divisor": 0})
+
+    # Confirm the underlying DslValidationError is not what escapes.
+    try:
+        Params.model_validate({"numerator": 5, "divisor": 0})
+    except ValidationError:
+        pass
+    except DslValidationError:
+        pytest.fail("DslValidationError escaped model_validate instead of ValidationError")
+
+
+def test_array_field_spec_rejects_min_items_greater_than_max_items():
+    with pytest.raises(ValidationError):
+        ArrayFieldSpec(
+            name="terms",
+            label="Terms",
+            description="",
+            min_items=5,
+            max_items=2,
+            item_fields=[IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99)],
+        )
+
+
+def test_integer_field_spec_rejects_minimum_greater_than_maximum():
+    with pytest.raises(ValidationError):
+        IntegerFieldSpec(name="a", label="A", description="", minimum=10, maximum=1)
+
+
+def test_decimal_field_spec_rejects_minimum_greater_than_maximum():
+    with pytest.raises(ValidationError):
+        DecimalFieldSpec(name="a", label="A", description="", minimum=10.0, maximum=1.0)

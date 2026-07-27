@@ -2,6 +2,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
+from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.guard import CompiledGuard, GuardResult
 from app.meta.dsl.limits import MAX_ARRAY_ITEMS, MAX_ENUM_CHOICES, MAX_PARAMS_FIELDS, MAX_STRING_LENGTH
 
@@ -19,6 +20,12 @@ class IntegerFieldSpec(BaseModel):
     minimum: int
     maximum: int
 
+    @model_validator(mode="after")
+    def _min_le_max(self):
+        if self.minimum > self.maximum:
+            raise ValueError(f"minimum ({self.minimum}) must be <= maximum ({self.maximum})")
+        return self
+
 
 class DecimalFieldSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -30,6 +37,12 @@ class DecimalFieldSpec(BaseModel):
     default: float | None = None
     minimum: float
     maximum: float
+
+    @model_validator(mode="after")
+    def _min_le_max(self):
+        if self.minimum > self.maximum:
+            raise ValueError(f"minimum ({self.minimum}) must be <= maximum ({self.maximum})")
+        return self
 
 
 class StringFieldSpec(BaseModel):
@@ -71,6 +84,12 @@ class ArrayFieldSpec(BaseModel):
     max_items: int = Field(gt=0, le=MAX_ARRAY_ITEMS)
     item_fields: list[NonArrayFieldSpec] = Field(min_length=1, max_length=MAX_PARAMS_FIELDS)
 
+    @model_validator(mode="after")
+    def _min_items_le_max_items(self):
+        if self.min_items > self.max_items:
+            raise ValueError(f"min_items ({self.min_items}) must be <= max_items ({self.max_items})")
+        return self
+
 
 ParamsFieldSpec = Annotated[
     Union[IntegerFieldSpec, DecimalFieldSpec, StringFieldSpec, EnumFieldSpec, ArrayFieldSpec],
@@ -101,16 +120,20 @@ class TemplateParamsBase(BaseModel):
 def _field_definition(spec) -> tuple[type, object]:
     if spec.type == "integer":
         py_type = int
-        field = Field(default=spec.default, ge=spec.minimum, le=spec.maximum)
+        default_kwargs = {} if spec.required else {"default": spec.default}
+        field = Field(ge=spec.minimum, le=spec.maximum, **default_kwargs)
     elif spec.type == "decimal":
         py_type = float
-        field = Field(default=spec.default, ge=spec.minimum, le=spec.maximum)
+        default_kwargs = {} if spec.required else {"default": spec.default}
+        field = Field(ge=spec.minimum, le=spec.maximum, **default_kwargs)
     elif spec.type == "string":
         py_type = str
-        field = Field(default=spec.default, max_length=spec.max_length)
+        default_kwargs = {} if spec.required else {"default": spec.default}
+        field = Field(max_length=spec.max_length, **default_kwargs)
     elif spec.type == "enum":
         py_type = Literal[tuple(spec.choices)]
-        field = Field(default=spec.default)
+        default_kwargs = {} if spec.required else {"default": spec.default}
+        field = Field(**default_kwargs)
     elif spec.type == "array":
         item_model = create_model(
             f"_{spec.name}_Item",
@@ -118,7 +141,8 @@ def _field_definition(spec) -> tuple[type, object]:
             **{item.name: _field_definition(item) for item in spec.item_fields},
         )
         py_type = list[item_model]
-        field = Field(default_factory=list, min_length=spec.min_items, max_length=spec.max_items)
+        default_kwargs = {} if spec.required else {"default_factory": list}
+        field = Field(min_length=spec.min_items, max_length=spec.max_items, **default_kwargs)
     else:
         raise ValueError(f"unknown field type: {spec.type}")
     if not spec.required and spec.type != "array":
@@ -137,7 +161,10 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
     class DynamicTemplateParams(dynamic_base):
         @model_validator(mode="after")
         def _check_guard(self):
-            result = compiled_guard.check(self.model_dump())
+            try:
+                result = compiled_guard.check(self.model_dump())
+            except DslValidationError as exc:
+                raise ValueError(f"guard evaluation error: {exc}") from exc
             if not result.passed:
                 failed = next(r for r in result.predicate_results if not r.passed)
                 raise ValueError(
@@ -149,5 +176,4 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
         def guard_result(self) -> GuardResult:
             return self.__dict__["_guard_result"]
 
-    DynamicTemplateParams.__name__ = "DynamicTemplateParams"
     return DynamicTemplateParams
