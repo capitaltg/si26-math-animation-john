@@ -126,6 +126,21 @@ def test_duplicate_field_names_rejected():
         )
 
 
+def test_duplicate_item_field_names_rejected():
+    with pytest.raises(ValidationError):
+        ArrayFieldSpec(
+            name="terms",
+            label="Terms",
+            description="",
+            min_items=1,
+            max_items=3,
+            item_fields=[
+                IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99),
+                StringFieldSpec(name="value", label="V2", description="", max_length=5),
+            ],
+        )
+
+
 def test_required_scalar_field_rejects_omission():
     document = ParamsDocument(
         params_version=1,

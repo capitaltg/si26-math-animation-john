@@ -121,6 +121,13 @@ class ArrayFieldSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _no_duplicate_item_field_names(self):
+        names = [item.name for item in self.item_fields]
+        if len(names) != len(set(names)):
+            raise ValueError(f"duplicate field names in array item_fields: {names}")
+        return self
+
+    @model_validator(mode="after")
     def _optional_default_within_bounds(self):
         # Optional arrays always fall back to an implicit `[]` default (see
         # _field_definition's default_factory=list), so an optional array
