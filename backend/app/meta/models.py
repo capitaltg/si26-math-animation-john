@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.meta.db import Base
@@ -10,6 +10,32 @@ JOB_RUNNING = "running"
 JOB_SUCCEEDED = "succeeded"
 JOB_FAILED = "failed"
 JOB_NEEDS_MANUAL = "needs_manual_authoring"
+
+
+class UTCDateTime(TypeDecorator):
+    """DateTime(timezone=True) that round-trips through SQLite as UTC-aware.
+
+    SQLite has no native timezone storage: SQLAlchemy's sqlite dialect always
+    hands back naive datetimes on read, regardless of the timezone=True flag.
+    That breaks equality comparisons against tz-aware values and crashes the
+    ORM's in-Python evaluator for update()/where() clauses that mix aware and
+    naive datetimes (as the CAS lease predicates in jobs.py do). This type
+    normalizes to naive UTC on write and re-attaches UTC on read so lease
+    comparisons stay tz-aware end to end.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
 
 def text_status_active():
@@ -72,8 +98,8 @@ class GenerationJob(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    cooldown_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

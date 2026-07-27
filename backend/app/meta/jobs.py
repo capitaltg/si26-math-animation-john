@@ -1,7 +1,7 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.meta.models import (
     FingerprintTag,
     GenerationJob,
 )
+from app.meta.models import JOB_FAILED, JOB_NEEDS_MANUAL, JOB_SUCCEEDED  # noqa: F401
 
 
 def count_eligible_observations(session: Session, fingerprint_key: str) -> int:
@@ -80,3 +81,97 @@ def evaluate_and_enqueue(
         session.rollback()
         return None
     return job
+
+
+def _claimable(now: datetime):
+    return or_(
+        and_(
+            GenerationJob.status == JOB_QUEUED,
+            or_(GenerationJob.cooldown_until.is_(None), GenerationJob.cooldown_until <= now),
+        ),
+        and_(GenerationJob.status == JOB_RUNNING, GenerationJob.lease_expires_at <= now),
+    )
+
+
+def claim_next_job(
+    session: Session, *, owner: str, lease_seconds: int, now: datetime
+) -> GenerationJob | None:
+    candidate = session.execute(
+        select(GenerationJob)
+        .where(_claimable(now))
+        .order_by(GenerationJob.created_at, GenerationJob.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if candidate is None:
+        return None
+
+    lease_expires = now + timedelta(seconds=lease_seconds)
+    result = session.execute(
+        update(GenerationJob)
+        .where(GenerationJob.id == candidate.id, _claimable(now))
+        .values(
+            status=JOB_RUNNING,
+            lease_owner=owner,
+            lease_expires_at=lease_expires,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        return None  # lost the race; caller may retry
+    session.expire(candidate)
+    return session.get(GenerationJob, candidate.id)
+
+
+def complete_job(session: Session, *, job_id: str, owner: str, now: datetime) -> bool:
+    result = session.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == job_id,
+            GenerationJob.status == JOB_RUNNING,
+            GenerationJob.lease_owner == owner,
+        )
+        .values(status=JOB_SUCCEEDED, lease_owner=None, lease_expires_at=None, updated_at=now)
+    )
+    return result.rowcount == 1
+
+
+def fail_job(
+    session: Session,
+    *,
+    job_id: str,
+    owner: str,
+    error_summary: str,
+    backoff_base_seconds: int,
+    max_attempts: int,
+    now: datetime,
+) -> bool:
+    job = session.get(GenerationJob, job_id)
+    if job is None or job.status != JOB_RUNNING or job.lease_owner != owner:
+        return False
+
+    next_attempt = job.attempt + 1
+    if next_attempt >= max_attempts:
+        new_status = JOB_NEEDS_MANUAL
+        cooldown = None
+    else:
+        new_status = JOB_QUEUED
+        cooldown = now + timedelta(seconds=backoff_base_seconds * (2 ** (next_attempt - 1)))
+
+    result = session.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == job_id,
+            GenerationJob.status == JOB_RUNNING,
+            GenerationJob.lease_owner == owner,
+        )
+        .values(
+            status=new_status,
+            attempt=next_attempt,
+            cooldown_until=cooldown,
+            error_summary=error_summary,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+    )
+    return result.rowcount == 1
