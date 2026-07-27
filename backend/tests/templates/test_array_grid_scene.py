@@ -45,10 +45,31 @@ def test_multiplicative_chain_shows_running_total_and_operation_captions():
 
     assert [label.original_text for label in scene.labels] == [
         "1 × 3 = 3",
-        "4 × 3 = 12",
+        "3 × 4 = 12",
         "3 × 4 = 12",
         "2 × 3 = 6",
         "12 ÷ 2 = 6",
+    ]
+
+
+def test_generic_chain_derives_a_new_layout_for_every_total():
+    params = ArrayGridParams(
+        start=24,
+        steps=[
+            ArrayGridStep(operation="divide", factor=3),
+            ArrayGridStep(operation="multiply", factor=2),
+        ],
+    )
+    scene = _StubScene()
+
+    draw_array_grid(scene, params)
+
+    assert [label.original_text for label in scene.labels] == [
+        "4 × 6 = 24",
+        "2 × 4 = 8",
+        "24 ÷ 3 = 8",
+        "4 × 4 = 16",
+        "8 × 2 = 16",
     ]
 
 
@@ -95,7 +116,7 @@ def test_no_ghosted_mobjects_survive_a_three_step_chain():
     assert len(surviving_texts) == 2
     assert {text.original_text for text in surviving_texts} == {
         "6 × 5 = 30",  # the final operation caption
-        "10 × 3 = 30",  # the final running-total label
+        "5 × 6 = 30",  # the final running-total label
     }
 
 

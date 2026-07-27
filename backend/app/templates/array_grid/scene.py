@@ -2,6 +2,7 @@ from manim import *
 
 from app.templates._shared.chain_math import format_operation_caption, run_multiplicative_chain
 from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
+from app.templates.array_grid.layout import grid_dimensions
 
 
 def build_grid_dots(rows, cols):
@@ -38,13 +39,14 @@ def draw_array_grid(scene, params):
         scene.wait(1)
         return
 
-    cols = params.cols
     totals = run_multiplicative_chain(
-        params.rows * cols, [(step.operation, step.factor) for step in params.steps]
+        params.starting_total(),
+        [(step.operation, step.factor) for step in params.steps],
     )
 
-    dots = build_grid_dots(params.rows, cols)
-    label = build_grid_total_label(params.rows, cols, totals[0])
+    rows, cols = grid_dimensions(totals[0])
+    dots = build_grid_dots(rows, cols)
+    label = build_grid_total_label(rows, cols, totals[0])
     label.next_to(dots, UP)
     scene.play(Write(label))
     scene.play(LaggedStart(*[FadeIn(d) for d in dots], lag_ratio=0.02))
@@ -52,10 +54,10 @@ def draw_array_grid(scene, params):
     caption = None
     current_total = totals[0]
     for step, total in zip(params.steps, totals[1:]):
-        new_rows = total // cols
-        new_dots = build_grid_dots(new_rows, cols)
+        new_rows, new_cols = grid_dimensions(total)
+        new_dots = build_grid_dots(new_rows, new_cols)
         new_dots.move_to(dots.get_center())
-        new_label = build_grid_total_label(new_rows, cols, total)
+        new_label = build_grid_total_label(new_rows, new_cols, total)
         new_label.next_to(new_dots, UP)
         new_caption = build_operation_caption(current_total, step.operation, step.factor, total)
         caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
