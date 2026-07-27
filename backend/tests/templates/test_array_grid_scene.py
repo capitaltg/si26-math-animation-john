@@ -46,7 +46,6 @@ def test_multiplicative_chain_shows_running_total_and_operation_captions():
     assert [label.original_text for label in scene.labels] == [
         "1 × 3 = 3",
         "3 × 4 = 12",
-        "3 × 4 = 12",
         "2 × 3 = 6",
         "12 ÷ 2 = 6",
     ]
@@ -84,7 +83,9 @@ class _MobjectTrackingScene:
             is_replacement = getattr(animation, "replace_mobject_with_target_in_scene", False)
             if mobject is not None and mobject not in self.mobjects:
                 self.mobjects.append(mobject)
-            if is_replacement and mobject is not None and target is not None:
+            if animation.is_remover() and mobject in self.mobjects:
+                self.mobjects.remove(mobject)
+            elif is_replacement and mobject is not None and target is not None:
                 self.mobjects.remove(mobject)
                 self.mobjects.append(target)
             elif target is not None and mobject is None and target not in self.mobjects:
@@ -118,6 +119,22 @@ def test_no_ghosted_mobjects_survive_a_three_step_chain():
         "6 × 5 = 30",  # the final operation caption
         "5 × 6 = 30",  # the final running-total label
     }
+
+
+def test_duplicate_final_caption_is_removed_when_top_label_matches():
+    params = ArrayGridParams(
+        start=144,
+        steps=[
+            ArrayGridStep(operation="divide", factor=12),
+            ArrayGridStep(operation="multiply", factor=12),
+        ],
+    )
+    scene = _MobjectTrackingScene()
+
+    draw_array_grid(scene, params)
+
+    surviving_texts = [mobject for mobject in scene.mobjects if isinstance(mobject, Text)]
+    assert [text.original_text for text in surviving_texts] == ["12 × 12 = 144"]
 
 
 def test_array_grid_chain_renders_to_mp4(tmp_path):

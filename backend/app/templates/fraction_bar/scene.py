@@ -28,7 +28,9 @@ def draw_fraction_bar(scene, params):
     cells = build_fraction_cells(n_cells)
     scene.play(Create(cells))
 
-    label = Text(f"{values[0]}/{denominator}").scale(0.6).next_to(cells, UP)
+    label = Text(f"{values[0]}/{denominator}").scale(0.6)
+    fit_width(label)
+    label.next_to(cells, UP)
     scene.play(Write(label))
 
     current = values[0]
@@ -37,7 +39,9 @@ def draw_fraction_bar(scene, params):
 
     caption = None
     for step, value in zip(params.steps, values[1:]):
-        new_label = Text(f"{value}/{denominator}").scale(0.6).next_to(cells, UP)
+        new_label = Text(f"{value}/{denominator}").scale(0.6)
+        fit_width(new_label)
+        new_label.next_to(cells, UP)
         new_caption = build_fraction_caption(current, step.operation, step.numerator, value, denominator)
         caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
 
