@@ -88,6 +88,7 @@ def assemble_scene(
     if template == TemplateName.TEXT_CARD:
         params = _text_card_params(candidate)
         thumb_path = _unique_thumbnail_path(candidate, output_dir)
+        failure_kind = None
         try:
             render_scene_thumbnail(template, params, thumb_path)
         except Exception:
@@ -97,6 +98,7 @@ def assemble_scene(
                 exc_info=True,
             )
             thumb_path = None
+            failure_kind = "render_failure"
         return Scene(
             scene_id=str(uuid4()),
             candidate_id=candidate.candidate_id,
@@ -104,6 +106,7 @@ def assemble_scene(
             grade_level=grade,
             params=params.model_dump(mode="json"),
             status="pending_review",
+            failure_kind=failure_kind,
             thumbnail_path=thumb_path,
         )
 

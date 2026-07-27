@@ -94,6 +94,33 @@ def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
     thumbnail.assert_called_once()
 
 
+def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
+    from unittest.mock import patch
+
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
+
+    candidate = Candidate(
+        candidate_id="c-render-failure",
+        source_excerpt="Plot one half and three quarters on a number line.",
+        slide_index=0,
+        one_line_summary="Detected: static plotting task",
+    )
+
+    with patch(
+        "app.pipeline.process_scene.render_scene_thumbnail",
+        side_effect=RuntimeError("preview failed"),
+    ):
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.TEXT_CARD, grade=3
+        )
+
+    assert scene.status == "pending_review"
+    assert scene.failure_kind == "render_failure"
+    assert scene.thumbnail_path is None
+
+
 def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path):
     from unittest.mock import patch
 

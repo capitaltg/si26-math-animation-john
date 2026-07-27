@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +16,26 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     session_cookie_secure: bool = False
+
+    # meta-template system (Phase 1) — all disabled by default
+    meta_templates_enabled: bool = False
+    meta_codegen_enabled: bool = False
+    meta_db_path: Path = BACKEND_ROOT / "var" / "meta.db"
+    fingerprint_observation_threshold: int = 5
+    fingerprint_tagger_prompt_version: str = "v1"
+    fingerprint_tagger_max_attempts: int = 2
+    fingerprint_tagger_backoff_seconds: float = 1.0
+    job_lease_seconds: int = 300
+    job_backoff_base_seconds: int = 60
+    job_max_attempts: int = 5
+
+    @field_validator("meta_db_path", mode="after")
+    @classmethod
+    def resolve_meta_db_path(cls, value: Path) -> Path:
+        path = value.expanduser()
+        if not path.is_absolute():
+            path = BACKEND_ROOT / path
+        return path.resolve()
 
 
 @lru_cache

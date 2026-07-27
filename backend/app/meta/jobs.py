@@ -1,0 +1,229 @@
+import json
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import and_, event, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
+
+from app.meta.models import (
+    JOB_QUEUED,
+    JOB_RUNNING,
+    FallbackObservation,
+    FingerprintTag,
+    GenerationJob,
+)
+from app.meta.models import JOB_FAILED, JOB_NEEDS_MANUAL, JOB_SUCCEEDED  # noqa: F401
+
+_NAIVE_UTC_COLUMNS = ("lease_expires_at", "cooldown_until")
+
+
+@event.listens_for(GenerationJob, "load")
+def _reattach_utc_on_load(job: GenerationJob, _context) -> None:
+    """Normalize naive datetimes read back from SQLite to UTC-aware.
+
+    SQLite has no native timezone storage: SQLAlchemy's sqlite dialect always
+    hands back naive datetimes on read, regardless of the timezone=True flag
+    on the column. That breaks equality comparisons against tz-aware values
+    (jobs.py constructs and compares leases/cooldowns using aware UTC
+    datetimes throughout). This ORM-level "load" hook re-attaches UTC tzinfo
+    immediately after a row is populated, so every read of GenerationJob is
+    aware end to end without needing a custom column type in models.py.
+    Uses set_committed_value so this normalization never marks the object
+    dirty (it's not a real change relative to what the DB just returned).
+    """
+    for col in _NAIVE_UTC_COLUMNS:
+        value = job.__dict__.get(col)
+        if value is not None and value.tzinfo is None:
+            set_committed_value(job, col, value.replace(tzinfo=timezone.utc))
+
+
+def count_eligible_observations(session: Session, fingerprint_key: str) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(FallbackObservation)
+        .join(FingerprintTag, FingerprintTag.observation_id == FallbackObservation.id)
+        .where(
+            FingerprintTag.fingerprint_key == fingerprint_key,
+            FingerprintTag.is_current.is_(True),
+            FallbackObservation.excluded.is_(False),
+        )
+    )
+    return int(session.execute(stmt).scalar_one())
+
+
+def has_active_job(session: Session, fingerprint_key: str) -> bool:
+    stmt = select(func.count()).select_from(GenerationJob).where(
+        GenerationJob.fingerprint_key == fingerprint_key,
+        GenerationJob.status.in_((JOB_QUEUED, JOB_RUNNING)),
+    )
+    return int(session.execute(stmt).scalar_one()) > 0
+
+
+def has_enabled_version(session: Session, fingerprint_key: str) -> bool:
+    # Phase 1 seam: no template_versions table exists yet. Phase 4 replaces this
+    # with a real lookup against the enabled-version index.
+    return False
+
+
+def latest_job(session: Session, fingerprint_key: str) -> GenerationJob | None:
+    return session.execute(
+        select(GenerationJob)
+        .where(GenerationJob.fingerprint_key == fingerprint_key)
+        .order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def evaluate_and_enqueue(
+    session: Session,
+    *,
+    fingerprint_key: str,
+    fingerprint_version: int,
+    fingerprint_json: str,
+    trigger_observation_ids: list[str],
+    threshold: int,
+    new_id: str,
+    now: datetime,
+    max_attempts: int = 5,
+) -> GenerationJob | None:
+    if has_enabled_version(session, fingerprint_key):
+        return None
+    if has_active_job(session, fingerprint_key):
+        return None
+    if count_eligible_observations(session, fingerprint_key) < threshold:
+        return None
+
+    prior_job = latest_job(session, fingerprint_key)
+    attempt = 0
+    if prior_job is not None:
+        if prior_job.status in (JOB_SUCCEEDED, JOB_NEEDS_MANUAL):
+            return None
+        if prior_job.status == JOB_FAILED:
+            if prior_job.attempt >= max_attempts:
+                return None
+            if prior_job.cooldown_until is not None and prior_job.cooldown_until > now:
+                return None
+            prior_ids = set(json.loads(prior_job.trigger_observation_ids))
+            if not set(trigger_observation_ids) - prior_ids:
+                return None
+            attempt = prior_job.attempt
+
+    job = GenerationJob(
+        id=new_id,
+        fingerprint_key=fingerprint_key,
+        fingerprint_version=fingerprint_version,
+        fingerprint_json=fingerprint_json,
+        trigger_observation_ids=json.dumps(trigger_observation_ids),
+        status=JOB_QUEUED,
+        attempt=attempt,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(job)
+    try:
+        session.flush()
+    except IntegrityError:
+        # Another writer inserted the active job first; the partial unique index
+        # rejected ours. Roll back to the last savepoint and treat as a no-op.
+        session.rollback()
+        return None
+    return job
+
+
+def _claimable(now: datetime):
+    return or_(
+        and_(
+            GenerationJob.status == JOB_QUEUED,
+            or_(GenerationJob.cooldown_until.is_(None), GenerationJob.cooldown_until <= now),
+        ),
+        and_(GenerationJob.status == JOB_RUNNING, GenerationJob.lease_expires_at <= now),
+    )
+
+
+def claim_next_job(
+    session: Session, *, owner: str, lease_seconds: int, now: datetime
+) -> GenerationJob | None:
+    candidate = session.execute(
+        select(GenerationJob)
+        .where(_claimable(now))
+        .order_by(GenerationJob.created_at, GenerationJob.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if candidate is None:
+        return None
+
+    lease_expires = now + timedelta(seconds=lease_seconds)
+    result = session.execute(
+        update(GenerationJob)
+        .where(GenerationJob.id == candidate.id, _claimable(now))
+        .values(
+            status=JOB_RUNNING,
+            lease_owner=owner,
+            lease_expires_at=lease_expires,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        return None  # lost the race; caller may retry
+    candidate.status = JOB_RUNNING
+    candidate.lease_owner = owner
+    candidate.lease_expires_at = lease_expires
+    candidate.updated_at = now
+    return candidate
+
+
+def complete_job(session: Session, *, job_id: str, owner: str, now: datetime) -> bool:
+    result = session.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == job_id,
+            GenerationJob.status == JOB_RUNNING,
+            GenerationJob.lease_owner == owner,
+        )
+        .values(status=JOB_SUCCEEDED, lease_owner=None, lease_expires_at=None, updated_at=now)
+    )
+    return result.rowcount == 1
+
+
+def fail_job(
+    session: Session,
+    *,
+    job_id: str,
+    owner: str,
+    error_summary: str,
+    backoff_base_seconds: int,
+    max_attempts: int,
+    now: datetime,
+) -> bool:
+    job = session.get(GenerationJob, job_id)
+    if job is None or job.status != JOB_RUNNING or job.lease_owner != owner:
+        return False
+
+    next_attempt = job.attempt + 1
+    if next_attempt >= max_attempts:
+        new_status = JOB_NEEDS_MANUAL
+        cooldown = None
+    else:
+        new_status = JOB_FAILED
+        cooldown = now + timedelta(seconds=backoff_base_seconds * (2 ** (next_attempt - 1)))
+
+    result = session.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == job_id,
+            GenerationJob.status == JOB_RUNNING,
+            GenerationJob.lease_owner == owner,
+        )
+        .values(
+            status=new_status,
+            attempt=next_attempt,
+            cooldown_until=cooldown,
+            error_summary=error_summary,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+    )
+    return result.rowcount == 1
