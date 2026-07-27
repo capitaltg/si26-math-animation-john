@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.meta.db import meta_session
 from app.meta.fingerprint import canonical_fingerprint_key, store_tag, tag_candidate
 from app.meta.jobs import evaluate_and_enqueue
-from app.meta.models import FallbackObservation
+from app.meta.models import FallbackObservation, FingerprintTag
 from app.meta.observations import (
     OBSERVATION_KIND_UNSUPPORTED,
     TextCardReason,
@@ -90,9 +90,17 @@ def record_unsupported_shape(
             key = canonical_fingerprint_key(fingerprint)
             eligible = [
                 row.id
-                for row in session.query(  # noqa: SLF001 - ORM query is fine here
-                    FallbackObservation
-                ).all()
+                for row in session.query(FallbackObservation)
+                .join(
+                    FingerprintTag,
+                    FingerprintTag.observation_id == FallbackObservation.id,
+                )
+                .filter(
+                    FingerprintTag.fingerprint_key == key,
+                    FingerprintTag.is_current.is_(True),
+                    FallbackObservation.excluded.is_(False),
+                )
+                .all()
             ]
             evaluate_and_enqueue(
                 session,

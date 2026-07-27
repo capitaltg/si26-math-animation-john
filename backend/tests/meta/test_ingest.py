@@ -1,3 +1,7 @@
+import json
+import uuid
+from datetime import datetime, timezone
+
 import pytest
 
 from app.meta import db, ingest, models
@@ -76,6 +80,68 @@ def test_tag_failure_keeps_untagged_observation(wired, monkeypatch):
         assert s.query(models.FallbackObservation).count() == 1  # not lost
         assert s.query(models.FingerprintTag).count() == 0
         assert s.query(models.GenerationJob).count() == 0
+
+
+def test_trigger_observation_ids_scoped_to_own_fingerprint_cluster(wired, monkeypatch):
+    monkeypatch.setattr(ingest, "get_settings", lambda: _settings(enabled=True, threshold=1))
+
+    # Seed an unrelated observation belonging to a different fingerprint cluster,
+    # tagged as current, directly via the ORM.
+    unrelated_fp = fp_mod.Fingerprint(
+        fingerprint_version=1,
+        operation_family="decompose",
+        representation_family="table",
+        number_domain="integer",
+        operand_arity=3,
+        step_count=2,
+        grade_band="6-8",
+    )
+    unrelated_key = fp_mod.canonical_fingerprint_key(unrelated_fp)
+
+    with db.meta_session() as s:
+        unrelated_obs = models.FallbackObservation(
+            id=uuid.uuid4().hex,
+            candidate_id="unrelated-candidate",
+            source_excerpt="9 - 4 - 2",
+            grade_level=6,
+            observation_kind=ingest.OBSERVATION_KIND_UNSUPPORTED,
+            excluded=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        s.add(unrelated_obs)
+        s.flush()
+        s.add(
+            models.FingerprintTag(
+                id=uuid.uuid4().hex,
+                observation_id=unrelated_obs.id,
+                fingerprint_version=unrelated_fp.fingerprint_version,
+                fingerprint_json=unrelated_fp.model_dump_json(),
+                fingerprint_key=unrelated_key,
+                tagger_model_id="test-model",
+                tagger_prompt_version="v1",
+                is_current=True,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    unrelated_obs_id = unrelated_obs.id
+
+    ingest.record_unsupported_shape(
+        candidate_id="c1", source_excerpt="2/5 + 1/5",
+        classification=_unsupported_classification(),
+        picked_template=TemplateName.TEXT_CARD, scene_status="pending_review",
+    )
+
+    with db.meta_session() as s:
+        job = s.query(models.GenerationJob).one()
+        trigger_ids = json.loads(job.trigger_observation_ids)
+        assert unrelated_obs_id not in trigger_ids
+        for oid in trigger_ids:
+            tag = (
+                s.query(models.FingerprintTag)
+                .filter_by(observation_id=oid, is_current=True)
+                .one()
+            )
+            assert tag.fingerprint_key == job.fingerprint_key
 
 
 def _settings(*, enabled=True, threshold=5):
