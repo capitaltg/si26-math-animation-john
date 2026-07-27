@@ -192,3 +192,10 @@ def test_classification_prompt_excludes_static_plots_from_number_line(mock_call)
     assert "requires an actual" in system_prompt
     assert "plotting" in system_prompt
     assert "no operation is performed" in system_prompt
+
+
+def test_problem_kind_defaults_to_solvable():
+    from app.pipeline.classification import ClassificationResult
+
+    result = ClassificationResult(grade_level=3)
+    assert result.problem_kind == "solvable"

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.models.scene import TemplateName
@@ -36,9 +38,12 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
     f"{_TEMPLATE_CONTRACTS}\n"
     "Return every template whose structural contract this problem satisfies, ranked "
     "best-first, each with a one-phrase rationale. Never include a template the problem "
-    "cannot structurally satisfy. Do not compute or state any answer. Set ambiguous=true "
-    "when the operands or operation cannot be confidently determined, or when no "
-    "structural template fits the problem; in that case return an empty options list."
+    "cannot structurally satisfy. Do not compute or state any answer. "
+    "Set ambiguous=true only when the operands or operation cannot be confidently "
+    "determined. Set problem_kind='not_a_problem' when the text is not a concrete "
+    "solvable math problem (a heading, instruction, or prose). When the text IS a "
+    "solvable problem but no structural template above fits it, return an empty "
+    "options list with ambiguous=false and problem_kind='solvable'."
 )
 
 
@@ -51,6 +56,7 @@ class ClassificationResult(BaseModel):
     options: list[TemplateOption] = Field(default_factory=list)
     grade_level: int = Field(ge=0, le=8)
     ambiguous: bool = False
+    problem_kind: Literal["solvable", "not_a_problem"] = "solvable"
 
 
 _TEXT_CARD_OPTION = TemplateOption(
