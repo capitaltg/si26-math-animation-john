@@ -1,6 +1,6 @@
 from manim import *
 
-from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
+from app.templates._shared.fit_to_frame import fit_width
 
 
 def draw_balance_scale(scene, params):
@@ -22,11 +22,6 @@ def draw_balance_scale(scene, params):
     scene.play(Create(beam), Create(fulcrum))
     scene.play(Create(left_pan), Create(right_pan))
     scene.play(Write(left_label), Write(right_label))
-
-    equation = Text(f"{left_a} + {left_b} = {right}").scale(0.8)
-    fit_width(equation)
-    equation.to_edge(DOWN, buff=FRAME_MARGIN)
-    scene.play(Write(equation))
     scene.wait(1)
 
 

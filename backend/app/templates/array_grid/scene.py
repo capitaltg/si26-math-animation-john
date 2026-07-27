@@ -46,7 +46,8 @@ def draw_array_grid(scene, params):
         dots = build_grid_dots(params.rows, params.cols)
         label = Text(f"{params.rows} x {params.cols}")
         fit_width(label)
-        label.to_edge(UP, buff=FRAME_MARGIN)
+        label.next_to(dots, UP)
+        fit_grid_with_label(dots, label)
 
         scene.play(Write(label))
         scene.play(LaggedStart(*[FadeIn(d) for d in dots], lag_ratio=0.02))
@@ -76,14 +77,25 @@ def draw_array_grid(scene, params):
         new_label.next_to(new_dots, UP)
         fit_grid_with_label(new_dots, new_label)
         new_caption = build_operation_caption(current_total, step.operation, step.factor, total)
-        caption_animation = Write(new_caption) if caption is None else ReplacementTransform(caption, new_caption)
+        if new_caption.original_text == new_label.original_text:
+            caption_animation = FadeOut(caption) if caption is not None else None
+            next_caption = None
+        else:
+            caption_animation = (
+                Write(new_caption)
+                if caption is None
+                else ReplacementTransform(caption, new_caption)
+            )
+            next_caption = new_caption
 
-        scene.play(
+        animations = [
             ReplacementTransform(dots, new_dots),
             ReplacementTransform(label, new_label),
-            caption_animation,
-        )
-        dots, label, caption = new_dots, new_label, new_caption
+        ]
+        if caption_animation is not None:
+            animations.append(caption_animation)
+        scene.play(*animations)
+        dots, label, caption = new_dots, new_label, next_caption
         current_total = total
 
     scene.wait(1)
@@ -103,3 +115,4 @@ from app.templates._shared.chained_scene import ChainedScene
 
 class ChainedArrayGridScene(ChainedScene):
     draw_fn = staticmethod(draw_array_grid)
+    show_problem_counter = False

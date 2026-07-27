@@ -7,6 +7,7 @@ class ChainedScene(Scene):
     continues_from = None
     continue_fn = None
     chain_range_fn = None
+    show_problem_counter = True
 
     def _items_continue(self, previous, current):
         return (
@@ -46,22 +47,24 @@ class ChainedScene(Scene):
                     else None
                 )
 
-                caption = Text(f"Problem {index + 1} of {item_count}").to_edge(UP)
-                self.play(Write(caption))
+                if self.show_problem_counter:
+                    caption = Text(f"Problem {index + 1} of {item_count}").to_edge(UP)
+                    self.play(Write(caption))
                 if self.chain_range_fn is not None:
                     self.draw_fn(self, item, value_range=value_range)
                 else:
                     self.draw_fn(self, item)
             else:
-                new_caption = Text(f"Problem {index + 1} of {item_count}").to_edge(UP)
-                self.play(Transform(caption, new_caption))
+                if self.show_problem_counter:
+                    new_caption = Text(f"Problem {index + 1} of {item_count}").to_edge(UP)
+                    self.play(Transform(caption, new_caption))
                 self.continue_fn(self, item)
 
             continues_to_next = (
                 index + 1 < item_count
                 and self._items_continue(item, items[index + 1])
             )
-            if not continues_to_next:
+            if not continues_to_next and caption is not None:
                 self.play(FadeOut(caption))
 
             self.wait(0.5)
