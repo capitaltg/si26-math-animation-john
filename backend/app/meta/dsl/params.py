@@ -26,6 +26,14 @@ class IntegerFieldSpec(BaseModel):
             raise ValueError(f"minimum ({self.minimum}) must be <= maximum ({self.maximum})")
         return self
 
+    @model_validator(mode="after")
+    def _default_within_bounds(self):
+        if self.default is not None and not (self.minimum <= self.default <= self.maximum):
+            raise ValueError(
+                f"default ({self.default}) must be within [{self.minimum}, {self.maximum}]"
+            )
+        return self
+
 
 class DecimalFieldSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -44,6 +52,14 @@ class DecimalFieldSpec(BaseModel):
             raise ValueError(f"minimum ({self.minimum}) must be <= maximum ({self.maximum})")
         return self
 
+    @model_validator(mode="after")
+    def _default_within_bounds(self):
+        if self.default is not None and not (self.minimum <= self.default <= self.maximum):
+            raise ValueError(
+                f"default ({self.default}) must be within [{self.minimum}, {self.maximum}]"
+            )
+        return self
+
 
 class StringFieldSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -55,6 +71,14 @@ class StringFieldSpec(BaseModel):
     default: str | None = Field(default=None, max_length=MAX_STRING_LENGTH)
     max_length: int = Field(gt=0, le=MAX_STRING_LENGTH)
 
+    @model_validator(mode="after")
+    def _default_within_max_length(self):
+        if self.default is not None and len(self.default) > self.max_length:
+            raise ValueError(
+                f"default length ({len(self.default)}) must be <= max_length ({self.max_length})"
+            )
+        return self
+
 
 class EnumFieldSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +89,12 @@ class EnumFieldSpec(BaseModel):
     required: bool = True
     default: str | None = None
     choices: list[str] = Field(min_length=2, max_length=MAX_ENUM_CHOICES)
+
+    @model_validator(mode="after")
+    def _default_in_choices(self):
+        if self.default is not None and self.default not in self.choices:
+            raise ValueError(f"default ({self.default!r}) must be one of choices ({self.choices})")
+        return self
 
 
 NonArrayFieldSpec = Annotated[
@@ -88,6 +118,18 @@ class ArrayFieldSpec(BaseModel):
     def _min_items_le_max_items(self):
         if self.min_items > self.max_items:
             raise ValueError(f"min_items ({self.min_items}) must be <= max_items ({self.max_items})")
+        return self
+
+    @model_validator(mode="after")
+    def _optional_default_within_bounds(self):
+        # Optional arrays always fall back to an implicit `[]` default (see
+        # _field_definition's default_factory=list), so an optional array
+        # with min_items > 0 could never be validly omitted.
+        if not self.required and self.min_items > 0:
+            raise ValueError(
+                "an optional array field (required=False) cannot have min_items > 0, "
+                f"since its implicit default [] would violate min_items ({self.min_items})"
+            )
         return self
 
 

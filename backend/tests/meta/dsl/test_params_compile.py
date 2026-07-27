@@ -212,3 +212,54 @@ def test_integer_field_spec_rejects_minimum_greater_than_maximum():
 def test_decimal_field_spec_rejects_minimum_greater_than_maximum():
     with pytest.raises(ValidationError):
         DecimalFieldSpec(name="a", label="A", description="", minimum=10.0, maximum=1.0)
+
+
+def test_integer_field_spec_rejects_default_outside_bounds():
+    with pytest.raises(ValidationError):
+        IntegerFieldSpec(
+            name="count", label="Count", description="", required=False, default=9999, minimum=1, maximum=10
+        )
+
+
+def test_decimal_field_spec_rejects_default_outside_bounds():
+    with pytest.raises(ValidationError):
+        DecimalFieldSpec(
+            name="ratio", label="Ratio", description="", required=False, default=99.9, minimum=0.0, maximum=1.0
+        )
+
+
+def test_string_field_spec_rejects_default_longer_than_max_length():
+    with pytest.raises(ValidationError):
+        StringFieldSpec(
+            name="label",
+            label="Label",
+            description="",
+            required=False,
+            default="way too long for five chars",
+            max_length=5,
+        )
+
+
+def test_enum_field_spec_rejects_default_not_in_choices():
+    with pytest.raises(ValidationError):
+        EnumFieldSpec(
+            name="shape",
+            label="Shape",
+            description="",
+            required=False,
+            default="triangle",
+            choices=["circle", "square"],
+        )
+
+
+def test_array_field_spec_rejects_optional_with_min_items_positive():
+    with pytest.raises(ValidationError):
+        ArrayFieldSpec(
+            name="terms",
+            label="Terms",
+            description="",
+            required=False,
+            min_items=1,
+            max_items=3,
+            item_fields=[IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99)],
+        )
