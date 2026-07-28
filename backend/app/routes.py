@@ -16,7 +16,7 @@ from app.models.scene import (
     TemplateRef,
     TemplateVersionMismatchError,
 )
-from app.pipeline.classification import classify_candidate
+from app.pipeline.classification import ClassificationResult, classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
@@ -344,7 +344,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
     if len(candidate_ids) != len(set(candidate_ids)):
         raise HTTPException(status_code=400, detail="Duplicate candidate ids are not allowed")
 
-    validated = []
+    validated: list[tuple[Candidate, ClassificationResult, TemplateRef]] = []
     for pick in request.picks:
         candidate = session.candidates.get(pick.candidate_id)
         if candidate is None:
