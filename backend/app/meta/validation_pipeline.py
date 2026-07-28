@@ -50,7 +50,7 @@ def persist_validation(
         fixture_results.append({"fixture_id": result.fixture_id, "passed": result.passed, "detail": result.detail})
         if not result.passed:
             all_passed = False
-        elif fixture.expected_outcome == "accept" and positive_params_for_preview is None:
+        elif fixture.kind == "positive" and fixture.expected_outcome == "accept" and positive_params_for_preview is None:
             positive_params_for_preview = json.loads(fixture.params_json)
 
     if not all_passed:

@@ -112,6 +112,46 @@ def test_persist_validation_marks_draft_failed_when_a_fixture_is_ungrounded(sess
     assert report["passed"] is False
 
 
+def test_persist_validation_uses_positive_fixture_not_boundary_fixture_for_preview(session, tmp_path, monkeypatch):
+    # A "boundary"-kind fixture with expected_outcome="accept" ordered before the
+    # genuine "positive"-kind fixture must NOT be selected as the preview source,
+    # even though it also satisfies expected_outcome == "accept".
+    job = _job(session)
+    obs = _observation(session)
+    proposal = DraftProposal(
+        params_document=ParamsDocument(
+            params_version=1,
+            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
+        ),
+        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
+        answer_expression=FieldRefNode(field="n"),
+        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        classifier_bullet="use for X",
+        fixtures=[
+            ProposedFixture(kind="boundary", expected_outcome="accept", params={"n": 10}),
+            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=obs.id, params={"n": 5}),
+        ],
+    )
+    draft = create_generated_draft(
+        session, new_id="draft-4", job=job, proposal=proposal, now=_now(),
+        fixture_ids=["fx-boundary", "fx-positive"],
+    )
+
+    captured = {}
+
+    def fake_render(compiled_animation, known_fields, field_values, artifact_root):
+        captured["field_values"] = field_values
+        return "fakehash"
+
+    monkeypatch.setattr("app.meta.validation_pipeline.render_and_store_preview", fake_render)
+
+    passed = persist_validation(session, draft, {obs.id: obs}, _now(), tmp_path)
+    session.flush()
+
+    assert passed is True
+    assert captured["field_values"] == {"n": 5}
+
+
 def test_persist_validation_marks_draft_failed_on_compile_error(session, tmp_path):
     job = _job(session)
     proposal = _valid_proposal(None)
