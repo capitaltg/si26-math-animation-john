@@ -4,11 +4,6 @@ from app.templates._shared.chain_math import format_operation_caption, run_addit
 from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_width
 from app.templates._shared.fraction_cells import build_fraction_cells
 
-# Bumped by hand whenever a human changes this template's scene.py/params.py/guard.py.
-# Included in its TemplateRef.artifact_hash (spec §8) so a contract change invalidates
-# any previously-pinned Scene rather than silently reusing stale rendering behavior.
-CONTRACT_VERSION = 1
-
 
 def build_fraction_caption(a_numerator, operation, b_numerator, result_numerator, denominator):
     caption_text = format_operation_caption(

@@ -23,17 +23,14 @@ def test_scene_defaults_to_pending_review():
     assert scene.fallback_reason is None
 
 
-def test_scene_accepts_a_template_ref():
-    from app.templates.registry import static_ref
-
-    ref = static_ref(TemplateName.NUMBER_LINE)
+def test_scene_accepts_a_template_name():
     scene = Scene(
         scene_id="s2",
         candidate_id="c2",
         grade_level=3,
-        template=ref,
+        template=TemplateName.NUMBER_LINE,
     )
-    assert scene.template == ref
+    assert scene.template == TemplateName.NUMBER_LINE
 
 
 def test_scene_round_trip_retains_manual_source_and_stated_answer():
@@ -75,12 +72,10 @@ def test_fallback_scene_requires_a_reason():
 
 
 def test_fallback_scene_keeps_its_reason():
-    from app.templates.registry import static_ref
-
     scene = Scene(
         scene_id="s8",
         candidate_id="c8",
-        template=static_ref(TemplateName.TEXT_CARD),
+        template=TemplateName.TEXT_CARD,
         grade_level=2,
         status="fallback",
         fallback_reason="This problem did not fit the chosen visual template.",

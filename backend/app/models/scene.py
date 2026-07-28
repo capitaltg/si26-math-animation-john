@@ -3,7 +3,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class TemplateName(str, Enum):
@@ -15,28 +15,12 @@ class TemplateName(str, Enum):
     FRACTION_OF_WHOLE = "fraction_of_whole"
 
 
-class TemplateRef(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    name: TemplateName
-    version_id: str
-    artifact_hash: str
-
-
-class TemplateArtifactMismatchError(Exception):
-    """A TemplateRef's artifact_hash no longer matches the template's current source."""
-
-
-class TemplateVersionMismatchError(Exception):
-    """A pinned template version is not the currently loadable static contract."""
-
-
 class Scene(BaseModel):
     scene_id: str
     candidate_id: str | None = None
     candidate_ids: list[str] | None = None
     manual_source_text: str | None = None
-    template: TemplateRef | None = None
+    template: TemplateName | None = None
     grade_level: int = Field(ge=0, le=8)
     grade_overridden: bool = False
     params: dict = Field(default_factory=dict)

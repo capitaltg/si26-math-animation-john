@@ -4,11 +4,6 @@ from app.templates._shared.chain_math import format_operation_caption, run_multi
 from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_to_frame, fit_width
 from app.templates.array_grid.layout import grid_dimensions
 
-# Bumped by hand whenever a human changes this template's scene.py/params.py/guard.py.
-# Included in its TemplateRef.artifact_hash (spec §8) so a contract change invalidates
-# any previously-pinned Scene rather than silently reusing stale rendering behavior.
-CONTRACT_VERSION = 1
-
 
 def build_grid_dots(rows, cols):
     dots = VGroup()

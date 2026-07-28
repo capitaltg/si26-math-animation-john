@@ -6,10 +6,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.models.candidate import Candidate
-from app.models.scene import Scene, TemplateName, TemplateRef
+from app.models.scene import Scene, TemplateName
 from app.pipeline.extraction import TemplateMismatchError, extract_params
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
-from app.templates.registry import get_template, static_ref
+from app.templates.registry import get_template
 from app.templates.text_card.params import TextCardParams
 
 BACKOFF_SECONDS = 0.5
@@ -46,7 +46,6 @@ def _fallback_scene(
     thumbnail: bool = False,
 ) -> Scene:
     params = _text_card_params(candidate, reason)
-    text_card_ref = static_ref(TemplateName.TEXT_CARD)
 
     render_path = None
     thumbnail_path = None
@@ -69,7 +68,7 @@ def _fallback_scene(
     return Scene(
         scene_id=str(uuid4()),
         candidate_id=candidate.candidate_id,
-        template=text_card_ref,
+        template=TemplateName.TEXT_CARD,
         grade_level=grade,
         params=params.model_dump(mode="json"),
         status="fallback",
@@ -83,15 +82,15 @@ def assemble_scene(
     candidate: Candidate,
     output_dir: Path,
     *,
-    template: TemplateRef,
+    template: TemplateName,
     grade: int,
 ) -> Scene:
-    if template.name == TemplateName.TEXT_CARD:
+    if template == TemplateName.TEXT_CARD:
         params = _text_card_params(candidate)
         thumb_path = _unique_thumbnail_path(candidate, output_dir)
         failure_kind = None
         try:
-            render_scene_thumbnail(template.name, params, thumb_path)
+            render_scene_thumbnail(template, params, thumb_path)
         except Exception:
             logger.warning(
                 "Thumbnail render failed for candidate %s; returning scene without preview",
@@ -138,7 +137,7 @@ def assemble_scene(
 
     thumb_path = _unique_thumbnail_path(candidate, output_dir)
     try:
-        render_scene_thumbnail(template.name, params, thumb_path)
+        render_scene_thumbnail(template, params, thumb_path)
     except Exception:
         logger.warning(
             "Thumbnail render failed for candidate %s; returning scene without preview",

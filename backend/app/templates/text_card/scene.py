@@ -2,11 +2,6 @@ from manim import *
 
 from app.templates._shared.fit_to_frame import FRAME_MARGIN, fit_to_frame
 
-# Bumped by hand whenever a human changes this template's scene.py/params.py/guard.py.
-# Included in its TemplateRef.artifact_hash (spec §8) so a contract change invalidates
-# any previously-pinned Scene rather than silently reusing stale rendering behavior.
-CONTRACT_VERSION = 1
-
 BODY_GAP = 0.6
 
 

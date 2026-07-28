@@ -5,7 +5,6 @@ def test_assemble_scene_returns_pending_review_with_thumbnail(tmp_path):
     from app.models.scene import TemplateName
     from app.pipeline.process_scene import assemble_scene
     from app.templates.number_line.params import NumberLineParams, NumberLineStep
-    from app.templates.registry import static_ref
 
     candidate = Candidate(
         candidate_id="c1",
@@ -14,15 +13,16 @@ def test_assemble_scene_returns_pending_review_with_thumbnail(tmp_path):
         one_line_summary="Detected: 4 + 3",
     )
     params = NumberLineParams(start=4, steps=[NumberLineStep(operation="add", amount=3)])
-    ref = static_ref(TemplateName.NUMBER_LINE)
 
     with patch("app.pipeline.process_scene.extract_params", return_value=params), patch(
         "app.pipeline.process_scene.render_scene_thumbnail"
     ) as thumb:
-        scene = assemble_scene(candidate, tmp_path, template=ref, grade=1)
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=1
+        )
 
     assert scene.status == "pending_review"
-    assert scene.template == ref
+    assert scene.template == TemplateName.NUMBER_LINE
     assert scene.thumbnail_path is not None
     assert scene.params["start"] == 4
     thumb.assert_called_once()
@@ -38,7 +38,6 @@ def test_assemble_scene_falls_back_on_template_mismatch(tmp_path):
         TEMPLATE_MISMATCH_REASON,
         assemble_scene,
     )
-    from app.templates.registry import static_ref
 
     candidate = Candidate(
         candidate_id="c2",
@@ -52,11 +51,11 @@ def test_assemble_scene_falls_back_on_template_mismatch(tmp_path):
         side_effect=TemplateMismatchError("no add/subtract sequence"),
     ), patch("app.pipeline.process_scene.render_scene_thumbnail"):
         scene = assemble_scene(
-            candidate, tmp_path, template=static_ref(TemplateName.NUMBER_LINE), grade=3
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=3
         )
 
     assert scene.status == "fallback"
-    assert scene.template == static_ref(TemplateName.TEXT_CARD)
+    assert scene.template == TemplateName.TEXT_CARD
     assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
     assert scene.thumbnail_path is not None
 
@@ -67,7 +66,6 @@ def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
     from app.models.candidate import Candidate
     from app.models.scene import TemplateName
     from app.pipeline.process_scene import assemble_scene
-    from app.templates.registry import static_ref
 
     candidate = Candidate(
         candidate_id="c3",
@@ -81,11 +79,11 @@ def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
         side_effect=AssertionError("text cards must bypass extraction"),
     ) as extract, patch("app.pipeline.process_scene.render_scene_thumbnail") as thumbnail:
         scene = assemble_scene(
-            candidate, tmp_path, template=static_ref(TemplateName.TEXT_CARD), grade=3
+            candidate, tmp_path, template=TemplateName.TEXT_CARD, grade=3
         )
 
     assert scene.status == "pending_review"
-    assert scene.template == static_ref(TemplateName.TEXT_CARD)
+    assert scene.template == TemplateName.TEXT_CARD
     assert scene.fallback_reason is None
     assert scene.params == {
         "headline": "Detected: static plotting task",
@@ -102,7 +100,6 @@ def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
     from app.models.candidate import Candidate
     from app.models.scene import TemplateName
     from app.pipeline.process_scene import assemble_scene
-    from app.templates.registry import static_ref
 
     candidate = Candidate(
         candidate_id="c-render-failure",
@@ -116,7 +113,7 @@ def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
         side_effect=RuntimeError("preview failed"),
     ):
         scene = assemble_scene(
-            candidate, tmp_path, template=static_ref(TemplateName.TEXT_CARD), grade=3
+            candidate, tmp_path, template=TemplateName.TEXT_CARD, grade=3
         )
 
     assert scene.status == "pending_review"
@@ -131,7 +128,6 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path)
     from app.models.scene import TemplateName
     from app.pipeline.process_scene import assemble_scene
     from app.templates.number_line.params import NumberLineParams, NumberLineStep
-    from app.templates.registry import static_ref
 
     candidate = Candidate(
         candidate_id="c4",
@@ -143,7 +139,6 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path)
         start=4,
         steps=[NumberLineStep(operation="add", amount=3)],
     )
-    ref = static_ref(TemplateName.NUMBER_LINE)
 
     def fail_number_line_preview(template, *_args):
         if template == TemplateName.NUMBER_LINE:
@@ -155,10 +150,12 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path)
         "app.pipeline.process_scene.render_scene_thumbnail",
         side_effect=fail_number_line_preview,
     ):
-        scene = assemble_scene(candidate, tmp_path, template=ref, grade=1)
+        scene = assemble_scene(
+            candidate, tmp_path, template=TemplateName.NUMBER_LINE, grade=1
+        )
 
     assert scene.status == "pending_review"
-    assert scene.template == ref
+    assert scene.template == TemplateName.NUMBER_LINE
     assert scene.fallback_reason is None
     assert scene.params == {
         "start": 4,

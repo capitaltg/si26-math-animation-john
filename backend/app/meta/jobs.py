@@ -9,11 +9,9 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.meta.models import (
     JOB_QUEUED,
     JOB_RUNNING,
-    TEMPLATE_VERSION_ENABLED,
     FallbackObservation,
     FingerprintTag,
     GenerationJob,
-    TemplateVersion,
 )
 from app.meta.models import JOB_FAILED, JOB_NEEDS_MANUAL, JOB_SUCCEEDED  # noqa: F401
 
@@ -63,11 +61,9 @@ def has_active_job(session: Session, fingerprint_key: str) -> bool:
 
 
 def has_enabled_version(session: Session, fingerprint_key: str) -> bool:
-    stmt = select(func.count()).select_from(TemplateVersion).where(
-        TemplateVersion.fingerprint_key == fingerprint_key,
-        TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
-    )
-    return int(session.execute(stmt).scalar_one()) > 0
+    # Phase 1 seam: no template_versions table exists yet. Phase 4 replaces this
+    # with a real lookup against the enabled-version index.
+    return False
 
 
 def latest_job(session: Session, fingerprint_key: str) -> GenerationJob | None:
