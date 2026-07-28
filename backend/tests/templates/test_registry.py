@@ -62,7 +62,7 @@ def test_static_ref_is_stable_for_the_same_template():
     b = static_ref(TemplateName.NUMBER_LINE)
     assert a == b
     assert a.name == TemplateName.NUMBER_LINE
-    assert a.version_id == "1"
+    assert a.version_id == "static:number_line:1"
     assert a.artifact_hash.startswith("sha256:")
 
 
@@ -91,7 +91,9 @@ def test_get_template_rejects_a_template_ref_with_a_stale_hash():
     from app.templates.registry import get_template
 
     stale = TemplateRef(
-        name=TemplateName.NUMBER_LINE, version_id="1", artifact_hash="sha256:0000"
+        name=TemplateName.NUMBER_LINE,
+        version_id="static:number_line:1",
+        artifact_hash="sha256:0000",
     )
     with pytest.raises(TemplateArtifactMismatchError):
         get_template(stale)

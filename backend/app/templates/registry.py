@@ -93,7 +93,7 @@ def static_ref(name: TemplateName | str) -> TemplateRef:
     key = TemplateName(name)
     return TemplateRef(
         name=key,
-        version_id=str(_CONTRACT_VERSIONS[key]),
+        version_id=f"static:{key.value}:{_CONTRACT_VERSIONS[key]}",
         artifact_hash=_artifact_hash(key),
     )
 

@@ -27,7 +27,7 @@ CHAINABLE_STATIC_TEMPLATES = [
 def test_every_static_template_resolves_to_a_stable_ref(name):
     ref = static_ref(name)
     assert ref.name == name
-    assert ref.version_id == "1"
+    assert ref.version_id == f"static:{name.value}:1"
     assert ref.artifact_hash.startswith("sha256:")
     assert ref == static_ref(name)
 
