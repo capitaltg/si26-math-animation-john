@@ -118,8 +118,8 @@ def test_parallel_with_direct_producing_kind_step_rejected():
     # scene.play at render time. Compile must reject this up front.
     document = AnimationDocument(
         animation_version=1,
-        root=RowNode(
-            children=[
+        root=SequenceNode(
+            steps=[
                 LabelNode(ref="a", text="a"),
                 ParallelNode(
                     steps=[
@@ -157,8 +157,8 @@ def test_parallel_with_only_timed_action_steps_compiles_fine():
     # (which return Animations, not mobjects) must still compile successfully.
     document = AnimationDocument(
         animation_version=1,
-        root=RowNode(
-            children=[
+        root=SequenceNode(
+            steps=[
                 LabelNode(ref="a", text="a"),
                 LabelNode(ref="b", text="b"),
                 ParallelNode(
@@ -174,15 +174,26 @@ def test_parallel_with_only_timed_action_steps_compiles_fine():
     assert compiled.refs == {"a", "b"}
 
 
-def test_parallel_containing_sequence_with_producing_step_is_fine():
-    # The guard is about parallel's *direct* children only. A parallel step that
-    # is itself a sequence containing a producing-kind node is fine, since the
-    # inner sequence returns None to build_parallel (it doesn't route the
-    # producing node's return value into scene.play).
+def test_layout_rejects_timed_action_children():
     document = AnimationDocument(
         animation_version=1,
         root=RowNode(
             children=[
+                LabelNode(ref="caption", text="caption"),
+                AppearNode(target_ref="caption"),
+            ]
+        ),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+    assert exc.value.code == "invalid_layout_child"
+
+
+def test_parallel_rejects_control_flow_steps():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
                 LabelNode(ref="a", text="a"),
                 ParallelNode(
                     steps=[
@@ -198,8 +209,9 @@ def test_parallel_containing_sequence_with_producing_step_is_fine():
             ]
         ),
     )
-    compiled = compile_animation_document(document, known_fields=frozenset())
-    assert compiled.refs == {"a", "c"}
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+    assert exc.value.code == "invalid_parallel_step"
 
 
 def test_total_duration_limit_enforced():

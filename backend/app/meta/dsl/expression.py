@@ -125,7 +125,7 @@ def _resolve_field(field_ref: "FieldRefNode", values: dict) -> Fraction:
         if not isinstance(raw, (list, tuple)) or field_ref.index >= len(raw):
             raise DslValidationError("index_out_of_range", f"{field_ref.field}[{field_ref.index}]")
         raw = raw[field_ref.index]
-    return _to_fraction(raw)
+    return _check_magnitude(_to_fraction(raw))
 
 
 def _check_magnitude(result: Fraction) -> Fraction:
@@ -136,7 +136,7 @@ def _check_magnitude(result: Fraction) -> Fraction:
 
 def _evaluate(node, values: dict) -> Fraction:
     if node.node == "literal":
-        return _to_fraction(node.value)
+        return _check_magnitude(_to_fraction(node.value))
     if node.node == "field_ref":
         return _resolve_field(node, values)
     operands = [_evaluate(operand, values) for operand in node.operands]

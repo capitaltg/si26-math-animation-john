@@ -189,6 +189,8 @@ _VISUAL_EXPRESSION_FIELDS = {
 }
 _REF_FIELDS = ("target_ref", "from_ref", "to_ref", "path_ref")
 _TIMED_ACTION_KINDS = {"appear", "highlight", "transform", "move_along_path", "camera_focus"}
+_BATCHABLE_TIMED_ACTION_KINDS = _TIMED_ACTION_KINDS - {"camera_focus"}
+_LAYOUT_KINDS = {"row", "column", "overlay", "align", "padding"}
 # Node kinds whose render_animation_node branch produces a mobject and stores it in
 # mobjects[ref]. Only refs on these kinds can be resolved at render time; a *_ref that
 # points at any other kind (timed-action/control, which return None) would KeyError.
@@ -251,21 +253,22 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
         children = _children_of(node)
         if node.kind in ("sequence", "parallel") and len(children) > MAX_ANIMATION_STEPS:
             raise DslValidationError("too_many_steps", f"max {MAX_ANIMATION_STEPS} exceeded")
+        if node.kind in _LAYOUT_KINDS:
+            for child in children:
+                if child.kind not in _PRODUCING_KINDS:
+                    raise DslValidationError(
+                        "invalid_layout_child",
+                        f"{node.kind} child kind '{child.kind}' does not produce a mobject",
+                    )
         if node.kind == "parallel":
             # render_animation_node's `parallel` branch feeds every direct step's
-            # return value straight into scene.play(*animations) via build_parallel.
-            # A producing-kind step (visual or container) returns a raw mobject, not
-            # an Animation, which would crash scene.play at render time. Only
-            # `parallel`'s *direct* children matter here — a producing-kind node
-            # nested inside a `sequence` that is itself a parallel step is fine,
-            # since that inner sequence returns None to build_parallel.
+            # return value into one scene.play(*animations) via build_parallel.
+            # Only timed actions return an Animation without playing immediately.
             for step in children:
-                if step.kind in _PRODUCING_KINDS:
+                if step.kind not in _BATCHABLE_TIMED_ACTION_KINDS:
                     raise DslValidationError(
                         "invalid_parallel_step",
-                        f"step kind '{step.kind}'"
-                        + (f" (ref={step.ref!r})" if step.ref else "")
-                        + " produces a mobject, not an Animation, and cannot be a direct parallel step",
+                        f"step kind '{step.kind}' does not return a batchable Animation",
                     )
         for child in children:
             walk(child, depth + 1)

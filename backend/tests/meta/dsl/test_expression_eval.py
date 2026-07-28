@@ -56,6 +56,20 @@ def test_overflow_raises_structured_error():
     assert exc.value.code == "overflow"
 
 
+@pytest.mark.parametrize(
+    ("node", "values"),
+    [
+        (LiteralNode(value=1e13), {}),
+        (FieldRefNode(field="x"), {"x": 1e13}),
+    ],
+)
+def test_terminal_values_larger_than_the_numeric_limit_are_rejected(node, values):
+    compiled = compile_expression(node, known_fields=frozenset({"x"}))
+    with pytest.raises(DslValidationError) as exc:
+        compiled.evaluate(values)
+    assert exc.value.code == "overflow"
+
+
 def test_non_finite_runtime_value_rejected():
     node = FieldRefNode(field="x")
     compiled = compile_expression(node, known_fields=frozenset({"x"}))
