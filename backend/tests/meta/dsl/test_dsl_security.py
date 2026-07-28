@@ -4,10 +4,15 @@ import inspect
 import pytest
 from pydantic import ValidationError
 
+from app.meta import dynamic_scene as dynamic_scene_module
 from app.meta.dsl import animation as animation_module
 from app.meta.dsl import expression as expression_module
 from app.meta.dsl import guard as guard_module
 from app.meta.dsl import params as params_module
+from app.meta.manim_primitives import layout as layout_module
+from app.meta.manim_primitives import motions as motions_module
+from app.meta.manim_primitives import style as style_module
+from app.meta.manim_primitives import visuals as visuals_module
 from app.meta.dsl.animation import AnimationDocument, LabelNode, WaitNode, compile_animation_document
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import AddNode, FieldRefNode, LiteralNode, compile_expression
@@ -18,7 +23,20 @@ from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
 DANGEROUS_STRINGS = ["__import__('os')", "os.system('rm -rf /')", "eval('1+1')", "../../etc/passwd", "https://evil.example.com"]
 
 
-@pytest.mark.parametrize("module", [animation_module, expression_module, guard_module, params_module])
+@pytest.mark.parametrize(
+    "module",
+    [
+        animation_module,
+        expression_module,
+        guard_module,
+        params_module,
+        dynamic_scene_module,
+        style_module,
+        layout_module,
+        visuals_module,
+        motions_module,
+    ],
+)
 def test_no_eval_exec_or_dynamic_import_in_dsl_modules(module):
     source = inspect.getsource(module)
     tree = ast.parse(source)

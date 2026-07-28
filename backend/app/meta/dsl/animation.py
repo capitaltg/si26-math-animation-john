@@ -53,6 +53,9 @@ class PaddingNode(_AnimationNodeBase):
 class SequenceNode(_AnimationNodeBase):
     kind: Literal["sequence"] = "sequence"
     steps: list["AnimationNode"] = Field(min_length=1, max_length=40)
+    # Parsed and bounded, but intentionally NOT read at runtime: dynamic_scene.py's
+    # `sequence` branch does not route through build_sequence (see its NOTE), so no
+    # per-step wait is injected. Kept in the schema for forward-compatibility.
     step_duration: float = Field(default=1.0, gt=0, le=5)
 
 
@@ -186,6 +189,14 @@ _VISUAL_EXPRESSION_FIELDS = {
 }
 _REF_FIELDS = ("target_ref", "from_ref", "to_ref", "path_ref")
 _TIMED_ACTION_KINDS = {"appear", "highlight", "transform", "move_along_path", "camera_focus"}
+# Node kinds whose render_animation_node branch produces a mobject and stores it in
+# mobjects[ref]. Only refs on these kinds can be resolved at render time; a *_ref that
+# points at any other kind (timed-action/control, which return None) would KeyError.
+_PRODUCING_KINDS = {
+    "row", "column", "overlay", "align", "padding",
+    "number_line", "grid", "bar", "object_set", "shape_partition",
+    "arrow", "brace", "tally_marks", "label",
+}
 
 
 @dataclass(frozen=True)
@@ -205,6 +216,7 @@ def _children_of(node) -> list:
 
 def compile_animation_document(document: AnimationDocument, known_fields: frozenset[str]) -> CompiledAnimation:
     declared_refs: set[str] = set()
+    producing_refs: set[str] = set()
     referenced_refs: set[str] = set()
     node_count = 0
     duration = 0.0
@@ -221,6 +233,8 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             if node.ref in declared_refs:
                 raise DslValidationError("duplicate_ref", node.ref)
             declared_refs.add(node.ref)
+            if node.kind in _PRODUCING_KINDS:
+                producing_refs.add(node.ref)
 
         for field_name in _REF_FIELDS:
             if hasattr(node, field_name):
@@ -242,7 +256,10 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
 
     walk(document.root, 0)
 
-    dangling = referenced_refs - declared_refs
+    # A *_ref is dangling if it names no declared ref at all, OR names a ref declared
+    # on a non-producing node (timed-action/control) that will never populate
+    # mobjects[ref] at render time. Both are the same failure: the ref won't resolve.
+    dangling = referenced_refs - producing_refs
     if dangling:
         raise DslValidationError("dangling_ref", ", ".join(sorted(dangling)))
 

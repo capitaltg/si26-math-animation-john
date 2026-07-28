@@ -1,5 +1,6 @@
 from manim import MovingCameraScene
 
+from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import _evaluate
 from app.meta.manim_primitives.layout import (
     build_align,
@@ -39,11 +40,22 @@ _VISUAL_EXPRESSION_FIELDS = {
 }
 
 
-def _resolve(node, field_name: str, values: dict):
-    return int(_evaluate(getattr(node, field_name), values))
+def _resolve(node, field_name: str, values: dict) -> int:
+    value = _evaluate(getattr(node, field_name), values)
+    # Visual builders take integer counts/bounds; an expression that evaluates to
+    # a non-whole Fraction (e.g. 9/2) would be silently truncated by int(). Reject
+    # it explicitly rather than render something the author never expressed.
+    if value.denominator != 1:
+        raise DslValidationError(
+            "non_integer_value", f"{field_name} evaluated to {value}, which is not a whole number"
+        )
+    return int(value)
 
 
-def render_animation_node(scene, node, values: dict, mobjects: dict):
+def render_animation_node(scene, node, values: dict, mobjects: dict, collect_animation: bool = False):
+    # collect_animation: when True (set by the `parallel` branch for its steps),
+    # timed-action branches RETURN their Animation instead of calling scene.play,
+    # so the caller can batch them into a single scene.play(*animations) call.
     kind = node.kind
 
     if kind == "row":
@@ -68,9 +80,17 @@ def render_animation_node(scene, node, values: dict, mobjects: dict):
             render_animation_node(scene, step, values, mobjects)
         result = None
     elif kind == "parallel":
+        # Each step is rendered with collect_animation=True so timed actions RETURN
+        # their Animation; build_parallel gathers the non-None results and fires them
+        # in one scene.play(*animations) call, so they genuinely run together.
         build_parallel(
             scene,
-            [lambda step=step: render_animation_node(scene, step, values, mobjects) for step in node.steps],
+            [
+                lambda step=step: render_animation_node(
+                    scene, step, values, mobjects, collect_animation=True
+                )
+                for step in node.steps
+            ],
         )
         result = None
     elif kind == "number_line":
@@ -97,18 +117,34 @@ def render_animation_node(scene, node, values: dict, mobjects: dict):
     elif kind == "label":
         result = build_label(node.text, style=node.style)
     elif kind == "appear":
-        scene.play(build_appear(mobjects[node.target_ref]))
+        animation = build_appear(mobjects[node.target_ref])
+        if collect_animation:
+            return animation
+        scene.play(animation)
         result = None
     elif kind == "highlight":
-        scene.play(build_highlight(mobjects[node.target_ref]))
+        animation = build_highlight(mobjects[node.target_ref])
+        if collect_animation:
+            return animation
+        scene.play(animation)
         result = None
     elif kind == "transform":
-        scene.play(build_transform(mobjects[node.from_ref], mobjects[node.to_ref]))
+        animation = build_transform(mobjects[node.from_ref], mobjects[node.to_ref])
+        if collect_animation:
+            return animation
+        scene.play(animation)
         result = None
     elif kind == "move_along_path":
-        scene.play(build_move_along_path(mobjects[node.target_ref], mobjects[node.path_ref]))
+        animation = build_move_along_path(mobjects[node.target_ref], mobjects[node.path_ref])
+        if collect_animation:
+            return animation
+        scene.play(animation)
         result = None
     elif kind == "camera_focus":
+        # camera_focus is a scene-level operation, not a per-mobject Animation:
+        # build_camera_focus drives scene.camera.frame via its own scene.play. It
+        # cannot be batched into a sibling scene.play(*animations), so even inside a
+        # parallel block it self-plays (returning None, which build_parallel skips).
         build_camera_focus(scene, mobjects[node.target_ref])
         result = None
     elif kind == "wait":

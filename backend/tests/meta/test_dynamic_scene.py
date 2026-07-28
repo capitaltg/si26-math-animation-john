@@ -7,12 +7,15 @@ from app.meta.dsl.animation import (
     ArrowNode,
     LabelNode,
     NumberLineNode,
+    ObjectSetNode,
+    ParallelNode,
     RowNode,
     SequenceNode,
     WaitNode,
     compile_animation_document,
 )
-from app.meta.dsl.expression import FieldRefNode, LiteralNode
+from app.meta.dsl.errors import DslValidationError
+from app.meta.dsl.expression import FieldRefNode, FractionNode, LiteralNode
 from app.meta.dynamic_scene import DynamicTemplateScene, render_animation_node
 
 
@@ -82,6 +85,26 @@ def test_render_arrow_connects_previously_built_refs():
     mobjects = {}
     render_animation_node(scene, compiled.document.root, {}, mobjects)
     assert "a" in mobjects and "b" in mobjects
+
+
+def test_parallel_batches_steps_into_single_play_call():
+    # Two AppearNodes over two already-built visuals must fire in ONE scene.play
+    # (batched), not two sequential plays.
+    mobjects = {"a": Dot(), "b": Square()}
+    node = ParallelNode(steps=[AppearNode(target_ref="a"), AppearNode(target_ref="b")])
+    scene = _StubScene()
+    render_animation_node(scene, node, {}, mobjects)
+    assert len(scene.played) == 1
+    assert len(scene.played[0]) == 2
+
+
+def test_resolve_rejects_non_integer_fraction():
+    # object_set count evaluating to 9/2 must raise, not silently truncate to 4.
+    node = ObjectSetNode(count=FractionNode(operands=[LiteralNode(value=9), LiteralNode(value=2)]))
+    scene = _StubScene()
+    with pytest.raises(DslValidationError) as exc:
+        render_animation_node(scene, node, {}, {})
+    assert exc.value.code == "non_integer_value"
 
 
 def test_scene_requires_compiled_animation_and_values():

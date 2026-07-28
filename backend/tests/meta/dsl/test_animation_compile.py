@@ -91,6 +91,23 @@ def test_arrow_referencing_undeclared_endpoint_rejected():
     assert exc.value.code == "dangling_ref"
 
 
+def test_ref_on_non_producing_node_rejected_as_dangling():
+    # A WaitNode declares ref "w", but wait produces no mobject at render time, so an
+    # AppearNode targeting it would KeyError. Compile must reject it up front.
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                WaitNode(ref="w", seconds=1),
+                AppearNode(target_ref="w"),
+            ]
+        ),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+    assert exc.value.code == "dangling_ref"
+
+
 def test_total_duration_limit_enforced():
     document = AnimationDocument(
         animation_version=1,
