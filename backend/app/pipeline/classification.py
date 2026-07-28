@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.models.scene import TemplateName
 from app.pipeline.bedrock_client import call_with_tool
+from app.templates.registry import static_ref
 
 # Each template is a structural contract, not a free-form illustration. The classifier
 # must return only options whose parameter guards can accept the problem downstream.
@@ -50,6 +51,7 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
 class TemplateOption(BaseModel):
     template: TemplateName
     rationale: str = Field(min_length=1)
+    version_id: str = ""
 
 
 class ClassificationResult(BaseModel):
@@ -62,6 +64,7 @@ class ClassificationResult(BaseModel):
 _TEXT_CARD_OPTION = TemplateOption(
     template=TemplateName.TEXT_CARD,
     rationale="always-compatible fallback",
+    version_id=static_ref(TemplateName.TEXT_CARD).version_id,
 )
 
 
@@ -73,6 +76,14 @@ def classify_candidate(source_text: str) -> ClassificationResult:
         tools=[{"name": "classify_problem", "schema": schema}],
     )
     classification = ClassificationResult.model_validate(result)
+    classification = classification.model_copy(
+        update={
+            "options": [
+                option.model_copy(update={"version_id": static_ref(option.template).version_id})
+                for option in classification.options
+            ]
+        }
+    )
     text_card = next(
         (
             option

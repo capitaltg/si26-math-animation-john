@@ -199,3 +199,36 @@ def test_problem_kind_defaults_to_solvable():
 
     result = ClassificationResult(grade_level=3)
     assert result.problem_kind == "solvable"
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classify_stamps_the_static_version_id_on_every_option(mock_call):
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import classify_candidate
+    from app.templates.registry import static_ref
+
+    mock_call.return_value = (
+        "classify_problem",
+        {
+            "options": [
+                {"template": "number_line", "rationale": "shows one jump"},
+            ],
+            "grade_level": 1,
+            "ambiguous": False,
+        },
+    )
+
+    result = classify_candidate("6 + 3 = ?")
+
+    number_line_option = next(o for o in result.options if o.template == TemplateName.NUMBER_LINE)
+    assert number_line_option.version_id == static_ref(TemplateName.NUMBER_LINE).version_id
+    text_card_option = next(o for o in result.options if o.template == TemplateName.TEXT_CARD)
+    assert text_card_option.version_id == static_ref(TemplateName.TEXT_CARD).version_id
+
+
+def test_template_option_version_id_defaults_to_empty_string():
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import TemplateOption
+
+    option = TemplateOption(template=TemplateName.NUMBER_LINE, rationale="x")
+    assert option.version_id == ""
