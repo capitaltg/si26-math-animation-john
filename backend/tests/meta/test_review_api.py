@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -142,6 +143,46 @@ def test_update_fixture_rejects_result_mismatch_without_persisting(client):
         json={"params": {"n": 6}, "expected_result": {"answer": "7"}},
     )
     assert response.status_code == 422
+    fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
+    assert fixture["params"] == {"n": 5}
+    assert fixture["expected_result"] is None
+
+
+def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
+    draft = _seed_pending_review_draft()
+    with db.meta_session() as session:
+        stored_draft = session.get(models.TemplateDraft, draft.id)
+        stored_draft.params_document_json = json.dumps({
+            "params_version": 1,
+            "fields": [{
+                "type": "integer", "name": "n", "label": "N", "description": "",
+                "minimum": 0, "maximum": 10,
+            }],
+        })
+        stored_draft.guard_document_json = json.dumps({
+            "guard_version": 1,
+            "predicates": [{
+                "predicate": "range",
+                "value": {"node": "field_ref", "field": "n"},
+                "minimum": {"node": "literal", "value": 0},
+                "maximum": {"node": "literal", "value": 10},
+            }],
+        })
+        stored_draft.answer_expression_json = json.dumps({
+            "node": "divide",
+            "operands": [
+                {"node": "literal", "value": 1},
+                {"node": "field_ref", "field": "n"},
+            ],
+        })
+
+    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
+    response = client.post(
+        f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
+        json={"params": {"n": 0}, "expected_result": {"answer": "0"}},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Fixture params cannot be evaluated"
     fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
     assert fixture["params"] == {"n": 5}
     assert fixture["expected_result"] is None

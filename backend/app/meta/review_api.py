@@ -17,6 +17,7 @@ from app.meta.review_actions import (
     reject_and_refine,
 )
 from app.meta.dsl.animation import AnimationDocument
+from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
@@ -179,9 +180,14 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail="Fixture params are invalid") from exc
 
-        computed_answer = compile_expression(
-            answer_expression, compiled.known_fields
-        ).evaluate(params.model_dump())
+        try:
+            computed_answer = compile_expression(
+                answer_expression, compiled.known_fields
+            ).evaluate(params.model_dump())
+        except DslValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail="Fixture params cannot be evaluated"
+            ) from exc
         if _requested_answer(request.expected_result) != computed_answer:
             raise HTTPException(
                 status_code=422, detail="Expected result does not match answer expression"
