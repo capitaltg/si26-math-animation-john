@@ -95,3 +95,48 @@ def test_partial_unique_ignores_terminal_jobs(session):
     session.add(models.GenerationJob(id="j3", status=models.JOB_SUCCEEDED, **common))
     session.add(models.GenerationJob(id="j4", status=models.JOB_FAILED, **common))
     session.flush()  # no IntegrityError: neither is queued/running
+
+
+def test_template_draft_and_fixtures_insert(session):
+    common = dict(
+        fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids="[]", created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.GenerationJob(id="job-1", status=models.JOB_RUNNING, **common))
+    session.flush()
+
+    draft = models.TemplateDraft(
+        id="draft-1", job_id="job-1", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", revision=1, params_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
+        status=models.DRAFT_GENERATED, created_at=_now(), updated_at=_now(),
+    )
+    session.add(draft)
+    session.flush()
+
+    session.add(models.TemplateDraftFixture(
+        id="fixture-1", draft_id="draft-1", kind="positive", expected_outcome="accept",
+        generation_method="proposed", params_json="{}", created_at=_now(),
+    ))
+    session.add(models.TemplateReview(
+        id="review-1", draft_id="draft-1", decision="reject",
+        reviewer_label="dev", feedback="fix the guard", created_at=_now(),
+    ))
+    session.flush()
+
+    assert session.query(models.TemplateDraft).count() == 1
+    assert session.query(models.TemplateDraftFixture).count() == 1
+    assert session.query(models.TemplateReview).count() == 1
+
+
+def test_template_draft_requires_known_job(session):
+    session.add(models.TemplateDraft(
+        id="draft-orphan", job_id="ghost-job", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", revision=1, params_document_json="{}", guard_document_json="{}",
+        answer_expression_json="{}", animation_document_json="{}", classifier_bullet="x",
+        dsl_schema_versions_json="{}", artifact_hash="sha256:x", status=models.DRAFT_GENERATED,
+        created_at=_now(), updated_at=_now(),
+    ))
+    with pytest.raises(IntegrityError):
+        session.flush()

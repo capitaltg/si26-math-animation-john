@@ -227,3 +227,12 @@ def fail_job(
         )
     )
     return result.rowcount == 1
+
+
+def mark_needs_manual(session: Session, *, job_id: str, now: datetime) -> bool:
+    result = session.execute(
+        update(GenerationJob)
+        .where(GenerationJob.id == job_id)
+        .values(status=JOB_NEEDS_MANUAL, lease_owner=None, lease_expires_at=None, updated_at=now)
+    )
+    return result.rowcount == 1

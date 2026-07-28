@@ -86,3 +86,73 @@ class GenerationJob(Base):
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+DRAFT_GENERATED = "generated"
+DRAFT_VALIDATING = "validating"
+DRAFT_PENDING_REVIEW = "pending_review"
+DRAFT_FAILED_VALIDATION = "failed_validation"
+DRAFT_REJECTED = "rejected"
+DRAFT_SUPERSEDED = "superseded"
+
+
+class TemplateDraft(Base):
+    __tablename__ = "template_drafts"
+    __table_args__ = (
+        Index("ix_template_drafts_job", "job_id"),
+        Index("ix_template_drafts_fingerprint_key", "fingerprint_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("generation_jobs.id"), nullable=False)
+    fingerprint_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint_json: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    parent_draft_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("template_drafts.id"), nullable=True
+    )
+    params_document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    guard_document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_expression_json: Mapped[str] = mapped_column(Text, nullable=False)
+    animation_document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    classifier_bullet: Mapped[str] = mapped_column(Text, nullable=False)
+    dsl_schema_versions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preview_artifact_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reviewer_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TemplateDraftFixture(Base):
+    __tablename__ = "template_draft_fixtures"
+    __table_args__ = (Index("ix_template_draft_fixtures_draft", "draft_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_drafts.id"), nullable=False)
+    observation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("fallback_observations.id"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    generation_method: Mapped[str] = mapped_column(String(16), nullable=False)
+    params_json: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structural_check_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    structural_check_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TemplateReview(Base):
+    __tablename__ = "template_reviews"
+    __table_args__ = (Index("ix_template_reviews_draft", "draft_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_drafts.id"), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    reviewer_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
