@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import MetaReviewPanel from './MetaReviewPanel'
 import SchemaForm from './SchemaForm'
 
 function sceneIsDirty(scene, drafts) {
@@ -17,7 +18,7 @@ function responseError(data, fallbackMessage) {
   return typeof data?.detail === 'string' ? data.detail : fallbackMessage
 }
 
-export default function App() {
+function MainApp() {
   const [candidates, setCandidates] = useState(null)
   const [selected, setSelected] = useState({})
   const [options, setOptions] = useState(null)
@@ -572,4 +573,12 @@ export default function App() {
       )}
     </main>
   )
+}
+
+export default function App() {
+  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+  if (params?.has('meta-review')) {
+    return <MetaReviewPanel />
+  }
+  return <MainApp />
 }

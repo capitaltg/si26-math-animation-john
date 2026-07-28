@@ -217,6 +217,7 @@ async function reachStoryboard() {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.history.pushState({}, '', '/')
 })
 
 it('blocks rendering when an approved scene has unsaved edits', async () => {
@@ -435,4 +436,17 @@ it('returns from results to visualization options', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Back to options' }))
 
   expect(screen.getByRole('heading', { name: 'Choose visualizations' })).not.toBeNull()
+})
+
+it('renders the dev review panel when ?meta-review is present', async () => {
+  window.history.pushState({}, '', '/?meta-review')
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return jsonResponse([])
+    throw new Error(`Unexpected request: ${url}`)
+  }))
+
+  render(<App />)
+
+  await screen.findByRole('heading', { name: 'Meta-template review (dev only)' })
+  expect(screen.getByText('No drafts pending review.')).not.toBeNull()
 })
