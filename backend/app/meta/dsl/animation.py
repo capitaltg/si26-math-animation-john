@@ -251,6 +251,22 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
         children = _children_of(node)
         if node.kind in ("sequence", "parallel") and len(children) > MAX_ANIMATION_STEPS:
             raise DslValidationError("too_many_steps", f"max {MAX_ANIMATION_STEPS} exceeded")
+        if node.kind == "parallel":
+            # render_animation_node's `parallel` branch feeds every direct step's
+            # return value straight into scene.play(*animations) via build_parallel.
+            # A producing-kind step (visual or container) returns a raw mobject, not
+            # an Animation, which would crash scene.play at render time. Only
+            # `parallel`'s *direct* children matter here — a producing-kind node
+            # nested inside a `sequence` that is itself a parallel step is fine,
+            # since that inner sequence returns None to build_parallel.
+            for step in children:
+                if step.kind in _PRODUCING_KINDS:
+                    raise DslValidationError(
+                        "invalid_parallel_step",
+                        f"step kind '{step.kind}'"
+                        + (f" (ref={step.ref!r})" if step.ref else "")
+                        + " produces a mobject, not an Animation, and cannot be a direct parallel step",
+                    )
         for child in children:
             walk(child, depth + 1)
 
@@ -259,6 +275,13 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     # A *_ref is dangling if it names no declared ref at all, OR names a ref declared
     # on a non-producing node (timed-action/control) that will never populate
     # mobjects[ref] at render time. Both are the same failure: the ref won't resolve.
+    # KNOWN GAP (deferred, not fixed here): this check is order-independent set
+    # subtraction, so it does NOT enforce declare-before-reference ordering. A
+    # forward ref (e.g. RowNode(children=[ArrowNode(from_ref="a", to_ref="b"),
+    # LabelNode(ref="a"), LabelNode(ref="b")])) compiles successfully today but
+    # still crashes at render with KeyError, because render_animation_node
+    # populates mobjects[] in depth-first traversal order and the ArrowNode is
+    # visited before the LabelNodes that would populate mobjects["a"]/["b"].
     dangling = referenced_refs - producing_refs
     if dangling:
         raise DslValidationError("dangling_ref", ", ".join(sorted(dangling)))

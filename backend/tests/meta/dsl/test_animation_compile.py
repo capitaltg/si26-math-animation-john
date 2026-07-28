@@ -4,8 +4,11 @@ from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
     ArrowNode,
+    HighlightNode,
     LabelNode,
     NumberLineNode,
+    ObjectSetNode,
+    ParallelNode,
     RowNode,
     SequenceNode,
     WaitNode,
@@ -106,6 +109,97 @@ def test_ref_on_non_producing_node_rejected_as_dangling():
     with pytest.raises(DslValidationError) as exc:
         compile_animation_document(document, known_fields=frozenset())
     assert exc.value.code == "dangling_ref"
+
+
+def test_parallel_with_direct_producing_kind_step_rejected():
+    # render_animation_node's `parallel` branch feeds each step's return value
+    # straight into scene.play(*animations). A producing-kind step (e.g.
+    # ObjectSetNode) returns a raw mobject, not an Animation, and would crash
+    # scene.play at render time. Compile must reject this up front.
+    document = AnimationDocument(
+        animation_version=1,
+        root=RowNode(
+            children=[
+                LabelNode(ref="a", text="a"),
+                ParallelNode(
+                    steps=[
+                        AppearNode(target_ref="a"),
+                        ObjectSetNode(count=LiteralNode(value=3)),
+                    ]
+                ),
+            ]
+        ),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+    assert exc.value.code == "invalid_parallel_step"
+
+
+def test_parallel_with_label_step_rejected():
+    # Same failure mode as above, using a different producing kind (label) to
+    # confirm the guard isn't hardcoded to a single kind.
+    document = AnimationDocument(
+        animation_version=1,
+        root=ParallelNode(
+            steps=[
+                LabelNode(text="hello"),
+                LabelNode(text="world"),
+            ]
+        ),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+    assert exc.value.code == "invalid_parallel_step"
+
+
+def test_parallel_with_only_timed_action_steps_compiles_fine():
+    # No regression: a parallel block whose direct steps are all timed actions
+    # (which return Animations, not mobjects) must still compile successfully.
+    document = AnimationDocument(
+        animation_version=1,
+        root=RowNode(
+            children=[
+                LabelNode(ref="a", text="a"),
+                LabelNode(ref="b", text="b"),
+                ParallelNode(
+                    steps=[
+                        AppearNode(target_ref="a"),
+                        HighlightNode(target_ref="b"),
+                    ]
+                ),
+            ]
+        ),
+    )
+    compiled = compile_animation_document(document, known_fields=frozenset())
+    assert compiled.refs == {"a", "b"}
+
+
+def test_parallel_containing_sequence_with_producing_step_is_fine():
+    # The guard is about parallel's *direct* children only. A parallel step that
+    # is itself a sequence containing a producing-kind node is fine, since the
+    # inner sequence returns None to build_parallel (it doesn't route the
+    # producing node's return value into scene.play).
+    document = AnimationDocument(
+        animation_version=1,
+        root=RowNode(
+            children=[
+                LabelNode(ref="a", text="a"),
+                ParallelNode(
+                    steps=[
+                        AppearNode(target_ref="a"),
+                        SequenceNode(
+                            steps=[
+                                LabelNode(ref="c", text="c"),
+                                WaitNode(seconds=1),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        ),
+    )
+    compiled = compile_animation_document(document, known_fields=frozenset())
+    assert compiled.refs == {"a", "c"}
 
 
 def test_total_duration_limit_enforced():
