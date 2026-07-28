@@ -36,7 +36,7 @@ class Scene(BaseModel):
     candidate_id: str | None = None
     candidate_ids: list[str] | None = None
     manual_source_text: str | None = None
-    template: TemplateName | None = None
+    template: TemplateRef | None = None
     grade_level: int = Field(ge=0, le=8)
     grade_overridden: bool = False
     params: dict = Field(default_factory=dict)
