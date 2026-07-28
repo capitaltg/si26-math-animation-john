@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models.candidate import Candidate
-from app.models.scene import Scene, TemplateName
+from app.models.scene import Scene, TemplateRef
 from app.pipeline.classification import ClassificationResult
 
 DEFAULT_MAX_SESSIONS = 200
@@ -21,7 +21,7 @@ class Session:
     options: dict[str, ClassificationResult] = field(default_factory=dict)
     scenes: dict[str, Scene] = field(default_factory=dict)
     scene_order: list[str] = field(default_factory=list)
-    scene_requested_template: dict[str, TemplateName] = field(default_factory=dict)
+    scene_requested_template: dict[str, TemplateRef] = field(default_factory=dict)
     scene_chain_members: dict[str, list[str]] = field(default_factory=dict)
 
 
