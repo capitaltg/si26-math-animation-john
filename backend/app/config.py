@@ -28,10 +28,20 @@ class Settings(BaseSettings):
     job_lease_seconds: int = 300
     job_backoff_base_seconds: int = 60
     job_max_attempts: int = 5
+    meta_artifact_root: Path = BACKEND_ROOT / "var" / "meta_artifacts"
+    meta_draft_max_refinements: int = 5
 
     @field_validator("meta_db_path", mode="after")
     @classmethod
     def resolve_meta_db_path(cls, value: Path) -> Path:
+        path = value.expanduser()
+        if not path.is_absolute():
+            path = BACKEND_ROOT / path
+        return path.resolve()
+
+    @field_validator("meta_artifact_root", mode="after")
+    @classmethod
+    def resolve_meta_artifact_root(cls, value: Path) -> Path:
         path = value.expanduser()
         if not path.is_absolute():
             path = BACKEND_ROOT / path
