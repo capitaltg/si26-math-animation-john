@@ -1,9 +1,11 @@
 import json
 from datetime import datetime
+from fractions import Fraction
+from math import isfinite
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.config import get_settings
 from app.meta.artifacts import artifact_path
@@ -14,6 +16,11 @@ from app.meta.review_actions import (
     DraftRefinementFailedError,
     reject_and_refine,
 )
+from app.meta.dsl.animation import AnimationDocument
+from app.meta.dsl.expression import ExpressionNode, compile_expression
+from app.meta.dsl.guard import GuardDocument
+from app.meta.dsl.params import ParamsDocument
+from app.meta.validation import compile_draft_documents
 
 router = APIRouter(prefix="/meta")
 
@@ -65,7 +72,8 @@ class RejectResponse(BaseModel):
     needs_manual_authoring: bool
 
 
-class FixtureExpectedResultRequest(BaseModel):
+class FixtureUpdateRequest(BaseModel):
+    params: dict
     expected_result: dict
 
 
@@ -135,13 +143,52 @@ def get_preview(artifact_hash: str):
     return FileResponse(path, media_type="image/png", filename=f"{artifact_hash}.png")
 
 
+def _requested_answer(expected_result: dict) -> Fraction:
+    value = expected_result.get("answer")
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise HTTPException(status_code=422, detail="Expected result answer must be a finite number")
+    if isinstance(value, float) and not isfinite(value):
+        raise HTTPException(status_code=422, detail="Expected result answer must be a finite number")
+    try:
+        return Fraction(str(value))
+    except (ValueError, ZeroDivisionError) as exc:
+        raise HTTPException(status_code=422, detail="Expected result answer must be a finite number") from exc
+
+
 @router.post("/drafts/{draft_id}/fixtures/{fixture_id}", response_model=FixtureOut)
-def set_fixture_expected_result(draft_id: str, fixture_id: str, request: FixtureExpectedResultRequest):
+def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest):
     with meta_session() as session:
         fixture = session.get(TemplateDraftFixture, fixture_id)
         if fixture is None or fixture.draft_id != draft_id:
             raise HTTPException(status_code=404, detail=f"Unknown fixture {fixture_id}")
-        fixture.expected_result_json = json.dumps(request.expected_result)
+        draft = session.get(TemplateDraft, draft_id)
+        params_document = ParamsDocument.model_validate(json.loads(draft.params_document_json))
+        guard_document = GuardDocument.model_validate(json.loads(draft.guard_document_json))
+        answer_expression = TypeAdapter(ExpressionNode).validate_python(
+            json.loads(draft.answer_expression_json)
+        )
+        animation_document = AnimationDocument.model_validate(json.loads(draft.animation_document_json))
+        compiled = compile_draft_documents(
+            params_document,
+            guard_document,
+            answer_expression,
+            animation_document,
+        )
+        try:
+            params = compiled.params_cls.model_validate(request.params)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="Fixture params are invalid") from exc
+
+        computed_answer = compile_expression(
+            answer_expression, compiled.known_fields
+        ).evaluate(params.model_dump())
+        if _requested_answer(request.expected_result) != computed_answer:
+            raise HTTPException(
+                status_code=422, detail="Expected result does not match answer expression"
+            )
+
+        fixture.params_json = json.dumps(request.params)
+        fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
         session.flush()
         return _fixture_out(session, fixture)
 

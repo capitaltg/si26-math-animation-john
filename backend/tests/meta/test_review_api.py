@@ -111,15 +111,40 @@ def test_get_preview_serves_stored_artifact(client):
     assert len(resp.content) > 0
 
 
-def test_set_fixture_expected_result(client):
+def test_update_fixture_params_and_expected_result(client):
     draft = _seed_pending_review_draft()
     fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
-    resp = client.post(
+    response = client.post(
         f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
-        json={"expected_result": {"answer": 5}},
+        json={"params": {"n": 6}, "expected_result": {"answer": "6"}},
     )
-    assert resp.status_code == 200
-    assert resp.json()["expected_result"] == {"answer": 5}
+    assert response.status_code == 200
+    assert response.json()["params"] == {"n": 6}
+    assert response.json()["expected_result"] == {"answer": "6"}
+
+
+def test_update_fixture_rejects_invalid_params_without_persisting(client):
+    draft = _seed_pending_review_draft()
+    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
+    response = client.post(
+        f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
+        json={"params": {"n": -1}, "expected_result": {"answer": "-1"}},
+    )
+    assert response.status_code == 422
+    assert client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["params"] == {"n": 5}
+
+
+def test_update_fixture_rejects_result_mismatch_without_persisting(client):
+    draft = _seed_pending_review_draft()
+    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
+    response = client.post(
+        f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
+        json={"params": {"n": 6}, "expected_result": {"answer": "7"}},
+    )
+    assert response.status_code == 422
+    fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
+    assert fixture["params"] == {"n": 5}
+    assert fixture["expected_result"] is None
 
 
 @patch("app.meta.draft_generation.call_with_tool")

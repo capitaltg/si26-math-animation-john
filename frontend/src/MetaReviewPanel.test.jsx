@@ -33,7 +33,7 @@ const draftDetail = {
   reviewer_feedback: null,
 }
 
-function installFetchMock() {
+function installFetchMock({ fixtureResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
@@ -43,6 +43,14 @@ function installFetchMock() {
     }
     if (url === '/meta/drafts/draft-1/reject' && init.method === 'POST') {
       return { ok: true, json: async () => ({ new_draft: null, needs_manual_authoring: false }) }
+    }
+    if (url === '/meta/drafts/draft-1/fixtures/fx-1' && init.method === 'POST') {
+      return fixtureResponse || {
+        ok: true,
+        json: async () => ({
+          ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' },
+        }),
+      }
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -66,7 +74,7 @@ it('submits reject feedback and returns to the list', async () => {
   fireEvent.click(screen.getByText('Review'))
   await waitFor(() => expect(screen.getByText(/use for fraction-of-whole bars/)).not.toBeNull())
 
-  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'tighten the guard' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Feedback' }), { target: { value: 'tighten the guard' } })
   fireEvent.click(screen.getByText('Reject and request refinement'))
 
   await waitFor(() =>
@@ -76,4 +84,45 @@ it('submits reject feedback and returns to the list', async () => {
     ),
   )
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+})
+
+it('edits and saves a fixture', async () => {
+  const fetchMock = installFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Fixture fx-1 params'), { target: { value: '{"n":6}' } })
+  fireEvent.change(screen.getByLabelText('Fixture fx-1 expected result'), { target: { value: '{"answer":"6"}' } })
+  fireEvent.click(screen.getByText('Save fixture'))
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/meta/drafts/draft-1/fixtures/fx-1',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ params: { n: 6 }, expected_result: { answer: '6' } }),
+      }),
+    ),
+  )
+})
+
+it('shows fixture save errors', async () => {
+  installFetchMock({
+    fixtureResponse: {
+      ok: false,
+      json: async () => ({ detail: 'Expected result does not match answer expression' }),
+    },
+  })
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.click(screen.getByText('Save fixture'))
+
+  await waitFor(() =>
+    expect(screen.getByText('Expected result does not match answer expression')).not.toBeNull(),
+  )
 })

@@ -13,6 +13,8 @@ export default function MetaReviewPanel() {
   const [selected, setSelected] = useState(null)
   const [feedback, setFeedback] = useState('')
   const [error, setError] = useState(null)
+  const [fixtureTexts, setFixtureTexts] = useState({})
+  const [fixtureErrors, setFixtureErrors] = useState({})
   const [loading, setLoading] = useState(false)
 
   async function loadDrafts() {
@@ -43,6 +45,8 @@ export default function MetaReviewPanel() {
       if (!resp.ok) throw new Error(data?.detail || 'Could not load draft')
       setSelected(data)
       setFeedback('')
+      setFixtureTexts({})
+      setFixtureErrors({})
     } catch (err) {
       setError(err.message)
     } finally {
@@ -68,6 +72,43 @@ export default function MetaReviewPanel() {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function saveFixture(fixture) {
+    const texts = fixtureTexts[fixture.id] || {
+      params: JSON.stringify(fixture.params),
+      expectedResult: JSON.stringify(fixture.expected_result || { answer: '' }),
+    }
+    let params
+    let expectedResult
+    try {
+      params = JSON.parse(texts.params)
+      expectedResult = JSON.parse(texts.expectedResult)
+    } catch {
+      setFixtureErrors((current) => ({ ...current, [fixture.id]: 'Enter valid JSON' }))
+      return
+    }
+
+    setFixtureErrors((current) => ({ ...current, [fixture.id]: null }))
+    try {
+      const resp = await fetch(`/meta/drafts/${selected.id}/fixtures/${fixture.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params, expected_result: expectedResult }),
+      })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(data?.detail || 'Could not save fixture')
+      setSelected((current) => ({
+        ...current,
+        fixtures: current.fixtures.map((row) => (row.id === fixture.id ? data : row)),
+      }))
+      setFixtureTexts((current) => {
+        const { [fixture.id]: _, ...remaining } = current
+        return remaining
+      })
+    } catch (err) {
+      setFixtureErrors((current) => ({ ...current, [fixture.id]: err.message }))
     }
   }
 
@@ -119,11 +160,48 @@ export default function MetaReviewPanel() {
                   ? 'passed'
                   : `failed: ${fixture.structural_check_detail}`}
                 {fixture.source_excerpt && <div style={{ color: '#666' }}>{fixture.source_excerpt}</div>}
+                <div>
+                  <label htmlFor={`fixture-${fixture.id}-params`}>Fixture {fixture.id} params</label>
+                  <textarea
+                    id={`fixture-${fixture.id}-params`}
+                    value={fixtureTexts[fixture.id]?.params ?? JSON.stringify(fixture.params)}
+                    onChange={(e) => setFixtureTexts((current) => ({
+                      ...current,
+                      [fixture.id]: {
+                        params: e.target.value,
+                        expectedResult: current[fixture.id]?.expectedResult
+                          ?? JSON.stringify(fixture.expected_result || { answer: '' }),
+                      },
+                    }))}
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <label htmlFor={`fixture-${fixture.id}-expected-result`}>
+                    Fixture {fixture.id} expected result
+                  </label>
+                  <textarea
+                    id={`fixture-${fixture.id}-expected-result`}
+                    value={fixtureTexts[fixture.id]?.expectedResult
+                      ?? JSON.stringify(fixture.expected_result || { answer: '' })}
+                    onChange={(e) => setFixtureTexts((current) => ({
+                      ...current,
+                      [fixture.id]: {
+                        params: current[fixture.id]?.params ?? JSON.stringify(fixture.params),
+                        expectedResult: e.target.value,
+                      },
+                    }))}
+                    rows={3}
+                  />
+                </div>
+                <button onClick={() => saveFixture(fixture)}>Save fixture</button>
+                {fixtureErrors[fixture.id] && <p style={{ color: 'crimson' }}>{fixtureErrors[fixture.id]}</p>}
               </li>
             ))}
           </ul>
           <h3>Reject with feedback</h3>
           <textarea
+            aria-label="Feedback"
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             rows={3}
