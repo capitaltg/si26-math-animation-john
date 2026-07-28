@@ -40,20 +40,24 @@ def _candidate(cid="c1"):
 def _classification():
     from app.models.scene import TemplateName
     from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.templates.registry import static_ref
 
     return ClassificationResult(
         options=[
             TemplateOption(
                 template=TemplateName.BALANCE_SCALE,
                 rationale="shows the equation as a balance",
+                version_id=static_ref(TemplateName.BALANCE_SCALE).version_id,
             ),
             TemplateOption(
                 template=TemplateName.NUMBER_LINE,
                 rationale="shows one forward jump",
+                version_id=static_ref(TemplateName.NUMBER_LINE).version_id,
             ),
             TemplateOption(
                 template=TemplateName.TEXT_CARD,
                 rationale="always-compatible fallback",
+                version_id=static_ref(TemplateName.TEXT_CARD).version_id,
             ),
         ],
         grade_level=1,
@@ -188,7 +192,9 @@ def test_render_without_session_is_400():
 
 
 def test_options_returns_ranked_templates_and_caches_result():
+    from app.models.scene import TemplateName
     from app.routes import store
+    from app.templates.registry import static_ref
 
     client = _client()
     upload = _upload_candidate(client)
@@ -205,15 +211,60 @@ def test_options_returns_ranked_templates_and_caches_result():
         "templates": [
             {
                 "template": "balance_scale",
+                "version_id": static_ref(TemplateName.BALANCE_SCALE).version_id,
                 "rationale": "shows the equation as a balance",
             },
-            {"template": "number_line", "rationale": "shows one forward jump"},
-            {"template": "text_card", "rationale": "always-compatible fallback"},
+            {
+                "template": "number_line",
+                "version_id": static_ref(TemplateName.NUMBER_LINE).version_id,
+                "rationale": "shows one forward jump",
+            },
+            {
+                "template": "text_card",
+                "version_id": static_ref(TemplateName.TEXT_CARD).version_id,
+                "rationale": "always-compatible fallback",
+            },
         ],
     }
     session = store.get(upload.json()["session_id"])
     assert session.options["c1"] == _classification()
     classify.assert_called_once_with(_candidate().source_excerpt)
+
+
+def test_options_response_includes_a_static_version_id():
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.templates.registry import static_ref
+
+    client = _client()
+    _upload_candidate(client)
+
+    number_line_ref = static_ref(TemplateName.NUMBER_LINE)
+    text_card_ref = static_ref(TemplateName.TEXT_CARD)
+    classification = ClassificationResult(
+        options=[
+            TemplateOption(
+                template=TemplateName.NUMBER_LINE,
+                rationale="shows one forward jump",
+                version_id=number_line_ref.version_id,
+            ),
+            TemplateOption(
+                template=TemplateName.TEXT_CARD,
+                rationale="always-compatible fallback",
+                version_id=text_card_ref.version_id,
+            ),
+        ],
+        grade_level=1,
+        ambiguous=False,
+    )
+    with patch("app.routes.classify_candidate", return_value=classification):
+        resp = client.post("/options", json={"candidate_ids": ["c1"]})
+
+    assert resp.status_code == 200
+    number_line = next(
+        t for t in resp.json()["options"][0]["templates"] if t["template"] == "number_line"
+    )
+    assert number_line["version_id"] == number_line_ref.version_id
 
 
 def test_options_unknown_candidate_is_404():
@@ -267,6 +318,7 @@ def test_unknown_clip_id_is_404():
 
 def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidate(client)
@@ -277,7 +329,7 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     fake = Scene(
         scene_id="s1",
         candidate_id="c1",
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
@@ -306,6 +358,7 @@ def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
     # monkeypatch it here only to observe that the wiring calls it; the real
     # flag-off short-circuit is covered separately in tests/meta/test_ingest.py.
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     calls = []
     import app.routes as routes
@@ -321,7 +374,7 @@ def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
     fake = Scene(
         scene_id="s1",
         candidate_id="c1",
-        template=TemplateName.TEXT_CARD,
+        template=static_ref(TemplateName.TEXT_CARD),
         grade_level=1,
         params={"headline": "x", "lines": ["y"]},
         status="pending_review",
@@ -378,29 +431,64 @@ def test_storyboard_without_session_is_400():
     assert resp.status_code == 400
 
 
+def test_storyboard_stale_cached_version_id_is_409():
+    from app.models.scene import TemplateName, TemplateVersionMismatchError
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+
+    client = _client()
+    _upload_candidate(client)
+
+    stale_classification = ClassificationResult(
+        options=[
+            TemplateOption(
+                template=TemplateName.NUMBER_LINE,
+                rationale="shows one forward jump",
+                version_id="stale-version",
+            ),
+        ],
+        grade_level=1,
+        ambiguous=False,
+    )
+    with patch("app.routes.classify_candidate", return_value=stale_classification):
+        client.post("/options", json={"candidate_ids": ["c1"]})
+
+    with patch(
+        "app.routes.resolve_static_ref",
+        side_effect=TemplateVersionMismatchError("stale contract"),
+    ):
+        resp = client.post(
+            "/storyboard",
+            json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
+        )
+
+    assert resp.status_code == 409
+
+
 def _seed_scene(client, scene, template=None):
     """Attach `scene` to the client's current session (in the module-level store)."""
     from app.models.scene import TemplateName
     from app.routes import store
+    from app.templates.registry import static_ref
 
     session_id = client.cookies.get("session_id")
     session = store.get(session_id)
     session.scenes[scene.scene_id] = scene
     session.scene_order.append(scene.scene_id)
     if template is not None:
-        session.scene_requested_template[scene.scene_id] = TemplateName(template)
+        session.scene_requested_template[scene.scene_id] = static_ref(TemplateName(template))
     return session
 
 
 def _number_line_scene(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     thumb = tmp_path / "t.png"
     thumb.write_bytes(b"png")
     return Scene(
         scene_id="s1",
         candidate_id="c1",
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
@@ -436,13 +524,14 @@ def test_render_renders_only_approved_from_stored_params(tmp_path):
 def test_render_returns_manual_scene_results(tmp_path):
     from app.main import create_app
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = TestClient(create_app(), raise_server_exceptions=False)
     _upload_candidate(client)
     manual = Scene(
         scene_id="manual-1",
         manual_source_text="Show 3 + 4 on a number line.",
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"start": 3, "steps": [{"operation": "add", "amount": 4}]},
         status="approved",
@@ -613,6 +702,7 @@ def test_patch_unknown_scene_is_404():
 
 def test_retry_reextracts_same_template_and_keeps_scene_id(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidate(client)
@@ -621,7 +711,7 @@ def test_retry_reextracts_same_template_and_keeps_scene_id(tmp_path):
     fresh = Scene(
         scene_id="ignored-new-id",
         candidate_id="c1",
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
@@ -634,7 +724,7 @@ def test_retry_reextracts_same_template_and_keeps_scene_id(tmp_path):
     assert resp.status_code == 200
     assert resp.json()["scene_id"] == "s1"  # replaced in place
     # retried on the originally-picked template
-    assert assemble.call_args.kwargs["template"] == TemplateName.NUMBER_LINE
+    assert assemble.call_args.kwargs["template"] == static_ref(TemplateName.NUMBER_LINE)
 
 
 def test_retry_unknown_scene_is_404():
@@ -663,13 +753,14 @@ def test_reject_sets_status(tmp_path):
 
 def test_approve_fallback_scene_keeps_reason(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidate(client)
     fallback = Scene(
         scene_id="s2",
         candidate_id="c1",
-        template=TemplateName.TEXT_CARD,
+        template=static_ref(TemplateName.TEXT_CARD),
         grade_level=1,
         params={"headline": "x", "lines": ["y"]},
         status="fallback",
@@ -693,6 +784,7 @@ def test_approve_unknown_scene_is_404():
 
 def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
@@ -701,7 +793,7 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
     chained = Scene(
         scene_id="s1",
         candidate_ids=["c1", "c2"],
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"items": [
             {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
@@ -727,16 +819,17 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
 
 def test_chain_combines_two_scenes_into_one(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     scene1 = Scene(
-        scene_id="s1", candidate_id="c1", template=TemplateName.NUMBER_LINE,
+        scene_id="s1", candidate_id="c1", template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1, params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
     )
     scene2 = Scene(
-        scene_id="s2", candidate_id="c2", template=TemplateName.NUMBER_LINE,
+        scene_id="s2", candidate_id="c2", template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1, params={"start": 5, "steps": [{"operation": "subtract", "amount": 1}]},
         status="pending_review",
     )
@@ -809,11 +902,12 @@ def test_chain_rejects_non_pending_review_scene(tmp_path):
 
 def test_chain_rejects_already_chained_scene(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     already_chained = Scene(
-        scene_id="s1", candidate_ids=["ca", "cb"], template=TemplateName.NUMBER_LINE,
+        scene_id="s1", candidate_ids=["ca", "cb"], template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"items": [
             {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
@@ -832,12 +926,13 @@ def test_chain_rejects_already_chained_scene(tmp_path):
 
 def test_chain_rejects_mismatched_templates(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     number_line = _number_line_scene(tmp_path)
     array_grid = Scene(
-        scene_id="s2", candidate_id="c2", template=TemplateName.ARRAY_GRID,
+        scene_id="s2", candidate_id="c2", template=static_ref(TemplateName.ARRAY_GRID),
         grade_level=1, params={"rows": 2, "cols": 3}, status="pending_review",
     )
     _seed_scene(client, number_line)
@@ -848,16 +943,17 @@ def test_chain_rejects_mismatched_templates(tmp_path):
 
 def test_chain_rejects_text_card_template(tmp_path):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     scene1 = Scene(
-        scene_id="s1", candidate_id="c1", template=TemplateName.TEXT_CARD,
+        scene_id="s1", candidate_id="c1", template=static_ref(TemplateName.TEXT_CARD),
         grade_level=1, params={"headline": "x", "lines": ["y"]},
         status="pending_review",
     )
     scene2 = Scene(
-        scene_id="s2", candidate_id="c2", template=TemplateName.TEXT_CARD,
+        scene_id="s2", candidate_id="c2", template=static_ref(TemplateName.TEXT_CARD),
         grade_level=1, params={"headline": "x", "lines": ["y"]},
         status="pending_review",
     )
@@ -1062,11 +1158,12 @@ def test_ungroup_unknown_or_non_chain_scene_is_404(tmp_path):
 
 def _chained_number_line_scene(candidate_ids=("c1", "c2")):
     from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
 
     return Scene(
         scene_id="s1",
         candidate_ids=list(candidate_ids),
-        template=TemplateName.NUMBER_LINE,
+        template=static_ref(TemplateName.NUMBER_LINE),
         grade_level=1,
         params={"items": [
             {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
