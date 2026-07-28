@@ -21,6 +21,10 @@ class DraftNotRefinableError(Exception):
     pass
 
 
+class DraftRefinementFailedError(Exception):
+    pass
+
+
 _REFINABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
 
 
@@ -62,12 +66,22 @@ def reject_and_refine(
     # is built with expire_on_commit=False (see app/meta/db.py) — the same
     # pattern app/meta/generation_pipeline.py:run_generation_job already
     # relies on when passing `job` across session boundaries.
-    return generate_and_validate_revision(
-        job=job,
-        fingerprint=Fingerprint.model_validate_json(job.fingerprint_json),
-        observations=observations,
-        prior_proposal=prior_proposal,
-        reviewer_feedback=feedback,
-        revision=revision + 1,
-        parent_draft_id=parent_draft_id,
-    )
+    try:
+        return generate_and_validate_revision(
+            job=job,
+            fingerprint=Fingerprint.model_validate_json(job.fingerprint_json),
+            observations=observations,
+            prior_proposal=prior_proposal,
+            reviewer_feedback=feedback,
+            revision=revision + 1,
+            parent_draft_id=parent_draft_id,
+        )
+    except Exception as exc:
+        with meta_session() as session:
+            draft = session.get(TemplateDraft, draft_id)
+            if draft is not None and draft.status == DRAFT_REJECTED:
+                draft.status = DRAFT_PENDING_REVIEW
+                draft.updated_at = datetime.now(timezone.utc)
+        raise DraftRefinementFailedError(
+            "draft refinement failed; the draft was restored to pending review and can be retried"
+        ) from exc

@@ -9,7 +9,11 @@ from app.config import get_settings
 from app.meta.artifacts import artifact_path
 from app.meta.db import meta_session
 from app.meta.models import FallbackObservation, TemplateDraft, TemplateDraftFixture
-from app.meta.review_actions import DraftNotRefinableError, reject_and_refine
+from app.meta.review_actions import (
+    DraftNotRefinableError,
+    DraftRefinementFailedError,
+    reject_and_refine,
+)
 
 router = APIRouter(prefix="/meta")
 
@@ -151,6 +155,8 @@ def reject_draft(draft_id: str, request: RejectRequest):
             max_refinements=settings.meta_draft_max_refinements,
         )
     except DraftNotRefinableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DraftRefinementFailedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if new_draft is None:

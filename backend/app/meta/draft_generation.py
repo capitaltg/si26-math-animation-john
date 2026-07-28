@@ -78,4 +78,9 @@ def propose_template_draft(
         user_message=user_message,
         tools=[{"name": "propose_template_draft", "schema": DraftProposal.model_json_schema()}],
     )
-    return DraftProposal.model_validate(raw)
+    proposal = DraftProposal.model_validate(raw)
+    observation_ids = {observation.id for observation in observations}
+    for fixture in proposal.fixtures:
+        if fixture.observation_id is not None and fixture.observation_id not in observation_ids:
+            raise ValueError(f"fixture references unknown observation_id: {fixture.observation_id}")
+    return proposal

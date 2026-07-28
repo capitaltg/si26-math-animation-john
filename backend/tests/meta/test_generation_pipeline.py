@@ -21,6 +21,8 @@ def engine(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "get_engine", lambda: engine)
     db.create_all(engine)
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     get_settings.cache_clear()
     yield engine
     get_settings.cache_clear()
@@ -112,3 +114,22 @@ def test_run_generation_job_fails_job_when_proposal_raises(mock_call, engine):
 
 def test_run_generation_job_returns_none_when_nothing_queued(engine):
     assert run_generation_job(owner="worker-1") is None
+
+
+@pytest.mark.parametrize(
+    ("feature_enabled", "codegen_enabled"),
+    [(False, True), (True, False)],
+)
+@patch("app.meta.draft_generation.call_with_tool")
+def test_run_generation_job_leaves_job_queued_when_generation_is_disabled(
+    mock_call, engine, monkeypatch, feature_enabled, codegen_enabled
+):
+    _seed_job_and_observation()
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", str(int(feature_enabled)))
+    monkeypatch.setenv("META_CODEGEN_ENABLED", str(int(codegen_enabled)))
+    get_settings.cache_clear()
+
+    assert run_generation_job(owner="worker-1") is None
+    mock_call.assert_not_called()
+    with db.meta_session() as session:
+        assert session.get(models.GenerationJob, "job-1").status == models.JOB_QUEUED

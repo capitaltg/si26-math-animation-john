@@ -61,6 +61,9 @@ def generate_and_validate_revision(
 
 def run_generation_job(*, owner: str) -> TemplateDraft | None:
     settings = get_settings()
+    if not settings.meta_templates_enabled or not settings.meta_codegen_enabled:
+        return None
+
     now = datetime.now(timezone.utc)
     with meta_session() as session:
         job = claim_next_job(session, owner=owner, lease_seconds=settings.job_lease_seconds, now=now)

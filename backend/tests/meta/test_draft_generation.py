@@ -85,6 +85,14 @@ def test_propose_template_draft_rejects_malformed_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_rejects_fixture_for_unknown_observation(mock_call):
+    mock_call.return_value = ("propose_template_draft", _raw_proposal("unknown-observation"))
+
+    with pytest.raises(ValueError, match="unknown observation_id"):
+        propose_template_draft(_fingerprint(), [_observation()])
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_refinement_call_includes_prior_proposal_and_feedback(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal())
     prior = DraftProposal.model_validate(_raw_proposal())

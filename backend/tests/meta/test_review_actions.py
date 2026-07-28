@@ -22,6 +22,8 @@ def engine(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "get_engine", lambda: engine)
     db.create_all(engine)
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     get_settings.cache_clear()
     yield engine
     get_settings.cache_clear()

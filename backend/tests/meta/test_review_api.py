@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
     db.create_all(engine)
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     get_settings.cache_clear()
     from app.main import create_app
     yield TestClient(create_app())
@@ -130,6 +131,22 @@ def test_reject_draft_creates_new_revision(mock_call, client):
     body = resp.json()
     assert body["needs_manual_authoring"] is False
     assert body["new_draft"]["revision"] == 2
+
+
+@patch("app.meta.draft_generation.call_with_tool")
+def test_reject_draft_restores_pending_review_when_refinement_fails(mock_call, client):
+    draft = _seed_pending_review_draft()
+    mock_call.side_effect = RuntimeError("bedrock unavailable")
+
+    resp = client.post(f"/meta/drafts/{draft.id}/reject", json={"feedback": "too loose"})
+
+    assert resp.status_code == 409
+    assert "retried" in resp.json()["detail"]
+    with db.meta_session() as session:
+        original = session.get(models.TemplateDraft, draft.id)
+        assert original.status == models.DRAFT_PENDING_REVIEW
+        assert original.reviewer_feedback == "too loose"
+        assert session.query(models.TemplateReview).filter_by(draft_id=draft.id).count() == 1
 
 
 def test_approve_draft_is_disabled(client):
