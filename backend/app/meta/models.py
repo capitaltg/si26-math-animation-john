@@ -156,3 +156,27 @@ class TemplateReview(Base):
     reviewer_label: Mapped[str] = mapped_column(String(128), nullable=False)
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+TEMPLATE_VERSION_ENABLED = "enabled"
+TEMPLATE_VERSION_DISABLED = "disabled"
+TEMPLATE_VERSION_REVOKED = "revoked"
+
+
+class TemplateVersion(Base):
+    __tablename__ = "template_versions"
+    __table_args__ = (
+        Index("ix_template_versions_fingerprint_key", "fingerprint_key"),
+        Index("ix_template_versions_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    fingerprint_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    template_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    draft_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("template_drafts.id"), nullable=True
+    )
+    artifact_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
