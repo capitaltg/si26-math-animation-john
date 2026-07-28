@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.config import get_settings
 from app.routes import router
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    if get_settings().meta_templates_enabled:
+        from app.meta.review_api import router as meta_review_router
+        app.include_router(meta_review_router)
     return app
 
 
