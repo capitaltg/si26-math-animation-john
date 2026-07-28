@@ -140,3 +140,32 @@ def test_template_draft_requires_known_job(session):
     ))
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_template_version_insert_and_query_by_fingerprint(session):
+    session.add(models.TemplateVersion(
+        id="tv-1", fingerprint_key="k1", template_name="decimal_comparison_grid",
+        draft_id=None, artifact_hash="sha256:x", status=models.TEMPLATE_VERSION_ENABLED,
+        created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    rows = (
+        session.query(models.TemplateVersion)
+        .filter_by(fingerprint_key="k1", status=models.TEMPLATE_VERSION_ENABLED)
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].template_name == "decimal_comparison_grid"
+
+
+def test_template_version_requires_known_draft_when_set(session):
+    from sqlalchemy.exc import IntegrityError
+
+    session.add(models.TemplateVersion(
+        id="tv-orphan", fingerprint_key="k1", template_name="x",
+        draft_id="ghost-draft", artifact_hash="sha256:x", status=models.TEMPLATE_VERSION_ENABLED,
+        created_at=_now(), updated_at=_now(),
+    ))
+    with pytest.raises(IntegrityError):
+        session.flush()

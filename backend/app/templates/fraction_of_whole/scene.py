@@ -3,6 +3,11 @@ from manim import BLUE, UP, Create, Scene, Text, Write
 from app.templates._shared.fit_to_frame import fit_width
 from app.templates._shared.fraction_cells import build_fraction_cells
 
+# Bumped by hand whenever a human changes this template's scene.py/params.py/guard.py.
+# Included in its TemplateRef.artifact_hash (spec §8) so a contract change invalidates
+# any previously-pinned Scene rather than silently reusing stale rendering behavior.
+CONTRACT_VERSION = 1
+
 
 def draw_fraction_of_whole(scene, params):
     numerator = params.numerator

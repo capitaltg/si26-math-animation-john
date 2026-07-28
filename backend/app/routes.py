@@ -10,8 +10,13 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import get_settings
 from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
-from app.models.scene import Scene, TemplateName
-from app.pipeline.classification import classify_candidate
+from app.models.scene import (
+    Scene,
+    TemplateName,
+    TemplateRef,
+    TemplateVersionMismatchError,
+)
+from app.pipeline.classification import ClassificationResult, classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.parsing import extract_slide_texts
 from app.pipeline.process_scene import assemble_scene
@@ -22,7 +27,7 @@ from app.render.full_render import (
     render_scene_to_mp4,
 )
 from app.session import SessionStore
-from app.templates.registry import get_chained_template, get_template
+from app.templates.registry import get_chained_template, get_template, resolve_static_ref
 
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
@@ -52,6 +57,7 @@ class OptionsRequest(BaseModel):
 
 class TemplateOptionOut(BaseModel):
     template: TemplateName
+    version_id: str
     rationale: str
 
 
@@ -198,6 +204,7 @@ def get_options(
                 templates=[
                     TemplateOptionOut(
                         template=option.template,
+                        version_id=option.version_id,
                         rationale=option.rationale,
                     )
                     for option in classification.options
@@ -229,11 +236,11 @@ def render(session_id: str | None = Cookie(default=None)):
             if scene.candidate_ids:
                 _, params_cls = get_chained_template(scene.template)
                 params = params_cls.model_validate(scene.params)
-                render_chained_scene_to_mp4(scene.template, params, output_path)
+                render_chained_scene_to_mp4(scene.template.name, params, output_path)
             else:
                 _, params_cls = get_template(scene.template)
                 params = params_cls.model_validate(scene.params)
-                render_scene_to_mp4(scene.template, params, output_path)
+                render_scene_to_mp4(scene.template.name, params, output_path)
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
             status = "fallback" if scene.fallback_reason else "approved"
@@ -283,7 +290,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
         candidate_ids=scene.candidate_ids,
-        template=scene.template.value if scene.template else None,
+        template=scene.template.name.value if scene.template else None,
         grade_level=scene.grade_level,
         grade_overridden=scene.grade_overridden,
         params=scene.params,
@@ -337,7 +344,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
     if len(candidate_ids) != len(set(candidate_ids)):
         raise HTTPException(status_code=400, detail="Duplicate candidate ids are not allowed")
 
-    validated = []
+    validated: list[tuple[Candidate, ClassificationResult, TemplateRef]] = []
     for pick in request.picks:
         candidate = session.candidates.get(pick.candidate_id)
         if candidate is None:
@@ -357,7 +364,17 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
                     f"candidate {pick.candidate_id}"
                 ),
             )
-        validated.append((candidate, classification, TemplateName(pick.template)))
+        selected_option = next(
+            option for option in classification.options if option.template.value == pick.template
+        )
+        try:
+            template = resolve_static_ref(selected_option.template, selected_option.version_id)
+        except TemplateVersionMismatchError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="The selected template contract changed; request options again",
+            ) from exc
+        validated.append((candidate, classification, template))
 
     session.scenes.clear()
     session.scene_order.clear()
@@ -380,7 +397,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
             candidate_id=candidate.candidate_id,
             source_excerpt=candidate.source_excerpt,
             classification=classification,
-            picked_template=template,
+            picked_template=template.name,
             scene_status=scene.status,
             failure_kind=scene.failure_kind,
         )
@@ -433,7 +450,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     except KeyError:
         raise HTTPException(
             status_code=400,
-            detail=f"Template {template.value} cannot be combined into a chain",
+            detail=f"Template {template.name.value} cannot be combined into a chain",
         )
 
     _, params_cls = get_template(template)
@@ -442,7 +459,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
 
     thumb_path = session.output_dir / f"chain-{uuid4()}.png"
     try:
-        render_chained_scene_thumbnail(template, chained_params, thumb_path)
+        render_chained_scene_thumbnail(template.name, chained_params, thumb_path)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
 
@@ -544,9 +561,9 @@ def edit_scene(
         out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
         try:
             if scene.candidate_ids:
-                render_chained_scene_thumbnail(scene.template, params, out)
+                render_chained_scene_thumbnail(scene.template.name, params, out)
             else:
-                render_scene_thumbnail(scene.template, params, out)
+                render_scene_thumbnail(scene.template.name, params, out)
         except Exception as exc:
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")

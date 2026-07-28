@@ -2,6 +2,11 @@ from manim import *
 
 from app.templates._shared.fit_to_frame import fit_width
 
+# Bumped by hand whenever a human changes this template's scene.py/params.py/guard.py.
+# Included in its TemplateRef.artifact_hash (spec §8) so a contract change invalidates
+# any previously-pinned Scene rather than silently reusing stale rendering behavior.
+CONTRACT_VERSION = 1
+
 
 def draw_balance_scale(scene, params):
     left_a, left_b = params.left_terms
