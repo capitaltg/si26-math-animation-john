@@ -126,3 +126,39 @@ def test_get_chained_template_accepts_a_matching_template_ref():
     ref = static_ref("number_line")
     scene_cls, _ = get_chained_template(ref)
     assert scene_cls is ChainedNumberLineScene
+
+
+def test_is_static_template_name_is_true_for_a_static_name():
+    from app.templates.registry import is_static_template_name
+
+    assert is_static_template_name("number_line") is True
+    assert is_static_template_name("decimal_comparison_grid") is False
+
+
+def test_get_template_resolves_a_dynamic_ref(monkeypatch):
+    from app.models.scene import TemplateRef
+    from app.templates import registry
+
+    sentinel = ("SceneClass", "ParamsClass")
+    monkeypatch.setattr(
+        "app.meta.dynamic_templates.get_dynamic_template", lambda ref: sentinel
+    )
+    ref = TemplateRef(name="decimal_comparison_grid", version_id="v1", artifact_hash="sha256:x")
+
+    assert registry.get_template(ref) == sentinel
+
+
+def test_get_chained_template_rejects_a_dynamic_name():
+    from app.templates.registry import get_chained_template
+
+    with pytest.raises(KeyError):
+        get_chained_template("decimal_comparison_grid")
+
+
+def test_get_chained_template_rejects_a_dynamic_ref():
+    from app.models.scene import TemplateRef
+    from app.templates.registry import get_chained_template
+
+    ref = TemplateRef(name="decimal_comparison_grid", version_id="v1", artifact_hash="sha256:x")
+    with pytest.raises(KeyError):
+        get_chained_template(ref)

@@ -76,6 +76,14 @@ _CONTRACT_VERSIONS = {
 _TEMPLATES_DIR = Path(__file__).resolve().parent
 
 
+def is_static_template_name(name: TemplateName | str) -> bool:
+    try:
+        TemplateName(name)
+        return True
+    except ValueError:
+        return False
+
+
 @lru_cache(maxsize=None)
 def _artifact_hash(name: TemplateName) -> str:
     return _compute_artifact_hash(name)
@@ -128,8 +136,21 @@ def _resolve_key(ref: TemplateName | str | TemplateRef) -> TemplateName:
 
 
 def get_template(name: TemplateName | str | TemplateRef) -> tuple[type, type]:
-    return _REGISTRY[_resolve_key(name)]
+    ref_name = name.name if isinstance(name, TemplateRef) else name
+    if is_static_template_name(ref_name):
+        return _REGISTRY[_resolve_key(name)]
+
+    from app.meta.dynamic_templates import get_dynamic_template
+
+    if not isinstance(name, TemplateRef):
+        raise TypeError(
+            f"A dynamic template name ({ref_name!r}) requires a full TemplateRef, not a bare name"
+        )
+    return get_dynamic_template(name)
 
 
 def get_chained_template(name: TemplateName | str | TemplateRef) -> tuple[type, type]:
+    ref_name = name.name if isinstance(name, TemplateRef) else name
+    if not is_static_template_name(ref_name):
+        raise KeyError(ref_name)
     return _CHAINED_REGISTRY[_resolve_key(name)]
