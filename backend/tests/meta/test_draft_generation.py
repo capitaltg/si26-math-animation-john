@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -85,11 +86,33 @@ def test_propose_template_draft_rejects_malformed_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_leaves_json_like_classifier_bullet_as_string(mock_call):
+    good = _raw_proposal()
+    good["classifier_bullet"] = '["shade","3/4"]'
+    mock_call.return_value = ("propose_template_draft", good)
+
+    proposal = propose_template_draft(_fingerprint(), [_observation()])
+
+    assert proposal.classifier_bullet == '["shade","3/4"]'
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_propose_template_draft_rejects_fixture_for_unknown_observation(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal("unknown-observation"))
 
     with pytest.raises(ValueError, match="unknown observation_id"):
         propose_template_draft(_fingerprint(), [_observation()])
+
+
+@patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_coerces_stringified_nested_field(mock_call):
+    bad = _raw_proposal()
+    bad["answer_expression"] = json.dumps(bad["answer_expression"])
+    mock_call.return_value = ("propose_template_draft", bad)
+
+    proposal = propose_template_draft(_fingerprint(), [_observation()])
+
+    assert proposal.answer_expression.node == "fraction"
 
 
 @patch("app.meta.draft_generation.call_with_tool")
