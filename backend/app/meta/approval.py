@@ -36,6 +36,7 @@ from app.meta.models import (
     TemplateDraftFixture,
     TemplateVersion,
 )
+from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 _TEMPLATE_NAME_RE = re.compile(r"[a-z][a-z0-9_]*")
 
@@ -113,14 +114,23 @@ def approve_draft_service(
                     "Validation report is stale: artifact hash mismatch"
                 )
 
-            # 5. Every guard predicate has a negative witness.
+            # 5. The report ran against the active validation runtime.
+            if (
+                report.get("compiler_version") != DSL_COMPILER_VERSION
+                or report.get("renderer_version") != DYNAMIC_RENDERER_VERSION
+            ):
+                raise ApprovalPreconditionError(
+                    "Validation report is stale: runtime version mismatch"
+                )
+
+            # 6. Every guard predicate has a negative witness.
             predicate_count = len(json.loads(draft.guard_document_json)["predicates"])
             if report.get("negative_predicate_coverage") != list(range(predicate_count)):
                 raise ApprovalPreconditionError(
                     "Validation report lacks complete negative-predicate coverage"
                 )
 
-            # 6. Enough real, human-confirmed positive fixtures.
+            # 7. Enough real, human-confirmed positive fixtures.
             verified_fixtures = session.execute(
                 select(func.count())
                 .select_from(TemplateDraftFixture)
@@ -137,7 +147,7 @@ def approve_draft_service(
                     "Draft has too few verified real fixtures to publish"
                 )
 
-            # 7. No revoked live version for this fingerprint.
+            # 8. No revoked live version for this fingerprint.
             revoked = session.execute(
                 select(func.count())
                 .select_from(TemplateVersion)
@@ -151,7 +161,7 @@ def approve_draft_service(
                     f"Fingerprint {draft.fingerprint_key} has a revoked live version"
                 )
 
-            # 8. template_name is a valid slug and not owned by a different
+            # 9. template_name is a valid slug and not owned by a different
             #    fingerprint's enabled version.
             if not _TEMPLATE_NAME_RE.fullmatch(template_name):
                 raise TemplateNameConflictError(
