@@ -51,14 +51,25 @@ _DRAFT_SYSTEM_PROMPT = (
 )
 
 
+_STRUCTURED_PROPOSAL_FIELDS = (
+    "params_document", "guard_document", "answer_expression", "animation_document", "fixtures",
+)
+
+
 def _coerce_stringified_json_fields(raw: dict) -> dict:
     """Bedrock tool-use output occasionally stringifies a nested object/array
     field instead of emitting it inline (seen so far on ``answer_expression``,
     whose schema is a recursive discriminated union). Undo that one layer of
     over-serialization before handing the payload to pydantic.
+
+    Restricted to the known structured (non-``str``) fields on
+    ``DraftProposal`` so a ``classifier_bullet`` string that happens to parse
+    as JSON (e.g. quoting a set like ``{2,3,4}``) is never coerced away from
+    the ``str`` its schema requires.
     """
     coerced = dict(raw)
-    for key, value in raw.items():
+    for key in _STRUCTURED_PROPOSAL_FIELDS:
+        value = raw.get(key)
         if not isinstance(value, str):
             continue
         try:
