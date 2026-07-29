@@ -38,6 +38,9 @@ function installFetchMock({ fixtureResponse } = {}) {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => draftDetail }
     }
@@ -86,6 +89,9 @@ function installApprovableFetchMock({ approveResponse } = {}) {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => approvableDraftDetail }
     }
@@ -108,6 +114,28 @@ it('lists pending drafts and opens one for review', async () => {
   fireEvent.click(screen.getByText('Review'))
   await waitFor(() => expect(screen.getByText(/use for fraction-of-whole bars/)).not.toBeNull())
   expect(screen.getByText(/5 apples/)).not.toBeNull()
+})
+
+it('lists failed-validation drafts for repair', async () => {
+  const failedValidationDraft = {
+    ...draftSummary,
+    id: 'draft-2',
+    fingerprint_key: 'needs-repair',
+    status: 'failed_validation',
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [failedValidationDraft] }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+
+  await waitFor(() => expect(screen.getByText('needs-repair')).not.toBeNull())
 })
 
 it('submits reject feedback and returns to the list', async () => {
@@ -182,6 +210,9 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
     }
     if (url === '/meta/drafts/draft-1') {
       draftDetailCalls += 1

@@ -39,10 +39,16 @@ export default function MetaReviewPanel() {
     setLoading(true)
     setError(null)
     try {
-      const resp = await fetch('/meta/drafts?status=pending_review')
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
-      setDrafts(data)
+      const responses = await Promise.all([
+        fetch('/meta/drafts?status=pending_review'),
+        fetch('/meta/drafts?status=failed_validation'),
+      ])
+      const draftLists = await Promise.all(responses.map(async (resp) => {
+        const data = await responseJson(resp)
+        if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
+        return data
+      }))
+      setDrafts([...new Map(draftLists.flat().map((draft) => [draft.id, draft])).values()])
     } catch (err) {
       setError(err.message)
     } finally {
