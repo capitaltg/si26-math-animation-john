@@ -56,6 +56,7 @@ export default function MetaReviewPanel() {
   const [previewSrc, setPreviewSrc] = useState(null)
   const previewBlobUrlRef = useRef(null)
   const previewLoadIdRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   function clearPreview() {
     if (previewBlobUrlRef.current) {
@@ -63,6 +64,15 @@ export default function MetaReviewPanel() {
       previewBlobUrlRef.current = null
     }
     setPreviewSrc(null)
+  }
+
+  // Returning to the list view (after a reject/approve or via "Back to
+  // list") must revoke the current preview blob URL: the <img> disappears
+  // because it's gated on `selected`, but the blob itself would otherwise
+  // stay alive -- and leaked -- until the next loadPreview call or unmount.
+  function returnToList() {
+    clearPreview()
+    setSelected(null)
   }
 
   async function loadPreview(url) {
@@ -80,6 +90,14 @@ export default function MetaReviewPanel() {
       if (!resp.ok) return
       const blob = await resp.blob()
       const objectUrl = URL.createObjectURL(blob)
+      if (!isMountedRef.current) {
+        // The component unmounted while this fetch/blob was in flight. The
+        // unmount cleanup below already ran (and had nothing to revoke at
+        // the time), so this now-orphaned blob URL is ours alone to clean
+        // up -- revoke it immediately and don't touch state.
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
       if (previewLoadIdRef.current !== loadId) {
         // A newer call has since started (and possibly already resolved).
         // This result is stale: drop it and revoke the blob URL we just
@@ -97,6 +115,7 @@ export default function MetaReviewPanel() {
   }
 
   useEffect(() => () => {
+    isMountedRef.current = false
     if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current)
   }, [])
 
@@ -158,7 +177,7 @@ export default function MetaReviewPanel() {
       })
       const data = await responseJson(resp)
       if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not reject draft'))
-      setSelected(null)
+      returnToList()
       await loadDrafts()
     } catch (err) {
       setError(err.message)
@@ -215,7 +234,7 @@ export default function MetaReviewPanel() {
       })
       const data = await responseJson(resp)
       if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not approve draft'))
-      setSelected(null)
+      returnToList()
       await loadDrafts()
     } catch (err) {
       setError(err.message)
@@ -273,7 +292,7 @@ export default function MetaReviewPanel() {
 
       {selected && (
         <section>
-          <button onClick={() => setSelected(null)}>Back to list</button>
+          <button onClick={returnToList}>Back to list</button>
           <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
           <p>{selected.classifier_bullet}</p>
           {previewSrc && (

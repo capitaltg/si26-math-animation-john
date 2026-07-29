@@ -433,6 +433,88 @@ it('discards an out-of-order preview resolution and revokes its now-stale blob U
   expect(screen.getByAltText('preview').src).toBe(freshBlobSrc)
 })
 
+it('revokes the preview blob URL when rejecting a draft returns to the list', async () => {
+  const fetchMock = installFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:abc'))
+
+  fireEvent.change(screen.getByRole('textbox', { name: 'Feedback' }), { target: { value: 'tighten the guard' } })
+  fireEvent.click(screen.getByText('Reject and request refinement'))
+
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`)
+})
+
+it('revokes the preview blob URL when approving a draft returns to the list', async () => {
+  const fetchMock = installApprovableFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:abc'))
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+  const approveButton = screen.getByRole('button', { name: 'Approve and publish' })
+  await waitFor(() => expect(approveButton.disabled).toBe(false))
+  fireEvent.click(approveButton)
+
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${approvableDraftDetail.preview_url}`)
+})
+
+it('revokes the preview blob URL when clicking Back to list', async () => {
+  installFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:abc'))
+
+  fireEvent.click(screen.getByText('Back to list'))
+
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`)
+})
+
+it('revokes a preview blob URL created by a fetch that resolves after the component unmounts', async () => {
+  let resolvePreviewFetch
+  const previewFetchPromise = new Promise((resolve) => { resolvePreviewFetch = resolve })
+
+  const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      return { ok: true, json: async () => draftDetail }
+    }
+    if (url === draftDetail.preview_url) {
+      // Deliberately left pending: the fetch/blob() resolution must land
+      // after the component has already unmounted below.
+      return previewFetchPromise
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  const { unmount } = render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(draftDetail.preview_url, expect.anything()))
+
+  unmount()
+
+  // Let the in-flight preview fetch resolve only now, after unmount. Nothing
+  // was in previewBlobUrlRef for the unmount cleanup to revoke, so the mount
+  // guard in loadPreview must revoke the just-created blob URL itself.
+  resolvePreviewFetch({ ok: true, blob: async () => ({ __sourceUrl: draftDetail.preview_url }) })
+
+  await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`))
+})
+
 it('shows approve errors from the server', async () => {
   installApprovableFetchMock({
     approveResponse: {
