@@ -34,9 +34,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
+    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
     get_settings.cache_clear()
     from app.main import create_app
-    yield TestClient(create_app())
+    yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
     get_settings.cache_clear()
 
 
@@ -49,6 +50,25 @@ def approval_client(tmp_path, monkeypatch):
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
+    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
+    get_settings.cache_clear()
+    from app.main import create_app
+    yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def client_without_token(tmp_path, monkeypatch):
+    """Same server config as `client`, but the TestClient sends no Authorization
+    header at all -- proves the gate rejects an absent header, not just a wrong one."""
+    engine = db.make_engine(tmp_path / "meta.db")
+    monkeypatch.setattr(db, "get_engine", lambda: engine)
+    db.create_all(engine)
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
+    monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
+    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
     get_settings.cache_clear()
     from app.main import create_app
     yield TestClient(create_app())
@@ -483,4 +503,41 @@ def test_review_router_absent_when_meta_templates_disabled(monkeypatch, tmp_path
     disabled_client = TestClient(create_app())
     resp = disabled_client.get("/meta/drafts")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("method,path", [
+    ("get", "/meta/drafts"),
+    ("get", "/meta/drafts/any-id"),
+    ("get", "/meta/preview/any-hash"),
+    ("post", "/meta/drafts/any-id/fixtures/any-fixture"),
+    ("post", "/meta/drafts/any-id/reject"),
+    ("post", "/meta/drafts/any-id/approve"),
+])
+def test_meta_routes_require_a_bearer_token(method, path, client_without_token):
+    kwargs = {"json": {}} if method == "post" else {}
+    resp = getattr(client_without_token, method)(path, **kwargs)
+    assert resp.status_code == 401
+
+
+def test_approve_fails_closed_when_token_not_configured(tmp_path, monkeypatch):
+    engine = db.make_engine(tmp_path / "meta.db")
+    monkeypatch.setattr(db, "get_engine", lambda: engine)
+    db.create_all(engine)
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
+    monkeypatch.delenv("META_REVIEWER_TOKEN", raising=False)
+    get_settings.cache_clear()
+    from app.main import create_app
+    unconfigured_client = TestClient(create_app())
+
+    resp = unconfigured_client.post(
+        "/meta/drafts/any-id/approve",
+        json={"template_name": "apples", "math_semantics_confirmed": True},
+        headers={"Authorization": "Bearer anything"},
+    )
+
+    assert resp.status_code == 401
+    assert "not configured" in resp.json()["detail"]
+    get_settings.cache_clear()
     get_settings.cache_clear()
