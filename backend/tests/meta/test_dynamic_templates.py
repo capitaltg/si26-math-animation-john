@@ -229,3 +229,22 @@ def test_get_dynamic_template_rejects_a_ref_with_a_mismatched_hash(session):
 
     with pytest.raises(TemplateArtifactMismatchError):
         get_dynamic_template(tampered)
+
+
+def test_get_dynamic_template_rejects_a_tampered_hash_after_cache_is_populated(session):
+    """A version_id already cached from a prior successful (correct-hash) call must
+    NOT let a later call with a tampered artifact_hash bypass the hash check --
+    the cache must not shadow the mismatch validation."""
+    from app.models.scene import TemplateArtifactMismatchError
+    from app.meta.dynamic_templates import get_dynamic_template, resolve_dynamic_ref
+
+    _draft, version = _seed_draft_and_version(session, template_name="my_template")
+    ref = resolve_dynamic_ref(session, "my_template", version.id)
+
+    # Populate the cache with a correct, successful call first.
+    get_dynamic_template(ref)
+
+    tampered = ref.model_copy(update={"artifact_hash": "sha256:tampered"})
+
+    with pytest.raises(TemplateArtifactMismatchError):
+        get_dynamic_template(tampered)

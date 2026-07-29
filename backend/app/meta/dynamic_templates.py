@@ -98,22 +98,26 @@ def resolve_dynamic_ref(session: Session, name: str, version_id: str) -> Templat
 # Cache keyed by version_id: a TemplateVersion row is immutable once created (a new
 # draft revision publishes a new TemplateVersion row, it never mutates an existing
 # one), so the compiled (scene_cls, params_cls) pair for a given version_id never
-# changes. artifact_hash mismatches are a caller-tampering / stale-ref signal (see
-# get_dynamic_template below), not a case this cache needs to invalidate on.
+# changes. This cache only ever short-circuits the expensive *compilation* work
+# (params/guard/animation document parsing + compile_draft_documents) -- it must
+# NOT be consulted before the artifact_hash on the ref has been checked against
+# the live DB row, since a caller can present the same version_id together with a
+# tampered/stale artifact_hash and that must always raise
+# TemplateArtifactMismatchError, even for a version_id whose (correct-hash) result
+# is already cached.
 _DYNAMIC_TEMPLATE_CACHE: dict[str, tuple[type, type]] = {}
 
 
 def get_dynamic_template(ref: TemplateRef) -> tuple[type, type]:
-    """Compile (or fetch from cache) the (scene_cls, params_cls) pair for a ref.
+    """Validate a ref against the live DB row, then fetch (or compile) the
+    (scene_cls, params_cls) pair for it.
 
     Opens its own meta_session rather than accepting one, mirroring
     app.templates.registry.get_template's session-free signature -- callers pass
-    only the pinned TemplateRef, not a live DB session.
+    only the pinned TemplateRef, not a live DB session. The DB lookup and
+    artifact_hash check always run, on every call (a single cheap session.get);
+    only the compilation step below is skipped on a cache hit.
     """
-    cached = _DYNAMIC_TEMPLATE_CACHE.get(ref.version_id)
-    if cached is not None:
-        return cached
-
     from app.meta.db import meta_session
 
     with meta_session() as session:
@@ -127,6 +131,11 @@ def get_dynamic_template(ref: TemplateRef) -> tuple[type, type]:
                 f"TemplateRef for {ref.name!r} has artifact_hash {ref.artifact_hash!r}, "
                 f"but template_versions row {ref.version_id!r} has {version.artifact_hash!r}"
             )
+
+        cached = _DYNAMIC_TEMPLATE_CACHE.get(ref.version_id)
+        if cached is not None:
+            return cached
+
         draft = session.get(TemplateDraft, version.draft_id)
         params_document = ParamsDocument.model_validate_json(draft.params_document_json)
         guard_document = GuardDocument.model_validate_json(draft.guard_document_json)
