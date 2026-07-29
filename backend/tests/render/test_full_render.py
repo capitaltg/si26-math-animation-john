@@ -7,6 +7,7 @@ from app.models.scene import TemplateName
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.templates.array_grid.params import ArrayGridParams
 from app.templates.number_line.params import NumberLineParams, NumberLineStep
+from app.templates.registry import static_ref
 
 
 def test_render_number_line_scene_produces_mp4(tmp_path):
@@ -20,7 +21,7 @@ def test_render_number_line_scene_produces_mp4(tmp_path):
     output_path = tmp_path / "scene.mp4"
     output_path.write_bytes(b"stale destination")
 
-    result_path = render_scene_to_mp4(TemplateName.NUMBER_LINE, params, output_path)
+    result_path = render_scene_to_mp4(static_ref(TemplateName.NUMBER_LINE), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
@@ -32,7 +33,7 @@ def test_render_array_grid_scene_produces_thumbnail(tmp_path):
     params = ArrayGridParams(rows=2, cols=3)
     output_path = tmp_path / "thumb.png"
 
-    result_path = render_scene_thumbnail(TemplateName.ARRAY_GRID, params, output_path)
+    result_path = render_scene_thumbnail(static_ref(TemplateName.ARRAY_GRID), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
@@ -50,13 +51,12 @@ def test_failed_rerender_preserves_existing_artifact(mock_run, tmp_path):
     output_path.write_bytes(b"previous successful thumbnail")
 
     with pytest.raises(RuntimeError, match="Render subprocess failed"):
-        render_scene_thumbnail(TemplateName.ARRAY_GRID, params, output_path)
+        render_scene_thumbnail(static_ref(TemplateName.ARRAY_GRID), params, output_path)
 
     assert output_path.read_bytes() == b"previous successful thumbnail"
 
 
 def test_render_chained_number_line_scene_produces_mp4(tmp_path):
-    from app.models.scene import TemplateName
     from app.render.full_render import render_chained_scene_to_mp4
     from app.templates.number_line.params import ChainedNumberLineParams, NumberLineParams, NumberLineStep
 
@@ -66,7 +66,7 @@ def test_render_chained_number_line_scene_produces_mp4(tmp_path):
     ])
     output_path = tmp_path / "chain.mp4"
 
-    result_path = render_chained_scene_to_mp4(TemplateName.NUMBER_LINE, params, output_path)
+    result_path = render_chained_scene_to_mp4(static_ref(TemplateName.NUMBER_LINE), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
@@ -87,9 +87,36 @@ def test_render_chained_number_line_scene_produces_thumbnail(tmp_path):
     ])
     output_path = tmp_path / "chain-thumb.png"
 
-    result_path = render_chained_scene_thumbnail(TemplateName.NUMBER_LINE, params, output_path)
+    result_path = render_chained_scene_thumbnail(static_ref(TemplateName.NUMBER_LINE), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
     assert output_path.suffix == ".png"
     assert output_path.stat().st_size > 0
+
+
+def test_run_render_worker_passes_the_full_template_ref_as_json(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from app.models.scene import TemplateName
+    from app.render.full_render import render_scene_to_mp4
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+    from app.templates.registry import static_ref
+
+    ref = static_ref(TemplateName.NUMBER_LINE)
+    params = NumberLineParams(start=4, steps=[NumberLineStep(operation="add", amount=3)])
+    output_path = tmp_path / "out.mp4"
+
+    with patch("app.render.full_render.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        render_scene_to_mp4(ref, params, output_path)
+
+    argv = mock_run.call_args[0][0]
+    assert argv[1] == "-m"
+    assert argv[2] == "app.render.render_worker"
+    # argv[3] is now the TemplateRef JSON, not a bare template-name string
+    # (argv[0] is sys.executable, argv[4:] are params_json_path/output_path/mode/scratch_dir/chain_flag, unchanged).
+    import json as _json
+
+    passed_ref = _json.loads(argv[3])
+    assert passed_ref == {"name": "number_line", "version_id": ref.version_id, "artifact_hash": ref.artifact_hash}

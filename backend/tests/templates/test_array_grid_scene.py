@@ -4,6 +4,7 @@ from app.models.scene import TemplateName
 from app.render.full_render import render_scene_to_mp4
 from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
 from app.templates.array_grid.scene import draw_array_grid
+from app.templates.registry import static_ref
 
 
 class _StubScene:
@@ -148,7 +149,7 @@ def test_array_grid_chain_renders_to_mp4(tmp_path):
     )
     output_path = tmp_path / "array_grid.mp4"
 
-    result_path = render_scene_to_mp4(TemplateName.ARRAY_GRID, params, output_path)
+    result_path = render_scene_to_mp4(static_ref(TemplateName.ARRAY_GRID), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()

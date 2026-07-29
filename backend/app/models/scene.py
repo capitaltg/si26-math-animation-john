@@ -18,7 +18,7 @@ class TemplateName(str, Enum):
 class TemplateRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    name: TemplateName
+    name: str
     version_id: str
     artifact_hash: str
 

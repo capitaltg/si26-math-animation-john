@@ -58,8 +58,12 @@ def params_number_tokens(params) -> list[str]:
     return default_number_tokens(params)
 
 
-def params_derived_totals(params) -> list[tuple[str, list[str]]]:
-    """(total_token, [component_tokens]) pairs a template vouches for.
+def params_derived_totals(params) -> list[tuple[str, list[str], str]]:
+    """Derived-total declarations a template vouches for.
+
+    A two-item ``(total_token, component_tokens)`` declaration retains the
+    original addition semantics. A three-item declaration adds an explicit
+    operation (currently ``"product"``) for multiplicative guards.
 
     A template opts in to the derived-total allowance by defining a
     ``grounding_derived_totals`` method. The default is empty, so templates that
@@ -67,7 +71,15 @@ def params_derived_totals(params) -> list[tuple[str, list[str]]]:
     """
     hook = getattr(params, "grounding_derived_totals", None)
     if callable(hook):
-        return [(str(total), list(components)) for total, components in hook()]
+        declarations = []
+        for declaration in hook():
+            if len(declaration) == 2:
+                total, components = declaration
+                operation = "sum"
+            else:
+                total, components, operation = declaration
+            declarations.append((str(total), list(components), str(operation)))
+        return declarations
     return []
 
 
@@ -84,16 +96,20 @@ def check_params_grounded(params, source_text: str) -> list[str]:
     grounded = {token for token in tokens if token in source}
 
     allowed_totals: set[str] = set()
-    for total_token, components in params_derived_totals(params):
+    for total_token, components, operation in params_derived_totals(params):
         if not components or any(component not in source for component in components):
             continue
         total_value = _token_value(total_token)
         component_values = [_token_value(component) for component in components]
         if total_value is None or any(value is None for value in component_values):
             continue
-        if math.isclose(
-            sum(component_values), total_value, rel_tol=_REL_TOL, abs_tol=_ABS_TOL
-        ):
+        if operation == "sum":
+            derived_value = sum(component_values)
+        elif operation == "product":
+            derived_value = math.prod(component_values)
+        else:
+            continue
+        if math.isclose(derived_value, total_value, rel_tol=_REL_TOL, abs_tol=_ABS_TOL):
             allowed_totals.add(total_token)
 
     return [

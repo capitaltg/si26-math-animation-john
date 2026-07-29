@@ -1,10 +1,16 @@
+import copy
+import logging
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
+from app.meta.dynamic_templates import load_enabled_snapshot
 from app.models.scene import TemplateName
 from app.pipeline.bedrock_client import call_with_tool
 from app.templates.registry import static_ref
+
+logger = logging.getLogger(__name__)
 
 # Each template is a structural contract, not a free-form illustration. The classifier
 # must return only options whose parameter guards can accept the problem downstream.
@@ -49,7 +55,7 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
 
 
 class TemplateOption(BaseModel):
-    template: TemplateName
+    template: str
     rationale: str = Field(min_length=1)
     version_id: str = ""
 
@@ -68,22 +74,72 @@ _TEXT_CARD_OPTION = TemplateOption(
 )
 
 
-def classify_candidate(source_text: str) -> ClassificationResult:
+def _patch_schema_enum(schema: dict, allowed_names: list[str]) -> dict:
+    patched = copy.deepcopy(schema)
+    patched["$defs"]["TemplateOption"]["properties"]["template"]["enum"] = allowed_names
+    return patched
+
+
+def classify_candidate(source_text: str, session=None) -> ClassificationResult:
+    """Classify a candidate problem into compatible template options.
+
+    When the `meta_dynamic_classifier_enabled` flag is on AND a DB `session` is
+    passed, this also offers every currently-enabled dynamic template (loaded as
+    a point-in-time snapshot) to the classifier, and drops/stamps options against
+    that snapshot. With `session=None` (the default) or the flag off, this is
+    byte-identical to the pre-dynamic-classifier behavior: no snapshot is loaded,
+    the system prompt and schema are unmodified, and an unrecognized template
+    name raises (via `static_ref`) rather than being silently dropped.
+    """
+    settings = get_settings()
     schema = ClassificationResult.model_json_schema()
+    system_prompt = _CLASSIFICATION_SYSTEM_PROMPT
+    dynamic_snapshot = None
+
+    if settings.meta_dynamic_classifier_enabled and session is not None:
+        dynamic_snapshot = load_enabled_snapshot(session)
+        dynamic_names = sorted(dynamic_snapshot.names())
+        static_names = [member.value for member in TemplateName]
+        if dynamic_names:
+            bullets = "\n".join(
+                dynamic_snapshot.entry(name).classifier_bullet for name in dynamic_names
+            )
+            system_prompt = f"{_CLASSIFICATION_SYSTEM_PROMPT}\n{bullets}"
+        schema = _patch_schema_enum(schema, [*static_names, *dynamic_names])
+
     _, result = call_with_tool(
-        system_prompt=_CLASSIFICATION_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_message=source_text,
         tools=[{"name": "classify_problem", "schema": schema}],
     )
     classification = ClassificationResult.model_validate(result)
-    classification = classification.model_copy(
-        update={
-            "options": [
-                option.model_copy(update={"version_id": static_ref(option.template).version_id})
-                for option in classification.options
-            ]
-        }
-    )
+
+    if dynamic_snapshot is not None:
+        static_names_set = frozenset(member.value for member in TemplateName)
+        allowed_names = static_names_set | dynamic_snapshot.names()
+        stamped_options = []
+        for option in classification.options:
+            if option.template not in allowed_names:
+                logger.warning(
+                    "Dropping classifier option %r: not in the current template snapshot",
+                    option.template,
+                )
+                continue
+            if option.template in static_names_set:
+                version_id = static_ref(option.template).version_id
+            else:
+                version_id = dynamic_snapshot.entry(option.template).version_id
+            stamped_options.append(option.model_copy(update={"version_id": version_id}))
+        classification = classification.model_copy(update={"options": stamped_options})
+    else:
+        classification = classification.model_copy(
+            update={
+                "options": [
+                    option.model_copy(update={"version_id": static_ref(option.template).version_id})
+                    for option in classification.options
+                ]
+            }
+        )
     text_card = next(
         (
             option

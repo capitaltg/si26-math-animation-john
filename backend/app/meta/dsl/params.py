@@ -1,10 +1,13 @@
+from fractions import Fraction
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.guard import CompiledGuard, GuardResult
+from app.meta.dsl.expression import _evaluate
+from app.meta.dsl.guard import CompiledGuard, GuardResult, predicate_expressions
 from app.meta.dsl.limits import MAX_ARRAY_ITEMS, MAX_ENUM_CHOICES, MAX_PARAMS_FIELDS, MAX_STRING_LENGTH
+from app.pipeline.grounding import default_number_tokens
 
 _FIELD_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 
@@ -199,8 +202,13 @@ def _field_definition(spec) -> tuple[type, object]:
     return (py_type, field)
 
 
+def _format_fraction_component(value: Fraction) -> str:
+    return str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+
+
 def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGuard) -> type[TemplateParamsBase]:
     field_definitions = {spec.name: _field_definition(spec) for spec in document.fields}
+    decimal_field_names = frozenset(spec.name for spec in document.fields if spec.type == "decimal")
     dynamic_base = create_model(
         "_DynamicTemplateParamsBase",
         __base__=TemplateParamsBase,
@@ -224,5 +232,66 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
 
         def guard_result(self) -> GuardResult:
             return self.__dict__["_guard_result"]
+
+        def grounding_number_tokens(self) -> list[str]:
+            tokens = default_number_tokens(self)
+            values = self.model_dump()
+            for predicate in compiled_guard.document.predicates:
+                for expression in predicate_expressions(predicate):
+                    if (
+                        getattr(expression, "node", None) == "fraction"
+                        and all(
+                            getattr(operand, "node", None) == "field_ref"
+                            for operand in expression.operands
+                        )
+                    ):
+                        numerator, denominator = (
+                            _evaluate(operand, values) for operand in expression.operands
+                        )
+                        tokens.append(
+                            f"{_format_fraction_component(numerator)}/{_format_fraction_component(denominator)}"
+                        )
+            return tokens
+
+        def grounding_derived_totals(self) -> list[tuple[str, list[str]]]:
+            values = self.model_dump()
+
+            def format_component(node) -> str:
+                # A field_ref into a decimal field must stringify exactly like
+                # default_number_tokens does for that same field (plain
+                # str(value), e.g. "7.5" or "7.0") so the derived-total token
+                # can actually match the token default_number_tokens produces
+                # for it. Fraction-based formatting (used for everything else)
+                # would instead emit "15/2" or drop a whole-number's trailing
+                # ".0", which can never match.
+                if (
+                    getattr(node, "node", None) == "field_ref"
+                    and node.index is None
+                    and node.field in decimal_field_names
+                ):
+                    return str(values[node.field])
+                return _format_fraction_component(_evaluate(node, values))
+
+            derived: list[tuple[str, list[str]]] = []
+            for predicate in compiled_guard.document.predicates:
+                if predicate.predicate == "sum_equals":
+                    terms, total = predicate.terms, predicate.total
+                    operation = "sum"
+                elif predicate.predicate == "product_equals":
+                    terms, total = predicate.factors, predicate.total
+                    operation = "product"
+                else:
+                    continue
+                if getattr(total, "node", None) not in ("literal", "field_ref"):
+                    continue
+                if not all(getattr(term, "node", None) in ("literal", "field_ref") for term in terms):
+                    continue
+                component_tokens = [format_component(term) for term in terms]
+                total_token = format_component(total)
+                if operation == "sum":
+                    derived.append((total_token, component_tokens))
+                else:
+                    derived.append((total_token, component_tokens, operation))
+            return derived
 
     return DynamicTemplateParams

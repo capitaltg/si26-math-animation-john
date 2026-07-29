@@ -6,6 +6,7 @@ from app.models.scene import TemplateName
 from app.pipeline.extraction import extract_params
 from app.render.full_render import render_scene_to_mp4
 from app.templates.number_line.params import NumberLineParams
+from app.templates.registry import static_ref
 
 SCENES = [
     "Start at 4 apples, add 3 more apples, then give away 1 apple.",
@@ -22,7 +23,7 @@ def run_benchmark(output_dir: Path) -> list[dict]:
         t0 = time.perf_counter()
         params = extract_params(source_text, NumberLineParams)
         t1 = time.perf_counter()
-        render_scene_to_mp4(TemplateName.NUMBER_LINE, params, output_dir / f"scene_{i}.mp4")
+        render_scene_to_mp4(static_ref(TemplateName.NUMBER_LINE), params, output_dir / f"scene_{i}.mp4")
         t2 = time.perf_counter()
 
         results.append(

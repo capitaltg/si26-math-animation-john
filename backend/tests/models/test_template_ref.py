@@ -12,11 +12,13 @@ def test_template_ref_round_trips_through_json():
     assert restored == ref
 
 
-def test_template_ref_rejects_an_unknown_template_name():
+def test_template_ref_accepts_any_string_template_name():
     from app.models.scene import TemplateRef
 
-    with pytest.raises(ValidationError):
-        TemplateRef(name="hologram", version_id="1", artifact_hash="sha256:abc")
+    # With the widened field, TemplateRef accepts any string; validation of
+    # membership happens downstream when the template is resolved
+    ref = TemplateRef(name="hologram", version_id="1", artifact_hash="sha256:abc")
+    assert ref.name == "hologram"
 
 
 def test_template_ref_equality_is_by_value():
@@ -44,3 +46,22 @@ def test_template_artifact_mismatch_error_is_an_exception():
 
     assert issubclass(TemplateArtifactMismatchError, Exception)
     assert issubclass(TemplateVersionMismatchError, Exception)
+
+
+def test_template_ref_accepts_a_dynamic_template_name():
+    from app.models.scene import TemplateRef
+
+    ref = TemplateRef(
+        name="decimal_comparison_grid", version_id="v1", artifact_hash="sha256:abc"
+    )
+    assert ref.name == "decimal_comparison_grid"
+
+
+def test_template_ref_still_accepts_a_static_template_name_enum_member():
+    from app.models.scene import TemplateName, TemplateRef
+
+    ref = TemplateRef(
+        name=TemplateName.NUMBER_LINE, version_id="1", artifact_hash="sha256:abc"
+    )
+    assert ref.name == TemplateName.NUMBER_LINE
+    assert ref.name == "number_line"
