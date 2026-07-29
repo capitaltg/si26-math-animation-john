@@ -1,19 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import { developmentProxy } from './vite.proxy'
+
 export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
   },
   server: {
-    proxy: {
-      '/upload': 'http://localhost:8000',
-      '/options': 'http://localhost:8000',
-      '/storyboard': 'http://localhost:8000',
-      '/render': 'http://localhost:8000',
-      '/clips': 'http://localhost:8000',
-      '/thumbnails': 'http://localhost:8000',
-    },
+    proxy: developmentProxy,
   },
 })
