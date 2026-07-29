@@ -80,4 +80,3 @@ will also run before merge and again on merged `main`.
 The README meta-template demo will use `./scripts/run-dev.sh` as the default
 startup command. Separate process commands will remain documented as an
 optional troubleshooting path.
-

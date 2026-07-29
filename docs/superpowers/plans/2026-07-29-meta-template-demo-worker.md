@@ -337,4 +337,3 @@ git diff -- backend/scripts/meta_worker.py backend/tests/scripts/test_meta_worke
 ```
 
 Expected: only the intended demo-worker, proxy, configuration, test, and runbook changes appear; pre-existing `CLAUDE.md` remains untouched.
-
