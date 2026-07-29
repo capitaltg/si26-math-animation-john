@@ -12,6 +12,7 @@ class TextCardReason(str, Enum):
     AMBIGUOUS_OR_NON_PROBLEM = "ambiguous_or_non_problem"
     TECHNICAL_FAILURE = "technical_failure"
     RENDER_FAILURE = "render_failure"
+    DYNAMIC_TEMPLATE_MISMATCH = "dynamic_template_mismatch"
 
 
 def classify_text_card_reason(
