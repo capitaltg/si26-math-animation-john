@@ -290,7 +290,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
         candidate_ids=scene.candidate_ids,
-        template=scene.template.name.value if scene.template else None,
+        template=scene.template.name if scene.template else None,
         grade_level=scene.grade_level,
         grade_overridden=scene.grade_overridden,
         params=scene.params,
@@ -355,7 +355,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
                 status_code=400,
                 detail=f"No options cached for candidate {pick.candidate_id}",
             )
-        offered = {option.template.value for option in classification.options}
+        offered = {option.template for option in classification.options}
         if pick.template not in offered:
             raise HTTPException(
                 status_code=400,
@@ -365,7 +365,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
                 ),
             )
         selected_option = next(
-            option for option in classification.options if option.template.value == pick.template
+            option for option in classification.options if option.template == pick.template
         )
         try:
             template = resolve_static_ref(selected_option.template, selected_option.version_id)
@@ -450,7 +450,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     except KeyError:
         raise HTTPException(
             status_code=400,
-            detail=f"Template {template.name.value} cannot be combined into a chain",
+            detail=f"Template {template.name} cannot be combined into a chain",
         )
 
     _, params_cls = get_template(template)

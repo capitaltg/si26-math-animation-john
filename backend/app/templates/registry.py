@@ -81,9 +81,10 @@ def _artifact_hash(name: TemplateName) -> str:
     return _compute_artifact_hash(name)
 
 
-def _compute_artifact_hash(name: TemplateName) -> str:
+def _compute_artifact_hash(name: TemplateName | str) -> str:
     digest = hashlib.sha256()
-    source_files = sorted((_TEMPLATES_DIR / name.value).glob("*.py"))
+    name_str = name.value if isinstance(name, TemplateName) else name
+    source_files = sorted((_TEMPLATES_DIR / name_str).glob("*.py"))
     for path in source_files:
         digest.update(path.read_bytes())
     return f"sha256:{digest.hexdigest()}"
@@ -102,7 +103,7 @@ def resolve_static_ref(name: TemplateName | str, version_id: str) -> TemplateRef
     current = static_ref(name)
     if version_id != current.version_id:
         raise TemplateVersionMismatchError(
-            f"Template {current.name.value!r} version {version_id!r} is no longer loadable; "
+            f"Template {current.name!r} version {version_id!r} is no longer loadable; "
             f"the current contract version is {current.version_id!r}"
         )
     return current
@@ -113,13 +114,13 @@ def _resolve_key(ref: TemplateName | str | TemplateRef) -> TemplateName:
         current = static_ref(ref.name)
         if ref.version_id != current.version_id:
             raise TemplateVersionMismatchError(
-                f"TemplateRef for {ref.name.value!r} has version_id {ref.version_id!r}, "
+                f"TemplateRef for {ref.name!r} has version_id {ref.version_id!r}, "
                 f"but the current contract version is {current.version_id!r}"
             )
         actual_hash = _compute_artifact_hash(ref.name)
         if ref.artifact_hash != actual_hash:
             raise TemplateArtifactMismatchError(
-                f"TemplateRef for {ref.name.value!r} has artifact_hash {ref.artifact_hash!r}, "
+                f"TemplateRef for {ref.name!r} has artifact_hash {ref.artifact_hash!r}, "
                 f"but the template's current source hashes to {actual_hash!r}"
             )
         return ref.name
