@@ -123,9 +123,19 @@ The threshold is lowered from five observations to one only to keep the demo
 short. The backend and worker both read this file; restart them after changing
 it.
 
-### 2. Start the three local processes
+### 2. Start development
 
-Use a separate terminal for each command:
+From the repository root, start FastAPI, Vite, and the meta-template worker
+together:
+
+```bash
+./scripts/run-dev.sh
+```
+
+The worker checks the durable queue every two seconds. Ctrl-C stops the
+frontend, backend, and worker together.
+
+To troubleshoot one process in isolation, start them in separate terminals:
 
 ```bash
 ./scripts/run-backend.sh
@@ -136,13 +146,8 @@ Use a separate terminal for each command:
 ```
 
 ```bash
-cd backend
-PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH" \
-  ../.venv/bin/python -m scripts.meta_worker
+./scripts/run-meta-worker.sh
 ```
-
-The worker checks the durable queue every two seconds. Leave it running for the
-whole demo; Ctrl-C stops it cleanly.
 
 ### 3. Trigger template generation
 
