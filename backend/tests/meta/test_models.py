@@ -169,3 +169,96 @@ def test_template_version_requires_known_draft_when_set(session):
     ))
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_approved_review_preserves_math_semantics_confirmed(session):
+    common = dict(
+        fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids="[]", created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.GenerationJob(id="job-approve", status=models.JOB_RUNNING, **common))
+    session.flush()
+
+    session.add(models.TemplateDraft(
+        id="draft-approve", job_id="job-approve", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", revision=1, params_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
+        status=models.DRAFT_APPROVED, created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    session.add(models.TemplateReview(
+        id="review-approve", draft_id="draft-approve", decision="approve",
+        reviewer_label="dev", feedback=None, math_semantics_confirmed=True,
+        created_at=_now(),
+    ))
+    session.flush()
+
+    review = session.get(models.TemplateReview, "review-approve")
+    assert review.math_semantics_confirmed is True
+
+
+def test_rejection_review_leaves_math_semantics_confirmed_null(session):
+    common = dict(
+        fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids="[]", created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.GenerationJob(id="job-reject", status=models.JOB_RUNNING, **common))
+    session.flush()
+
+    session.add(models.TemplateDraft(
+        id="draft-reject", job_id="job-reject", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", revision=1, params_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
+        status=models.DRAFT_REJECTED, created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    session.add(models.TemplateReview(
+        id="review-reject", draft_id="draft-reject", decision="reject",
+        reviewer_label="dev", feedback="nope", created_at=_now(),
+    ))
+    session.flush()
+
+    review = session.get(models.TemplateReview, "review-reject")
+    assert review.math_semantics_confirmed is None
+
+
+def test_partial_unique_rejects_two_enabled_versions_same_fingerprint(session):
+    common = dict(
+        fingerprint_key="k-shared", artifact_hash="sha256:x",
+        status=models.TEMPLATE_VERSION_ENABLED, created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.TemplateVersion(id="tv-a", template_name="name_a", **common))
+    session.flush()
+    session.add(models.TemplateVersion(id="tv-b", template_name="name_b", **common))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_partial_unique_rejects_two_enabled_versions_same_template_name(session):
+    common = dict(
+        template_name="shared_name", artifact_hash="sha256:x",
+        status=models.TEMPLATE_VERSION_ENABLED, created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.TemplateVersion(id="tv-c", fingerprint_key="k-c", **common))
+    session.flush()
+    session.add(models.TemplateVersion(id="tv-d", fingerprint_key="k-d", **common))
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_partial_unique_allows_disabled_historical_rows_sharing_fingerprint_and_name(session):
+    common = dict(
+        fingerprint_key="k-hist", template_name="hist_name", artifact_hash="sha256:x",
+        status=models.TEMPLATE_VERSION_DISABLED, created_at=_now(), updated_at=_now(),
+    )
+    session.add(models.TemplateVersion(id="tv-e", **common))
+    session.add(models.TemplateVersion(id="tv-f", **common))
+    session.flush()  # no IntegrityError: neither row is enabled
+
+    assert session.query(models.TemplateVersion).filter_by(
+        status=models.TEMPLATE_VERSION_DISABLED
+    ).count() == 2

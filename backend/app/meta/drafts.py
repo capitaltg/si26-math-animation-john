@@ -112,10 +112,12 @@ def record_review(
     reviewer_label: str,
     feedback: str | None,
     now: datetime,
+    math_semantics_confirmed: bool | None = None,
 ) -> TemplateReview:
     review = TemplateReview(
         id=new_id, draft_id=draft_id, decision=decision,
         reviewer_label=reviewer_label, feedback=feedback, created_at=now,
+        math_semantics_confirmed=math_semantics_confirmed,
     )
     session.add(review)
     session.flush()
