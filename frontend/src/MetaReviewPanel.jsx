@@ -286,6 +286,9 @@ export default function MetaReviewPanel() {
           value={reviewerToken}
           onChange={handleTokenChange}
         />
+        <button type="button" onClick={loadDrafts} disabled={loading}>
+          Load drafts
+        </button>
       </div>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {loading && <p>Working…</p>}

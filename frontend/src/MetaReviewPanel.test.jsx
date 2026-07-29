@@ -188,6 +188,29 @@ it('sends the stored reviewer token as a bearer header on every call', async () 
   )
 })
 
+it('retries loading drafts once a valid token is entered after an unauthenticated load', async () => {
+  sessionStorage.removeItem('metaReviewerToken')
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url.startsWith('/meta/drafts')) {
+      if (init.headers?.Authorization !== 'Bearer good-token') {
+        return { ok: false, status: 401, json: async () => ({ detail: 'Invalid or missing reviewer token' }) }
+      }
+      if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+      if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText('Invalid or missing reviewer token')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Reviewer token'), { target: { value: 'good-token' } })
+  fireEvent.click(screen.getByText('Load drafts'))
+
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+})
+
 it('edits and saves a fixture', async () => {
   const fetchMock = installFetchMock()
   render(<MetaReviewPanel />)
