@@ -38,6 +38,9 @@ function installFetchMock({ fixtureResponse } = {}) {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => draftDetail }
     }
@@ -58,6 +61,52 @@ function installFetchMock({ fixtureResponse } = {}) {
   return fetchMock
 }
 
+function _qualifyingFixture(id) {
+  return {
+    id, kind: 'positive', expected_outcome: 'accept', generation_method: 'proposed',
+    params: { n: 5 }, expected_result: { answer: '5' },
+    structural_check_passed: true, structural_check_detail: 'ok', source_excerpt: '5 apples',
+  }
+}
+
+// A draft with enough qualifying fixtures and full predicate coverage to
+// satisfy every client-side Approve gate.
+const approvableDraftDetail = {
+  ...draftDetail,
+  guard_document: { guard_version: 1, predicates: [{ predicate: 'positive', value: { node: 'field_ref', field: 'n' } }] },
+  validation_report: { passed: true, negative_predicate_coverage: [0] },
+  fixtures: [
+    _qualifyingFixture('fx-1'),
+    _qualifyingFixture('fx-2'),
+    _qualifyingFixture('fx-3'),
+    _qualifyingFixture('fx-4'),
+    _qualifyingFixture('fx-5'),
+  ],
+}
+
+function installApprovableFetchMock({ approveResponse } = {}) {
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      return { ok: true, json: async () => approvableDraftDetail }
+    }
+    if (url === '/meta/drafts/draft-1/approve' && init.method === 'POST') {
+      return approveResponse || {
+        ok: true,
+        json: async () => ({ template_version_id: 'ver-1', template_name: 'apples_count', status: 'enabled' }),
+      }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 it('lists pending drafts and opens one for review', async () => {
   installFetchMock()
   render(<MetaReviewPanel />)
@@ -65,6 +114,28 @@ it('lists pending drafts and opens one for review', async () => {
   fireEvent.click(screen.getByText('Review'))
   await waitFor(() => expect(screen.getByText(/use for fraction-of-whole bars/)).not.toBeNull())
   expect(screen.getByText(/5 apples/)).not.toBeNull()
+})
+
+it('lists failed-validation drafts for repair', async () => {
+  const failedValidationDraft = {
+    ...draftSummary,
+    id: 'draft-2',
+    fingerprint_key: 'needs-repair',
+    status: 'failed_validation',
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [failedValidationDraft] }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+
+  await waitFor(() => expect(screen.getByText('needs-repair')).not.toBeNull())
 })
 
 it('submits reject feedback and returns to the list', async () => {
@@ -124,5 +195,127 @@ it('shows fixture save errors', async () => {
 
   await waitFor(() =>
     expect(screen.getByText('Expected result does not match answer expression')).not.toBeNull(),
+  )
+})
+
+it('reloads fresh draft detail after saving a fixture instead of patching locally', async () => {
+  const reloadedDetail = {
+    ...draftDetail,
+    preview_url: '/meta/preview/sha256:after-edit',
+    fixtures: [
+      { ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' } },
+    ],
+  }
+  let draftDetailCalls = 0
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      draftDetailCalls += 1
+      return { ok: true, json: async () => (draftDetailCalls === 1 ? draftDetail : reloadedDetail) }
+    }
+    if (url === '/meta/drafts/draft-1/fixtures/fx-1' && init.method === 'POST') {
+      return {
+        ok: true,
+        json: async () => ({ ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' } }),
+      }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Fixture fx-1 params'), { target: { value: '{"n":6}' } })
+  fireEvent.change(screen.getByLabelText('Fixture fx-1 expected result'), { target: { value: '{"answer":"6"}' } })
+  fireEvent.click(screen.getByText('Save fixture'))
+
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:after-edit'))
+  // The refreshed detail is a full re-fetch (draft detail requested twice),
+  // not a locally patched copy of the previously-loaded fixture list.
+  expect(draftDetailCalls).toBe(2)
+})
+
+it('keeps Approve disabled until confirmation and the fixture threshold are met', async () => {
+  installFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  // Only one qualifying fixture is present (below the threshold), so Approve
+  // must stay disabled even after filling in a valid name and confirming.
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('leaves Approve disabled when the confirmation checkbox is unchecked, even with enough fixtures', async () => {
+  installApprovableFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('posts the exact approve body once enabled and returns to the pending list', async () => {
+  const fetchMock = installApprovableFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  const approveButton = screen.getByRole('button', { name: 'Approve and publish' })
+  await waitFor(() => expect(approveButton.disabled).toBe(false))
+  fireEvent.click(approveButton)
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/meta/drafts/draft-1/approve',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ template_name: 'apples_count', math_semantics_confirmed: true }),
+      }),
+    ),
+  )
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+})
+
+it('shows approve errors from the server', async () => {
+  installApprovableFetchMock({
+    approveResponse: {
+      ok: false,
+      json: async () => ({ detail: 'Draft has too few verified real fixtures to publish' }),
+    },
+  })
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+  const approveButton = screen.getByRole('button', { name: 'Approve and publish' })
+  await waitFor(() => expect(approveButton.disabled).toBe(false))
+  fireEvent.click(approveButton)
+
+  await waitFor(() =>
+    expect(screen.getByText('Draft has too few verified real fixtures to publish')).not.toBeNull(),
   )
 })

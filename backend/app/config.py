@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     meta_artifact_root: Path = BACKEND_ROOT / "var" / "meta_artifacts"
     meta_draft_max_refinements: int = 5
+    meta_approval_enabled: bool = False
 
     @field_validator("meta_db_path", mode="after")
     @classmethod

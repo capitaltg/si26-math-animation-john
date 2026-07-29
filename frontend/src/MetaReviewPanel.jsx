@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
 
+// Matches Settings.fingerprint_observation_threshold's default
+// (backend/app/config.py). The server has no endpoint exposing the
+// configured value, and this gate is UX-only -- approve_draft_service
+// enforces the real threshold regardless of what the client shows.
+const FIXTURE_THRESHOLD = 5
+const TEMPLATE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/
+
 async function responseJson(resp) {
   try {
     return await resp.json()
@@ -8,10 +15,21 @@ async function responseJson(resp) {
   }
 }
 
+function isQualifyingFixture(fixture) {
+  return (
+    fixture.kind === 'positive'
+    && Boolean(fixture.source_excerpt)
+    && fixture.expected_result != null
+    && fixture.structural_check_passed === true
+  )
+}
+
 export default function MetaReviewPanel() {
   const [drafts, setDrafts] = useState(null)
   const [selected, setSelected] = useState(null)
   const [feedback, setFeedback] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [mathSemanticsConfirmed, setMathSemanticsConfirmed] = useState(false)
   const [error, setError] = useState(null)
   const [fixtureTexts, setFixtureTexts] = useState({})
   const [fixtureErrors, setFixtureErrors] = useState({})
@@ -21,10 +39,16 @@ export default function MetaReviewPanel() {
     setLoading(true)
     setError(null)
     try {
-      const resp = await fetch('/meta/drafts?status=pending_review')
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
-      setDrafts(data)
+      const responses = await Promise.all([
+        fetch('/meta/drafts?status=pending_review'),
+        fetch('/meta/drafts?status=failed_validation'),
+      ])
+      const draftLists = await Promise.all(responses.map(async (resp) => {
+        const data = await responseJson(resp)
+        if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
+        return data
+      }))
+      setDrafts([...new Map(draftLists.flat().map((draft) => [draft.id, draft])).values()])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -45,6 +69,8 @@ export default function MetaReviewPanel() {
       if (!resp.ok) throw new Error(data?.detail || 'Could not load draft')
       setSelected(data)
       setFeedback('')
+      setTemplateName('')
+      setMathSemanticsConfirmed(false)
       setFixtureTexts({})
       setFixtureErrors({})
     } catch (err) {
@@ -99,18 +125,52 @@ export default function MetaReviewPanel() {
       })
       const data = await responseJson(resp)
       if (!resp.ok) throw new Error(data?.detail || 'Could not save fixture')
-      setSelected((current) => ({
-        ...current,
-        fixtures: current.fixtures.map((row) => (row.id === fixture.id ? data : row)),
-      }))
-      setFixtureTexts((current) => {
-        const { [fixture.id]: _, ...remaining } = current
-        return remaining
-      })
+      // Re-fetch the full draft detail rather than patching just this one
+      // fixture locally: editing a fixture forces server-side revalidation
+      // (Task 3), so the validation report and preview can change too.
+      await openDraft(selected.id)
     } catch (err) {
       setFixtureErrors((current) => ({ ...current, [fixture.id]: err.message }))
     }
   }
+
+  async function submitApprove() {
+    if (!selected || !canApprove) return
+    setLoading(true)
+    setError(null)
+    try {
+      const resp = await fetch(`/meta/drafts/${selected.id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_name: templateName,
+          math_semantics_confirmed: mathSemanticsConfirmed,
+        }),
+      })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(data?.detail || 'Could not approve draft')
+      setSelected(null)
+      await loadDrafts()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const predicateCount = selected?.guard_document?.predicates?.length ?? 0
+  const coverageCount = selected?.validation_report?.negative_predicate_coverage?.length ?? 0
+  const hasFullPredicateCoverage = Boolean(selected?.validation_report) && coverageCount === predicateCount
+  const qualifyingFixtureCount = selected ? selected.fixtures.filter(isQualifyingFixture).length : 0
+  const canApprove = Boolean(
+    selected
+    && selected.status === 'pending_review'
+    && selected.validation_report?.passed === true
+    && hasFullPredicateCoverage
+    && qualifyingFixtureCount >= FIXTURE_THRESHOLD
+    && TEMPLATE_NAME_PATTERN.test(templateName)
+    && mathSemanticsConfirmed,
+  )
 
   return (
     <main style={{ maxWidth: 900, margin: '2rem auto', fontFamily: 'sans-serif' }}>
@@ -199,6 +259,36 @@ export default function MetaReviewPanel() {
               </li>
             ))}
           </ul>
+          <h3>Approve</h3>
+          <p>
+            Verified fixtures: {qualifyingFixtureCount} / {FIXTURE_THRESHOLD} required.
+            {' '}
+            Predicate coverage: {coverageCount} / {predicateCount}.
+          </p>
+          <div>
+            <label htmlFor="template-name">Template name</label>
+            <input
+              id="template-name"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+            />
+          </div>
+          <div>
+            <input
+              id="math-semantics-confirmed"
+              type="checkbox"
+              checked={mathSemanticsConfirmed}
+              onChange={(e) => setMathSemanticsConfirmed(e.target.checked)}
+            />
+            <label htmlFor="math-semantics-confirmed">
+              I confirm the mathematical semantics and preview are correct
+            </label>
+          </div>
+          <div>
+            <button onClick={submitApprove} disabled={loading || !canApprove}>
+              Approve and publish
+            </button>
+          </div>
           <h3>Reject with feedback</h3>
           <textarea
             aria-label="Feedback"

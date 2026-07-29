@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
@@ -10,7 +10,22 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from app.config import get_settings
 from app.meta.artifacts import artifact_path
 from app.meta.db import meta_session
-from app.meta.models import FallbackObservation, TemplateDraft, TemplateDraftFixture
+from app.meta.models import (
+    DRAFT_FAILED_VALIDATION,
+    DRAFT_PENDING_REVIEW,
+    FallbackObservation,
+    TemplateDraft,
+    TemplateDraftFixture,
+)
+from app.meta.approval import (
+    ApprovalConflictError,
+    ApprovalPreconditionError,
+    DraftNotApprovableError,
+    DraftNotFoundError,
+    RevokedConflictError,
+    TemplateNameConflictError,
+    approve_draft_service,
+)
 from app.meta.review_actions import (
     DraftNotRefinableError,
     DraftRefinementFailedError,
@@ -22,6 +37,9 @@ from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
 from app.meta.validation import compile_draft_documents
+from app.meta.validation_pipeline import persist_validation
+
+_FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
 
 router = APIRouter(prefix="/meta")
 
@@ -76,6 +94,18 @@ class RejectResponse(BaseModel):
 class FixtureUpdateRequest(BaseModel):
     params: dict
     expected_result: dict
+
+
+class ApproveRequest(BaseModel):
+    template_name: str
+    reviewer_label: str = "dev-reviewer"
+    math_semantics_confirmed: bool
+
+
+class ApproveResponse(BaseModel):
+    template_version_id: str
+    template_name: str
+    status: str
 
 
 def _draft_summary(draft: TemplateDraft) -> DraftSummaryOut:
@@ -163,6 +193,12 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         if fixture is None or fixture.draft_id != draft_id:
             raise HTTPException(status_code=404, detail=f"Unknown fixture {fixture_id}")
         draft = session.get(TemplateDraft, draft_id)
+        if draft is None or draft.status not in _FIXTURE_EDITABLE_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Draft {draft_id} fixtures are not editable in status "
+                f"{draft.status if draft else 'unknown'}",
+            )
         params_document = ParamsDocument.model_validate(json.loads(draft.params_document_json))
         guard_document = GuardDocument.model_validate(json.loads(draft.guard_document_json))
         answer_expression = TypeAdapter(ExpressionNode).validate_python(
@@ -196,6 +232,21 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         fixture.params_json = json.dumps(request.params)
         fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
         session.flush()
+
+        draft_fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
+        observation_ids = {f.observation_id for f in draft_fixtures if f.observation_id}
+        observations_by_id = {
+            observation.id: observation
+            for observation in session.query(FallbackObservation)
+            .filter(FallbackObservation.id.in_(observation_ids))
+            .all()
+        }
+        persist_validation(
+            session, draft, observations_by_id, datetime.now(timezone.utc),
+            get_settings().meta_artifact_root,
+        )
+        session.flush()
+
         return _fixture_out(session, fixture)
 
 
@@ -217,9 +268,34 @@ def reject_draft(draft_id: str, request: RejectRequest):
     return RejectResponse(new_draft=_draft_summary(new_draft), needs_manual_authoring=False)
 
 
-@router.post("/drafts/{draft_id}/approve")
-def approve_draft(draft_id: str):
-    raise HTTPException(
-        status_code=409,
-        detail="Approval is disabled in this phase; it is enabled once the publication-gate tests pass (Phase 5)",
+@router.post("/drafts/{draft_id}/approve", response_model=ApproveResponse)
+def approve_draft(draft_id: str, request: ApproveRequest):
+    settings = get_settings()
+    if not settings.meta_approval_enabled:
+        raise HTTPException(status_code=409, detail="Approval is disabled in this environment")
+
+    try:
+        version = approve_draft_service(
+            draft_id=draft_id,
+            template_name=request.template_name,
+            reviewer_label=request.reviewer_label,
+            math_semantics_confirmed=request.math_semantics_confirmed,
+        )
+    except DraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftNotApprovableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApprovalPreconditionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RevokedConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TemplateNameConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApprovalConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return ApproveResponse(
+        template_version_id=version.id,
+        template_name=version.template_name,
+        status=version.status,
     )

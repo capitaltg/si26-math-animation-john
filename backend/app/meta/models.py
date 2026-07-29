@@ -20,6 +20,10 @@ def text_tag_current():
     return text("is_current = 1")
 
 
+def text_template_version_enabled():
+    return text("status = 'enabled'")
+
+
 class FallbackObservation(Base):
     __tablename__ = "fallback_observations"
     __table_args__ = (
@@ -94,6 +98,7 @@ DRAFT_PENDING_REVIEW = "pending_review"
 DRAFT_FAILED_VALIDATION = "failed_validation"
 DRAFT_REJECTED = "rejected"
 DRAFT_SUPERSEDED = "superseded"
+DRAFT_APPROVED = "approved"
 
 
 class TemplateDraft(Base):
@@ -155,6 +160,7 @@ class TemplateReview(Base):
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     reviewer_label: Mapped[str] = mapped_column(String(128), nullable=False)
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    math_semantics_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -168,6 +174,18 @@ class TemplateVersion(Base):
     __table_args__ = (
         Index("ix_template_versions_fingerprint_key", "fingerprint_key"),
         Index("ix_template_versions_status", "status"),
+        Index(
+            "uq_enabled_version_per_fingerprint",
+            "fingerprint_key",
+            unique=True,
+            sqlite_where=text_template_version_enabled(),
+        ),
+        Index(
+            "uq_enabled_version_per_template_name",
+            "template_name",
+            unique=True,
+            sqlite_where=text_template_version_enabled(),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
