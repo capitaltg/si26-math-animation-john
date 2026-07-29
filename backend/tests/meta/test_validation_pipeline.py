@@ -6,12 +6,13 @@ from sqlalchemy.orm import sessionmaker
 
 from app.meta import db, models
 from app.meta.dsl.animation import AnimationDocument
-from app.meta.dsl.expression import FieldRefNode
-from app.meta.dsl.guard import GuardDocument, PositivePredicate
+from app.meta.dsl.expression import FieldRefNode, LiteralNode
+from app.meta.dsl.guard import GuardDocument, PositivePredicate, RangePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
 from app.meta.draft_generation import DraftProposal, ProposedFixture
 from app.meta.drafts import create_generated_draft
 from app.meta.validation_pipeline import persist_validation
+from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 
 @pytest.fixture
@@ -130,11 +131,12 @@ def test_persist_validation_uses_positive_fixture_not_boundary_fixture_for_previ
         fixtures=[
             ProposedFixture(kind="boundary", expected_outcome="accept", params={"n": 10}),
             ProposedFixture(kind="positive", expected_outcome="accept", observation_id=obs.id, params={"n": 5}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
         ],
     )
     draft = create_generated_draft(
         session, new_id="draft-4", job=job, proposal=proposal, now=_now(),
-        fixture_ids=["fx-boundary", "fx-positive"],
+        fixture_ids=["fx-boundary", "fx-positive", "fx-negative"],
     )
 
     captured = {}
@@ -150,6 +152,75 @@ def test_persist_validation_uses_positive_fixture_not_boundary_fixture_for_previ
 
     assert passed is True
     assert captured["field_values"] == {"n": 5}
+
+
+def test_persist_validation_reports_metadata_and_full_predicate_coverage(session, tmp_path):
+    # A one-predicate guard whose single negative fixture rejects specifically on
+    # that predicate (via the direct guard witness check, not just Pydantic field
+    # bounds) should report full coverage and publication-grade metadata.
+    job = _job(session)
+    obs = _observation(session)
+    draft = create_generated_draft(
+        session, new_id="draft-cov-1", job=job, proposal=_valid_proposal(obs.id), now=_now(),
+        fixture_ids=["fx-1", "fx-2"],
+    )
+    passed = persist_validation(session, draft, {obs.id: obs}, _now(), tmp_path)
+    session.flush()
+
+    assert passed is True
+    report = json.loads(draft.validation_report_json)
+    assert report["artifact_hash"] == draft.artifact_hash
+    assert report["compiler_version"] == DSL_COMPILER_VERSION
+    assert report["renderer_version"] == DYNAMIC_RENDERER_VERSION
+    assert report["negative_predicate_coverage"] == [0]
+
+
+def test_persist_validation_fails_when_a_guard_predicate_lacks_a_negative_fixture_witness(session, tmp_path):
+    # Two-predicate guard: PositivePredicate(n) at index 0, RangePredicate(m) at
+    # index 1. The only negative fixture targets predicate 1 (m out of range)
+    # while n stays positive, so predicate 0 never gets a rejecting witness.
+    # Field bounds are wide enough that the negative fixture is rejected purely
+    # by the guard, not by Pydantic's field-level min/max.
+    job = _job(session)
+    obs = _observation(session)
+    proposal = DraftProposal(
+        params_document=ParamsDocument(
+            params_version=1,
+            fields=[
+                IntegerFieldSpec(name="n", label="N", description="", minimum=-100, maximum=100),
+                IntegerFieldSpec(name="m", label="M", description="", minimum=-100, maximum=100),
+            ],
+        ),
+        guard_document=GuardDocument(
+            guard_version=1,
+            predicates=[
+                PositivePredicate(value=FieldRefNode(field="n")),
+                RangePredicate(
+                    value=FieldRefNode(field="m"),
+                    minimum=LiteralNode(value=1),
+                    maximum=LiteralNode(value=10),
+                ),
+            ],
+        ),
+        answer_expression=FieldRefNode(field="n"),
+        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        classifier_bullet="use for X",
+        fixtures=[
+            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=obs.id, params={"n": 5, "m": 5}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": 5, "m": 100}),
+        ],
+    )
+    draft = create_generated_draft(
+        session, new_id="draft-cov-2", job=job, proposal=proposal, now=_now(),
+        fixture_ids=["fx-1", "fx-2"],
+    )
+    passed = persist_validation(session, draft, {obs.id: obs}, _now(), tmp_path)
+    session.flush()
+
+    assert passed is False
+    assert draft.status == models.DRAFT_FAILED_VALIDATION
+    report = json.loads(draft.validation_report_json)
+    assert report["negative_predicate_coverage"] == [1]
 
 
 def test_persist_validation_marks_draft_failed_on_compile_error(session, tmp_path):

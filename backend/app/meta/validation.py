@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from app.meta.dsl.animation import AnimationDocument, CompiledAnimation, compile_animation_document
+from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import ExpressionNode, compile_expression
-from app.meta.dsl.guard import GuardDocument, compile_guard
+from app.meta.dsl.guard import CompiledGuard, GuardDocument, compile_guard
 from app.meta.dsl.params import ParamsDocument, TemplateParamsBase, compile_template_params
 from app.pipeline.grounding import check_params_grounded
 
@@ -16,6 +17,7 @@ class CompiledDraft:
     compiled_animation: CompiledAnimation
     answer_expression: ExpressionNode
     known_fields: frozenset[str]
+    compiled_guard: CompiledGuard
 
 
 def compile_draft_documents(
@@ -34,6 +36,7 @@ def compile_draft_documents(
         compiled_animation=compiled_animation,
         answer_expression=answer_expression,
         known_fields=known_fields,
+        compiled_guard=compiled_guard,
     )
 
 
@@ -42,10 +45,28 @@ class FixtureCheckResult:
     fixture_id: str
     passed: bool
     detail: str
+    failed_predicate_indexes: frozenset[int] = frozenset()
+
+
+def _guard_witness_indexes(fixture, compiled: CompiledDraft, params_data: dict) -> frozenset[int]:
+    # For fixtures expected to reject, evaluate the guard directly against the
+    # raw (un-coerced) params data, even when Pydantic already rejected the same
+    # params on field bounds before ever reaching the guard. This is the only way
+    # to distinguish a proven guard-predicate witness from a generic field-bound
+    # rejection: a witness requires the guard itself to evaluate successfully and
+    # report a failing predicate, not merely that Pydantic said "reject".
+    if fixture.expected_outcome != "reject":
+        return frozenset()
+    try:
+        guard_result = compiled.compiled_guard.check(params_data)
+    except DslValidationError:
+        return frozenset()
+    return frozenset(r.index for r in guard_result.predicate_results if not r.passed)
 
 
 def validate_fixture(fixture, compiled: CompiledDraft, source_excerpt: str | None) -> FixtureCheckResult:
     params_data = json.loads(fixture.params_json)
+    failed_predicate_indexes = _guard_witness_indexes(fixture, compiled, params_data)
     try:
         params = compiled.params_cls.model_validate(params_data)
         actual_outcome = "accept"
@@ -60,6 +81,7 @@ def validate_fixture(fixture, compiled: CompiledDraft, source_excerpt: str | Non
         return FixtureCheckResult(
             fixture.id, False,
             f"expected {fixture.expected_outcome}, got {actual_outcome} ({detail})",
+            failed_predicate_indexes,
         )
 
     if actual_outcome == "accept" and fixture.kind == "positive" and source_excerpt is not None:
@@ -67,6 +89,7 @@ def validate_fixture(fixture, compiled: CompiledDraft, source_excerpt: str | Non
         if ungrounded:
             return FixtureCheckResult(
                 fixture.id, False, f"not grounded in source: {', '.join(ungrounded)}",
+                failed_predicate_indexes,
             )
 
-    return FixtureCheckResult(fixture.id, True, detail)
+    return FixtureCheckResult(fixture.id, True, detail, failed_predicate_indexes)
