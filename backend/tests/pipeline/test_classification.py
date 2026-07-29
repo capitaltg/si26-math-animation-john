@@ -130,7 +130,9 @@ def test_classify_rejects_an_unknown_template(mock_call):
         },
     )
 
-    with pytest.raises(ValidationError):
+    # With widened template field, validation of membership happens downstream
+    # in static_ref() which raises ValueError for unknown template names
+    with pytest.raises(ValueError):
         classify_candidate("anything")
 
 
@@ -232,3 +234,10 @@ def test_template_option_version_id_defaults_to_empty_string():
 
     option = TemplateOption(template=TemplateName.NUMBER_LINE, rationale="x")
     assert option.version_id == ""
+
+
+def test_template_option_accepts_a_dynamic_template_name():
+    from app.pipeline.classification import TemplateOption
+
+    option = TemplateOption(template="decimal_comparison_grid", rationale="x")
+    assert option.template == "decimal_comparison_grid"

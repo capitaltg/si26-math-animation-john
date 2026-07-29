@@ -49,7 +49,7 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
 
 
 class TemplateOption(BaseModel):
-    template: TemplateName
+    template: str
     rationale: str = Field(min_length=1)
     version_id: str = ""
 
