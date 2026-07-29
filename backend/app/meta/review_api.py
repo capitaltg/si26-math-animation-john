@@ -1,9 +1,10 @@
+import hmac
 import json
 from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -42,6 +43,17 @@ from app.meta.validation_pipeline import persist_validation
 _FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
 
 router = APIRouter(prefix="/meta")
+
+
+def require_reviewer_token(authorization: str | None = Header(default=None)) -> None:
+    settings = get_settings()
+    if not settings.meta_reviewer_token:
+        raise HTTPException(status_code=401, detail="meta_reviewer_token is not configured")
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = authorization.removeprefix("Bearer ")
+    if not hmac.compare_digest(token, settings.meta_reviewer_token):
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
 
 
 class DraftSummaryOut(BaseModel):
