@@ -86,6 +86,17 @@ def test_propose_template_draft_rejects_malformed_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_leaves_json_like_classifier_bullet_as_string(mock_call):
+    good = _raw_proposal()
+    good["classifier_bullet"] = '["shade","3/4"]'
+    mock_call.return_value = ("propose_template_draft", good)
+
+    proposal = propose_template_draft(_fingerprint(), [_observation()])
+
+    assert proposal.classifier_bullet == '["shade","3/4"]'
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_propose_template_draft_rejects_fixture_for_unknown_observation(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal("unknown-observation"))
 
