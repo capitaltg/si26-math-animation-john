@@ -270,6 +270,14 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     and node.field in decimal_field_names
                 ):
                     return str(values[node.field])
+                # A fixed decimal constant baked directly into the guard (not a
+                # field reference) needs the same plain-decimal stringification:
+                # a non-integral literal like 2.5 must format as "2.5", not the
+                # fraction formatter's "5/2". An integral literal (e.g. 3.0) is
+                # left on the fraction path, which already renders it as the
+                # bare "3" that whole-number source text uses.
+                if getattr(node, "node", None) == "literal" and not node.value.is_integer():
+                    return str(node.value)
                 return _format_fraction_component(_evaluate(node, values))
 
             derived: list[tuple[str, list[str]]] = []

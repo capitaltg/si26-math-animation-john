@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.meta.db import meta_session
-from app.meta.dynamic_templates import resolve_dynamic_ref
+from app.meta.dynamic_templates import load_enabled_snapshot, resolve_dynamic_ref
 from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
 from app.models.scene import (
@@ -200,10 +200,14 @@ def get_options(
 
     results: list[CandidateOptionsOut] = []
     settings = get_settings()
+    snapshot = None
+    if settings.meta_dynamic_classifier_enabled:
+        with meta_session() as meta_db_session:
+            snapshot = load_enabled_snapshot(meta_db_session)
+
     for candidate_id, candidate in candidates:
-        if settings.meta_dynamic_classifier_enabled:
-            with meta_session() as meta_db_session:
-                classification = classify_candidate(candidate.source_excerpt, session=meta_db_session)
+        if snapshot is not None:
+            classification = classify_candidate(candidate.source_excerpt, snapshot=snapshot)
         else:
             classification = classify_candidate(candidate.source_excerpt)
         session.options[candidate_id] = classification

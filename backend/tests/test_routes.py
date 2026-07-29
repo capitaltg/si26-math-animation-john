@@ -282,6 +282,36 @@ def test_options_passes_no_session_when_dynamic_classifier_flag_is_off():
     assert mock_classify.call_args.kwargs.get("session") is None
 
 
+def test_options_loads_one_snapshot_for_the_whole_batch_when_flag_enabled():
+    from app.config import get_settings
+    from app.meta.dynamic_templates import EnabledSnapshot
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2"), _candidate("c3")])
+
+    settings = get_settings()
+    settings.meta_dynamic_classifier_enabled = True
+    try:
+        with patch("app.routes.meta_session") as mock_meta_session, patch(
+            "app.routes.load_enabled_snapshot", return_value=EnabledSnapshot(_entries={})
+        ) as mock_load_snapshot, patch(
+            "app.routes.classify_candidate", return_value=_classification()
+        ) as mock_classify:
+            mock_meta_session.return_value.__enter__.return_value = object()
+            resp = client.post(
+                "/options", json={"candidate_ids": ["c1", "c2", "c3"]}
+            )
+    finally:
+        settings.meta_dynamic_classifier_enabled = False
+
+    assert resp.status_code == 200
+    assert mock_meta_session.call_count == 1
+    assert mock_load_snapshot.call_count == 1
+    assert mock_classify.call_count == 3
+    for call in mock_classify.call_args_list:
+        assert call.kwargs.get("snapshot") is mock_load_snapshot.return_value
+
+
 def test_storyboard_resolves_a_dynamic_template_pick():
     from unittest.mock import MagicMock, patch
 

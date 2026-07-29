@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import FieldRefNode, FractionNode
+from app.meta.dsl.expression import FieldRefNode, FractionNode, LiteralNode
 from app.meta.dsl.guard import DivisibleByPredicate, GuardDocument, PositivePredicate, compile_guard
 from app.meta.dsl.params import (
     ArrayFieldSpec,
@@ -466,6 +466,38 @@ def test_grounding_derived_totals_formats_whole_number_decimal_total_with_traili
     # default_number_tokens would render the decimal "total" field as "7.0"
     # (str(7.0)), not the fraction formatter's "7" -- must agree with that.
     assert totals == [("7.0", ["3.0", "4.0"])]
+
+
+def test_grounding_derived_totals_formats_decimal_literal_term_like_default_number_tokens():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(name="a", label="A", description="", minimum=0.0, maximum=20.0),
+            DecimalFieldSpec(name="total", label="Total", description="", minimum=0.0, maximum=50.0),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), LiteralNode(value=2.5)],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=5.0, total=7.5)
+    totals = params.grounding_derived_totals()
+
+    # A fixed decimal constant baked into the guard (not a field reference) must
+    # still stringify as a plain decimal ("2.5"), not the fraction formatter's
+    # "5/2" -- the same format_component special-case the field_ref fix applies,
+    # extended to decimal-valued LiteralNode terms.
+    assert totals == [("7.5", ["5.0", "2.5"])]
 
 
 def test_grounding_number_tokens_falls_back_to_default_stringification_without_fraction_predicates():

@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.meta.dynamic_templates import load_enabled_snapshot
+from app.meta.dynamic_templates import EnabledSnapshot, load_enabled_snapshot
 from app.models.scene import TemplateName
 from app.pipeline.bedrock_client import call_with_tool
 from app.templates.registry import static_ref
@@ -80,24 +80,35 @@ def _patch_schema_enum(schema: dict, allowed_names: list[str]) -> dict:
     return patched
 
 
-def classify_candidate(source_text: str, session=None) -> ClassificationResult:
+def classify_candidate(
+    source_text: str, session=None, snapshot: EnabledSnapshot | None = None
+) -> ClassificationResult:
     """Classify a candidate problem into compatible template options.
 
-    When the `meta_dynamic_classifier_enabled` flag is on AND a DB `session` is
-    passed, this also offers every currently-enabled dynamic template (loaded as
-    a point-in-time snapshot) to the classifier, and drops/stamps options against
-    that snapshot. With `session=None` (the default) or the flag off, this is
-    byte-identical to the pre-dynamic-classifier behavior: no snapshot is loaded,
-    the system prompt and schema are unmodified, and an unrecognized template
-    name raises (via `static_ref`) rather than being silently dropped.
+    When the `meta_dynamic_classifier_enabled` flag is on AND either a
+    pre-loaded `snapshot` or a DB `session` is passed, this also offers every
+    currently-enabled dynamic template to the classifier, and drops/stamps
+    options against that snapshot. A caller classifying a batch of candidates
+    in one request should load one snapshot up front and pass it via
+    `snapshot=` to every call, rather than passing `session=` and letting each
+    call load its own snapshot. With neither passed (the default) or the flag
+    off, this is byte-identical to the pre-dynamic-classifier behavior: no
+    snapshot is loaded, the system prompt and schema are unmodified, and an
+    unrecognized template name raises (via `static_ref`) rather than being
+    silently dropped.
     """
     settings = get_settings()
     schema = ClassificationResult.model_json_schema()
     system_prompt = _CLASSIFICATION_SYSTEM_PROMPT
     dynamic_snapshot = None
 
-    if settings.meta_dynamic_classifier_enabled and session is not None:
-        dynamic_snapshot = load_enabled_snapshot(session)
+    if settings.meta_dynamic_classifier_enabled:
+        if snapshot is not None:
+            dynamic_snapshot = snapshot
+        elif session is not None:
+            dynamic_snapshot = load_enabled_snapshot(session)
+
+    if dynamic_snapshot is not None:
         dynamic_names = sorted(dynamic_snapshot.names())
         static_names = [member.value for member in TemplateName]
         if dynamic_names:
