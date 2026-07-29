@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // Matches Settings.fingerprint_observation_threshold's default
 // (backend/app/config.py). The server has no endpoint exposing the
@@ -53,6 +53,38 @@ export default function MetaReviewPanel() {
     return data?.detail || fallback
   }
 
+  const [previewSrc, setPreviewSrc] = useState(null)
+  const previewBlobUrlRef = useRef(null)
+
+  function clearPreview() {
+    if (previewBlobUrlRef.current) {
+      URL.revokeObjectURL(previewBlobUrlRef.current)
+      previewBlobUrlRef.current = null
+    }
+    setPreviewSrc(null)
+  }
+
+  async function loadPreview(url) {
+    clearPreview()
+    if (!url) return
+    try {
+      const resp = await fetch(url, { headers: authHeaders() })
+      if (!resp.ok) return
+      const blob = await resp.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      previewBlobUrlRef.current = objectUrl
+      setPreviewSrc(objectUrl)
+    } catch {
+      // Preview is supplementary -- a failed fetch just leaves no image,
+      // same as the existing `selected.preview_url &&` conditional did
+      // when a draft simply had no preview yet.
+    }
+  }
+
+  useEffect(() => () => {
+    if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current)
+  }, [])
+
   async function loadDrafts() {
     setLoading(true)
     setError(null)
@@ -91,6 +123,7 @@ export default function MetaReviewPanel() {
       setMathSemanticsConfirmed(false)
       setFixtureTexts({})
       setFixtureErrors({})
+      await loadPreview(data.preview_url)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -228,9 +261,9 @@ export default function MetaReviewPanel() {
           <button onClick={() => setSelected(null)}>Back to list</button>
           <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
           <p>{selected.classifier_bullet}</p>
-          {selected.preview_url && (
+          {previewSrc && (
             <img
-              src={selected.preview_url}
+              src={previewSrc}
               alt="preview"
               style={{ maxWidth: '100%', border: '1px solid #eee' }}
             />

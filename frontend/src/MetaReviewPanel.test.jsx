@@ -10,6 +10,8 @@ afterEach(() => {
 
 beforeEach(() => {
   sessionStorage.setItem('metaReviewerToken', 'test-token')
+  URL.createObjectURL = vi.fn((blob) => `blob:${blob.__sourceUrl}`)
+  URL.revokeObjectURL = vi.fn()
 })
 
 const draftSummary = {
@@ -59,6 +61,9 @@ function installFetchMock({ fixtureResponse } = {}) {
         }),
       }
     }
+    if (url === draftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
     throw new Error(`Unexpected fetch: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -104,6 +109,9 @@ function installApprovableFetchMock({ approveResponse } = {}) {
         ok: true,
         json: async () => ({ template_version_id: 'ver-1', template_name: 'apples_count', status: 'enabled' }),
       }
+    }
+    if (url === approvableDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -246,6 +254,9 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
         ok: true,
         json: async () => ({ ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' } }),
       }
+    }
+    if (url === draftDetail.preview_url || url === reloadedDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
