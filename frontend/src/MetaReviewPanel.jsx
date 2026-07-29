@@ -55,6 +55,7 @@ export default function MetaReviewPanel() {
 
   const [previewSrc, setPreviewSrc] = useState(null)
   const previewBlobUrlRef = useRef(null)
+  const previewLoadIdRef = useRef(0)
 
   function clearPreview() {
     if (previewBlobUrlRef.current) {
@@ -65,6 +66,13 @@ export default function MetaReviewPanel() {
   }
 
   async function loadPreview(url) {
+    // Claim a token for this call before doing any async work. If a newer
+    // loadPreview call starts before this one's fetch/blob resolves, the
+    // token comparison below lets this call notice it's stale -- so it can
+    // revoke its own now-unwanted blob URL instead of leaking it, and avoid
+    // clobbering whatever the newer call has already put in state.
+    previewLoadIdRef.current += 1
+    const loadId = previewLoadIdRef.current
     clearPreview()
     if (!url) return
     try {
@@ -72,6 +80,13 @@ export default function MetaReviewPanel() {
       if (!resp.ok) return
       const blob = await resp.blob()
       const objectUrl = URL.createObjectURL(blob)
+      if (previewLoadIdRef.current !== loadId) {
+        // A newer call has since started (and possibly already resolved).
+        // This result is stale: drop it and revoke the blob URL we just
+        // created so it doesn't leak.
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
       previewBlobUrlRef.current = objectUrl
       setPreviewSrc(objectUrl)
     } catch {

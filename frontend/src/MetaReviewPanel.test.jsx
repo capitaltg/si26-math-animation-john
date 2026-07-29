@@ -331,6 +331,108 @@ it('posts the exact approve body once enabled and returns to the pending list', 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
 })
 
+it('revokes the previous preview blob URL when a fresh preview replaces it', async () => {
+  const reloadedDetail = {
+    ...draftDetail,
+    preview_url: '/meta/preview/sha256:after-edit',
+    fixtures: [
+      { ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' } },
+    ],
+  }
+  let draftDetailCallCount = 0
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      draftDetailCallCount += 1
+      return { ok: true, json: async () => (draftDetailCallCount === 1 ? draftDetail : reloadedDetail) }
+    }
+    if (url === '/meta/drafts/draft-1/fixtures/fx-1' && init.method === 'POST') {
+      return {
+        ok: true,
+        json: async () => ({ ...draftDetail.fixtures[0], params: { n: 6 }, expected_result: { answer: '6' } }),
+      }
+    }
+    if (url === draftDetail.preview_url || url === reloadedDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:abc'))
+
+  fireEvent.click(screen.getByText('Save fixture'))
+
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('sha256:after-edit'))
+  // The first draft's blob URL must be revoked once the fresh preview
+  // replaces it, not merely dropped (which would leak it).
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`)
+})
+
+it('discards an out-of-order preview resolution and revokes its now-stale blob URL instead of leaking it or clobbering the newer preview', async () => {
+  const staleUrl = draftDetail.preview_url
+  const freshDraftDetail = { ...draftDetail, preview_url: '/meta/preview/sha256:fresh' }
+
+  let resolveStalePreview
+  const stalePreviewPromise = new Promise((resolve) => { resolveStalePreview = resolve })
+
+  let draftDetailCallCount = 0
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      draftDetailCallCount += 1
+      return { ok: true, json: async () => (draftDetailCallCount === 1 ? draftDetail : freshDraftDetail) }
+    }
+    if (url === '/meta/drafts/draft-1/fixtures/fx-1' && init.method === 'POST') {
+      return { ok: true, json: async () => ({ ...draftDetail.fixtures[0] }) }
+    }
+    if (url === staleUrl) {
+      // Deliberately left pending: this preview fetch was issued first but
+      // must resolve *after* the second (fresh) preview load below has
+      // already completed and won, exercising the out-of-order case.
+      return stalePreviewPromise
+    }
+    if (url === freshDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(staleUrl, expect.anything()))
+
+  // Trigger a second preview load for the same draft before the first has
+  // resolved. "Save fixture" has no loading guard, so a fast double
+  // interaction can reach this exact interleaving in the running app.
+  fireEvent.click(screen.getByText('Save fixture'))
+
+  await waitFor(() => expect(screen.getByAltText('preview').src).toContain('fresh'))
+  const freshBlobSrc = screen.getByAltText('preview').src
+
+  // Now let the first (stale) preview fetch resolve.
+  resolveStalePreview({ ok: true, blob: async () => ({ __sourceUrl: staleUrl }) })
+
+  await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${staleUrl}`))
+  // The late-arriving stale result must not have clobbered the fresh preview.
+  expect(screen.getByAltText('preview').src).toBe(freshBlobSrc)
+})
+
 it('shows approve errors from the server', async () => {
   installApprovableFetchMock({
     approveResponse: {
