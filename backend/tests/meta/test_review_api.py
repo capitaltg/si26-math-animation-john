@@ -219,7 +219,9 @@ def test_list_drafts_filters_by_status(client):
     assert [d["id"] for d in resp.json()] == [draft.id]
 
 
-def test_get_draft_detail_includes_fixtures_and_preview_url(client):
+def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch):
+    monkeypatch.setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
+    get_settings.cache_clear()
     draft = _seed_pending_review_draft()
     resp = client.get(f"/meta/drafts/{draft.id}")
     assert resp.status_code == 200
@@ -227,6 +229,7 @@ def test_get_draft_detail_includes_fixtures_and_preview_url(client):
     assert body["classifier_bullet"] == "use for X"
     assert len(body["fixtures"]) == 2
     assert body["preview_url"] == f"/meta/preview/{draft.preview_artifact_hash}"
+    assert body["required_fixture_count"] == 1
 
 
 def test_get_preview_serves_stored_artifact(client):

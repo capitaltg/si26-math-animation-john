@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 
-// Matches Settings.fingerprint_observation_threshold's default
-// (backend/app/config.py). The server has no endpoint exposing the
-// configured value, and this gate is UX-only -- approve_draft_service
-// enforces the real threshold regardless of what the client shows.
-const FIXTURE_THRESHOLD = 5
 const TEMPLATE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/
 
 async function responseJson(resp) {
@@ -265,12 +260,13 @@ export default function MetaReviewPanel() {
   const coverageCount = selected?.validation_report?.negative_predicate_coverage?.length ?? 0
   const hasFullPredicateCoverage = Boolean(selected?.validation_report) && coverageCount === predicateCount
   const qualifyingFixtureCount = selected ? selected.fixtures.filter(isQualifyingFixture).length : 0
+  const requiredFixtureCount = selected?.required_fixture_count ?? 5
   const canApprove = Boolean(
     selected
     && selected.status === 'pending_review'
     && selected.validation_report?.passed === true
     && hasFullPredicateCoverage
-    && qualifyingFixtureCount >= FIXTURE_THRESHOLD
+    && qualifyingFixtureCount >= requiredFixtureCount
     && TEMPLATE_NAME_PATTERN.test(templateName)
     && mathSemanticsConfirmed,
   )
@@ -376,7 +372,7 @@ export default function MetaReviewPanel() {
           </ul>
           <h3>Approve</h3>
           <p>
-            Verified fixtures: {qualifyingFixtureCount} / {FIXTURE_THRESHOLD} required.
+            Verified fixtures: {qualifyingFixtureCount} / {requiredFixtureCount} required.
             {' '}
             Predicate coverage: {coverageCount} / {predicateCount}.
           </p>

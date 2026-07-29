@@ -29,10 +29,11 @@ const draftDetail = {
   artifact_hash: 'sha256:abc',
   validation_report: { passed: true },
   preview_url: '/meta/preview/sha256:abc',
+  required_fixture_count: 1,
   fixtures: [
     {
       id: 'fx-1', kind: 'positive', expected_outcome: 'accept', generation_method: 'proposed',
-      params: { n: 5 }, expected_result: null,
+      params: { n: 5 }, expected_result: { answer: '5' },
       structural_check_passed: true, structural_check_detail: 'ok', source_excerpt: '5 apples',
     },
   ],
@@ -300,19 +301,17 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
   expect(draftDetailCalls).toBe(2)
 })
 
-it('keeps Approve disabled until confirmation and the fixture threshold are met', async () => {
+it('enables Approve when the configured fixture threshold is met', async () => {
   installFetchMock()
   render(<MetaReviewPanel />)
   await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
   fireEvent.click(screen.getByText('Review'))
   await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
 
-  // Only one qualifying fixture is present (below the threshold), so Approve
-  // must stay disabled even after filling in a valid name and confirming.
   fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
   fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
 
-  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(false)
 })
 
 it('leaves Approve disabled when the confirmation checkbox is unchecked, even with enough fixtures', async () => {
