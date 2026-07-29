@@ -343,6 +343,131 @@ def test_grounding_derived_totals_covers_sum_equals_predicates():
     assert totals == [("7", ["3", "4"])]
 
 
+def test_grounding_derived_totals_covers_product_equals_predicates():
+    from app.meta.dsl.guard import GuardDocument, ProductEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="a", label="A", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="b", label="B", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="total", label="Total", description="", minimum=1, maximum=400),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            ProductEqualsPredicate(
+                factors=[FieldRefNode(field="a"), FieldRefNode(field="b")],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "b", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=3, b=4, total=12)
+    totals = params.grounding_derived_totals()
+
+    assert totals == [("12", ["3", "4"])]
+
+
+def test_grounding_derived_totals_skips_predicates_with_compound_total():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="a", label="A", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="b", label="B", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="numerator", label="N", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="denominator", label="D", description="", minimum=1, maximum=20),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), FieldRefNode(field="b")],
+                total=FractionNode(
+                    operands=[FieldRefNode(field="numerator"), FieldRefNode(field="denominator")]
+                ),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(
+        guard_document, known_fields=frozenset({"a", "b", "numerator", "denominator"})
+    )
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=3, b=4, numerator=14, denominator=2)
+    totals = params.grounding_derived_totals()
+
+    assert totals == []
+
+
+def test_grounding_derived_totals_formats_decimal_total_like_default_number_tokens():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(name="a", label="A", description="", minimum=0.0, maximum=20.0),
+            IntegerFieldSpec(name="b", label="B", description="", minimum=0, maximum=20),
+            DecimalFieldSpec(name="total", label="Total", description="", minimum=0.0, maximum=50.0),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), FieldRefNode(field="b")],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "b", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=3.5, b=4, total=7.5)
+    totals = params.grounding_derived_totals()
+
+    # Must match how default_number_tokens (str(value)) would stringify these
+    # same field values -- not the bare-fraction "15/2" / "7/2" form.
+    assert totals == [("7.5", ["3.5", "4"])]
+
+
+def test_grounding_derived_totals_formats_whole_number_decimal_total_with_trailing_zero():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(name="a", label="A", description="", minimum=0.0, maximum=20.0),
+            DecimalFieldSpec(name="b", label="B", description="", minimum=0.0, maximum=20.0),
+            DecimalFieldSpec(name="total", label="Total", description="", minimum=0.0, maximum=50.0),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), FieldRefNode(field="b")],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "b", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=3.0, b=4.0, total=7.0)
+    totals = params.grounding_derived_totals()
+
+    # default_number_tokens would render the decimal "total" field as "7.0"
+    # (str(7.0)), not the fraction formatter's "7" -- must agree with that.
+    assert totals == [("7.0", ["3.0", "4.0"])]
+
+
 def test_grounding_number_tokens_falls_back_to_default_stringification_without_fraction_predicates():
     Params = compile_template_params(
         ParamsDocument(

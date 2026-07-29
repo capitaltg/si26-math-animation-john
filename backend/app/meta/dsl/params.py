@@ -208,6 +208,7 @@ def _format_fraction_component(value: Fraction) -> str:
 
 def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGuard) -> type[TemplateParamsBase]:
     field_definitions = {spec.name: _field_definition(spec) for spec in document.fields}
+    decimal_field_names = frozenset(spec.name for spec in document.fields if spec.type == "decimal")
     dynamic_base = create_model(
         "_DynamicTemplateParamsBase",
         __base__=TemplateParamsBase,
@@ -254,6 +255,23 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
 
         def grounding_derived_totals(self) -> list[tuple[str, list[str]]]:
             values = self.model_dump()
+
+            def format_component(node) -> str:
+                # A field_ref into a decimal field must stringify exactly like
+                # default_number_tokens does for that same field (plain
+                # str(value), e.g. "7.5" or "7.0") so the derived-total token
+                # can actually match the token default_number_tokens produces
+                # for it. Fraction-based formatting (used for everything else)
+                # would instead emit "15/2" or drop a whole-number's trailing
+                # ".0", which can never match.
+                if (
+                    getattr(node, "node", None) == "field_ref"
+                    and node.index is None
+                    and node.field in decimal_field_names
+                ):
+                    return str(values[node.field])
+                return _format_fraction_component(_evaluate(node, values))
+
             derived: list[tuple[str, list[str]]] = []
             for predicate in compiled_guard.document.predicates:
                 if predicate.predicate == "sum_equals":
@@ -266,8 +284,8 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     continue
                 if not all(getattr(term, "node", None) in ("literal", "field_ref") for term in terms):
                     continue
-                component_tokens = [_format_fraction_component(_evaluate(term, values)) for term in terms]
-                total_token = _format_fraction_component(_evaluate(total, values))
+                component_tokens = [format_component(term) for term in terms]
+                total_token = format_component(total)
                 derived.append((total_token, component_tokens))
             return derived
 
