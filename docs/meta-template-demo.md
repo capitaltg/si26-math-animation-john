@@ -18,8 +18,16 @@ disposable local development environment.
 
 ### Install and migrate
 
-From the repository root, install the current backend and development
-dependencies, then bring the demo database schema up to date:
+The commands below require a virtual environment at the repository-root path
+`.venv`. From the repository root, create it first if it does not already
+exist:
+
+```bash
+python3 -m venv .venv
+```
+
+Then install the current backend and development dependencies and bring the
+demo database schema up to date:
 
 ```bash
 cd backend
