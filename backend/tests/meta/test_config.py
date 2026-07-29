@@ -9,3 +9,7 @@ def test_meta_dynamic_classifier_enabled_defaults_to_false():
     from app.config import Settings
 
     assert Settings().meta_dynamic_classifier_enabled is False
+
+
+def test_meta_reviewer_token_defaults_to_none():
+    assert Settings().meta_reviewer_token is None
