@@ -34,18 +34,36 @@ export default function MetaReviewPanel() {
   const [fixtureTexts, setFixtureTexts] = useState({})
   const [fixtureErrors, setFixtureErrors] = useState({})
   const [loading, setLoading] = useState(false)
+  const [reviewerToken, setReviewerToken] = useState(
+    () => sessionStorage.getItem('metaReviewerToken') || '',
+  )
+
+  function handleTokenChange(e) {
+    const value = e.target.value
+    setReviewerToken(value)
+    sessionStorage.setItem('metaReviewerToken', value)
+  }
+
+  function authHeaders() {
+    return { Authorization: `Bearer ${reviewerToken}` }
+  }
+
+  function messageFor(resp, data, fallback) {
+    if (resp.status === 401) return 'Invalid or missing reviewer token'
+    return data?.detail || fallback
+  }
 
   async function loadDrafts() {
     setLoading(true)
     setError(null)
     try {
       const responses = await Promise.all([
-        fetch('/meta/drafts?status=pending_review'),
-        fetch('/meta/drafts?status=failed_validation'),
+        fetch('/meta/drafts?status=pending_review', { headers: authHeaders() }),
+        fetch('/meta/drafts?status=failed_validation', { headers: authHeaders() }),
       ])
       const draftLists = await Promise.all(responses.map(async (resp) => {
         const data = await responseJson(resp)
-        if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
+        if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load drafts'))
         return data
       }))
       setDrafts([...new Map(draftLists.flat().map((draft) => [draft.id, draft])).values()])
@@ -64,9 +82,9 @@ export default function MetaReviewPanel() {
     setLoading(true)
     setError(null)
     try {
-      const resp = await fetch(`/meta/drafts/${id}`)
+      const resp = await fetch(`/meta/drafts/${id}`, { headers: authHeaders() })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not load draft')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load draft'))
       setSelected(data)
       setFeedback('')
       setTemplateName('')
@@ -87,11 +105,11 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ feedback }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not reject draft')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not reject draft'))
       setSelected(null)
       await loadDrafts()
     } catch (err) {
@@ -120,11 +138,11 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/fixtures/${fixture.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ params, expected_result: expectedResult }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not save fixture')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not save fixture'))
       // Re-fetch the full draft detail rather than patching just this one
       // fixture locally: editing a fixture forces server-side revalidation
       // (Task 3), so the validation report and preview can change too.
@@ -141,14 +159,14 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           template_name: templateName,
           math_semantics_confirmed: mathSemanticsConfirmed,
         }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not approve draft')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not approve draft'))
       setSelected(null)
       await loadDrafts()
     } catch (err) {
@@ -175,6 +193,15 @@ export default function MetaReviewPanel() {
   return (
     <main style={{ maxWidth: 900, margin: '2rem auto', fontFamily: 'sans-serif' }}>
       <h1>Meta-template review (dev only)</h1>
+      <div>
+        <label htmlFor="reviewer-token">Reviewer token</label>
+        <input
+          id="reviewer-token"
+          type="password"
+          value={reviewerToken}
+          onChange={handleTokenChange}
+        />
+      </div>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {loading && <p>Working…</p>}
 

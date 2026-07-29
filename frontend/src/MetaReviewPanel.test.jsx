@@ -1,11 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import MetaReviewPanel from './MetaReviewPanel'
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+})
+
+beforeEach(() => {
+  sessionStorage.setItem('metaReviewerToken', 'test-token')
 })
 
 const draftSummary = {
@@ -155,6 +159,25 @@ it('submits reject feedback and returns to the list', async () => {
     ),
   )
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+})
+
+it('sends the stored reviewer token as a bearer header on every call', async () => {
+  const fetchMock = installFetchMock()
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/meta/drafts?status=pending_review',
+    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) }),
+  )
+
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/meta/drafts/draft-1',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) }),
+    ),
+  )
 })
 
 it('edits and saves a fixture', async () => {
