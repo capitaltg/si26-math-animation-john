@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     meta_draft_max_refinements: int = 5
     meta_approval_enabled: bool = False
     meta_dynamic_classifier_enabled: bool = False
+    meta_reviewer_token: str | None = None
 
     @field_validator("meta_db_path", mode="after")
     @classmethod

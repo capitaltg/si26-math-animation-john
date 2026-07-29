@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // Matches Settings.fingerprint_observation_threshold's default
 // (backend/app/config.py). The server has no endpoint exposing the
@@ -34,18 +34,120 @@ export default function MetaReviewPanel() {
   const [fixtureTexts, setFixtureTexts] = useState({})
   const [fixtureErrors, setFixtureErrors] = useState({})
   const [loading, setLoading] = useState(false)
+  const [reviewerToken, setReviewerToken] = useState(
+    () => sessionStorage.getItem('metaReviewerToken') || '',
+  )
+
+  function handleTokenChange(e) {
+    const value = e.target.value
+    setReviewerToken(value)
+    sessionStorage.setItem('metaReviewerToken', value)
+  }
+
+  function authHeaders() {
+    return { Authorization: `Bearer ${reviewerToken}` }
+  }
+
+  function messageFor(resp, data, fallback) {
+    if (resp.status === 401) return 'Invalid or missing reviewer token'
+    return data?.detail || fallback
+  }
+
+  const [previewSrc, setPreviewSrc] = useState(null)
+  const previewBlobUrlRef = useRef(null)
+  const previewLoadIdRef = useRef(0)
+  const isMountedRef = useRef(true)
+
+  function clearPreview() {
+    if (previewBlobUrlRef.current) {
+      URL.revokeObjectURL(previewBlobUrlRef.current)
+      previewBlobUrlRef.current = null
+    }
+    setPreviewSrc(null)
+  }
+
+  // Returning to the list view (after a reject/approve or via "Back to
+  // list") must revoke the current preview blob URL: the <img> disappears
+  // because it's gated on `selected`, but the blob itself would otherwise
+  // stay alive -- and leaked -- until the next loadPreview call or unmount.
+  //
+  // It must also invalidate any loadPreview call already in flight at the
+  // moment of navigation (selected is set, and "Back to list" is clickable,
+  // before openDraft's loadPreview call resolves). Bumping the token here
+  // means that in-flight call's own staleness check -- the same one used
+  // for out-of-order loadPreview calls -- will see it's been superseded
+  // once it resolves, and self-revoke instead of writing a blob URL into
+  // state for a list view that's no longer showing a preview at all.
+  //
+  // This bump deliberately lives here rather than inside clearPreview():
+  // loadPreview() also calls clearPreview() itself (to revoke the previous
+  // blob) *after* capturing its own loadId into a local variable, so a
+  // bump inside clearPreview() would make every loadPreview call see its
+  // own freshly-claimed id as already stale.
+  function returnToList() {
+    clearPreview()
+    previewLoadIdRef.current += 1
+    setSelected(null)
+  }
+
+  async function loadPreview(url) {
+    // Claim a token for this call before doing any async work. If a newer
+    // loadPreview call starts before this one's fetch/blob resolves, the
+    // token comparison below lets this call notice it's stale -- so it can
+    // revoke its own now-unwanted blob URL instead of leaking it, and avoid
+    // clobbering whatever the newer call has already put in state.
+    previewLoadIdRef.current += 1
+    const loadId = previewLoadIdRef.current
+    clearPreview()
+    if (!url) return
+    try {
+      const resp = await fetch(url, { headers: authHeaders() })
+      if (!resp.ok) return
+      const blob = await resp.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      if (!isMountedRef.current) {
+        // The component unmounted while this fetch/blob was in flight. The
+        // unmount cleanup below already ran (and had nothing to revoke at
+        // the time), so this now-orphaned blob URL is ours alone to clean
+        // up -- revoke it immediately and don't touch state.
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
+      if (previewLoadIdRef.current !== loadId) {
+        // A newer call has since started (and possibly already resolved).
+        // This result is stale: drop it and revoke the blob URL we just
+        // created so it doesn't leak.
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
+      previewBlobUrlRef.current = objectUrl
+      setPreviewSrc(objectUrl)
+    } catch {
+      // Preview is supplementary -- a failed fetch just leaves no image,
+      // same as the existing `selected.preview_url &&` conditional did
+      // when a draft simply had no preview yet.
+    }
+  }
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current)
+    }
+  }, [])
 
   async function loadDrafts() {
     setLoading(true)
     setError(null)
     try {
       const responses = await Promise.all([
-        fetch('/meta/drafts?status=pending_review'),
-        fetch('/meta/drafts?status=failed_validation'),
+        fetch('/meta/drafts?status=pending_review', { headers: authHeaders() }),
+        fetch('/meta/drafts?status=failed_validation', { headers: authHeaders() }),
       ])
       const draftLists = await Promise.all(responses.map(async (resp) => {
         const data = await responseJson(resp)
-        if (!resp.ok) throw new Error(data?.detail || 'Could not load drafts')
+        if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load drafts'))
         return data
       }))
       setDrafts([...new Map(draftLists.flat().map((draft) => [draft.id, draft])).values()])
@@ -64,15 +166,16 @@ export default function MetaReviewPanel() {
     setLoading(true)
     setError(null)
     try {
-      const resp = await fetch(`/meta/drafts/${id}`)
+      const resp = await fetch(`/meta/drafts/${id}`, { headers: authHeaders() })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not load draft')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load draft'))
       setSelected(data)
       setFeedback('')
       setTemplateName('')
       setMathSemanticsConfirmed(false)
       setFixtureTexts({})
       setFixtureErrors({})
+      await loadPreview(data.preview_url)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -87,12 +190,12 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ feedback }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not reject draft')
-      setSelected(null)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not reject draft'))
+      returnToList()
       await loadDrafts()
     } catch (err) {
       setError(err.message)
@@ -120,11 +223,11 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/fixtures/${fixture.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ params, expected_result: expectedResult }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not save fixture')
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not save fixture'))
       // Re-fetch the full draft detail rather than patching just this one
       // fixture locally: editing a fixture forces server-side revalidation
       // (Task 3), so the validation report and preview can change too.
@@ -141,15 +244,15 @@ export default function MetaReviewPanel() {
     try {
       const resp = await fetch(`/meta/drafts/${selected.id}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           template_name: templateName,
           math_semantics_confirmed: mathSemanticsConfirmed,
         }),
       })
       const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(data?.detail || 'Could not approve draft')
-      setSelected(null)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not approve draft'))
+      returnToList()
       await loadDrafts()
     } catch (err) {
       setError(err.message)
@@ -175,6 +278,18 @@ export default function MetaReviewPanel() {
   return (
     <main style={{ maxWidth: 900, margin: '2rem auto', fontFamily: 'sans-serif' }}>
       <h1>Meta-template review (dev only)</h1>
+      <div>
+        <label htmlFor="reviewer-token">Reviewer token</label>
+        <input
+          id="reviewer-token"
+          type="password"
+          value={reviewerToken}
+          onChange={handleTokenChange}
+        />
+        <button type="button" onClick={loadDrafts} disabled={loading}>
+          Load drafts
+        </button>
+      </div>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
       {loading && <p>Working…</p>}
 
@@ -198,12 +313,12 @@ export default function MetaReviewPanel() {
 
       {selected && (
         <section>
-          <button onClick={() => setSelected(null)}>Back to list</button>
+          <button onClick={returnToList}>Back to list</button>
           <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
           <p>{selected.classifier_bullet}</p>
-          {selected.preview_url && (
+          {previewSrc && (
             <img
-              src={selected.preview_url}
+              src={previewSrc}
               alt="preview"
               style={{ maxWidth: '100%', border: '1px solid #eee' }}
             />

@@ -1,9 +1,10 @@
+import hmac
 import json
 from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -42,6 +43,17 @@ from app.meta.validation_pipeline import persist_validation
 _FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
 
 router = APIRouter(prefix="/meta")
+
+
+def require_reviewer_token(authorization: str | None = Header(default=None)) -> None:
+    settings = get_settings()
+    if not settings.meta_reviewer_token:
+        raise HTTPException(status_code=401, detail="meta_reviewer_token is not configured")
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = authorization.removeprefix("Bearer ")
+    if not hmac.compare_digest(token, settings.meta_reviewer_token):
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
 
 
 class DraftSummaryOut(BaseModel):
@@ -147,7 +159,9 @@ def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
     )
 
 
-@router.get("/drafts", response_model=list[DraftSummaryOut])
+@router.get(
+    "/drafts", response_model=list[DraftSummaryOut], dependencies=[Depends(require_reviewer_token)]
+)
 def list_drafts(status: str | None = None):
     with meta_session() as session:
         query = session.query(TemplateDraft)
@@ -157,7 +171,9 @@ def list_drafts(status: str | None = None):
         return [_draft_summary(row) for row in rows]
 
 
-@router.get("/drafts/{draft_id}", response_model=DraftDetailOut)
+@router.get(
+    "/drafts/{draft_id}", response_model=DraftDetailOut, dependencies=[Depends(require_reviewer_token)]
+)
 def get_draft(draft_id: str):
     with meta_session() as session:
         draft = session.get(TemplateDraft, draft_id)
@@ -166,7 +182,7 @@ def get_draft(draft_id: str):
         return _draft_detail(session, draft)
 
 
-@router.get("/preview/{artifact_hash}")
+@router.get("/preview/{artifact_hash}", dependencies=[Depends(require_reviewer_token)])
 def get_preview(artifact_hash: str):
     path = artifact_path(get_settings().meta_artifact_root, artifact_hash)
     if not path.exists():
@@ -186,7 +202,11 @@ def _requested_answer(expected_result: dict) -> Fraction:
         raise HTTPException(status_code=422, detail="Expected result answer must be a finite number") from exc
 
 
-@router.post("/drafts/{draft_id}/fixtures/{fixture_id}", response_model=FixtureOut)
+@router.post(
+    "/drafts/{draft_id}/fixtures/{fixture_id}",
+    response_model=FixtureOut,
+    dependencies=[Depends(require_reviewer_token)],
+)
 def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest):
     with meta_session() as session:
         fixture = session.get(TemplateDraftFixture, fixture_id)
@@ -250,7 +270,9 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         return _fixture_out(session, fixture)
 
 
-@router.post("/drafts/{draft_id}/reject", response_model=RejectResponse)
+@router.post(
+    "/drafts/{draft_id}/reject", response_model=RejectResponse, dependencies=[Depends(require_reviewer_token)]
+)
 def reject_draft(draft_id: str, request: RejectRequest):
     settings = get_settings()
     try:
@@ -268,7 +290,9 @@ def reject_draft(draft_id: str, request: RejectRequest):
     return RejectResponse(new_draft=_draft_summary(new_draft), needs_manual_authoring=False)
 
 
-@router.post("/drafts/{draft_id}/approve", response_model=ApproveResponse)
+@router.post(
+    "/drafts/{draft_id}/approve", response_model=ApproveResponse, dependencies=[Depends(require_reviewer_token)]
+)
 def approve_draft(draft_id: str, request: ApproveRequest):
     settings = get_settings()
     if not settings.meta_approval_enabled:

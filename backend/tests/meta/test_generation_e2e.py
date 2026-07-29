@@ -27,10 +27,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     monkeypatch.setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
+    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
     get_settings.cache_clear()
     from app.main import create_app
 
-    yield TestClient(create_app())
+    yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
     get_settings.cache_clear()
 
 
