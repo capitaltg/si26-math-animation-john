@@ -7,13 +7,23 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.meta import db, jobs, models
+from app.meta.approval import (
+    ApprovalConflictError,
+    ApprovalPreconditionError,
+    DraftNotApprovableError,
+    DraftNotFoundError,
+    RevokedConflictError,
+    TemplateNameConflictError,
+)
 from app.meta.draft_generation import DraftProposal, ProposedFixture
+from app.meta.drafts import create_generated_draft
 from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.expression import FieldRefNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
 from app.meta.fingerprint import Fingerprint
 from app.meta.generation_pipeline import run_generation_job
+from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 
 @pytest.fixture
@@ -24,6 +34,21 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
+    get_settings.cache_clear()
+    from app.main import create_app
+    yield TestClient(create_app())
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def approval_client(tmp_path, monkeypatch):
+    engine = db.make_engine(tmp_path / "meta.db")
+    monkeypatch.setattr(db, "get_engine", lambda: engine)
+    db.create_all(engine)
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
+    monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
     get_settings.cache_clear()
     from app.main import create_app
     yield TestClient(create_app())
@@ -86,6 +111,85 @@ def _seed_pending_review_draft():
     with patch("app.meta.draft_generation.call_with_tool") as mock_call:
         mock_call.return_value = ("propose_template_draft", _proposal_dict())
         return run_generation_job(owner="worker-1")
+
+
+def _seed_approvable_draft(
+    *,
+    draft_id="draft-approve",
+    fingerprint_key="k-approve",
+    positive_count=5,
+    status=models.DRAFT_PENDING_REVIEW,
+    passed=True,
+    report_hash=None,
+    coverage=None,
+    set_expected_result=True,
+):
+    """Seed a draft with enough real, confirmed fixtures and a passing report
+    to satisfy every ``approve_draft_service`` precondition by default, with
+    knobs to violate exactly one precondition at a time (mirrors
+    ``tests/meta/test_approval.py``'s ``_seed_draft``)."""
+    with db.meta_session() as session:
+        job = models.GenerationJob(
+            id=f"job-{draft_id}", fingerprint_key=fingerprint_key, fingerprint_version=1,
+            fingerprint_json="{}", trigger_observation_ids="[]", status=models.JOB_SUCCEEDED,
+            created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+
+        fixtures = []
+        for i in range(positive_count):
+            obs_id = f"obs-{draft_id}-{i}"
+            session.add(models.FallbackObservation(
+                id=obs_id, candidate_id=f"cand-{draft_id}-{i}",
+                source_excerpt="there are 5 apples", grade_level=2,
+                observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+            ))
+            fixtures.append(ProposedFixture(
+                kind="positive", expected_outcome="accept", observation_id=obs_id, params={"n": 5},
+            ))
+        fixtures.append(ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}))
+        session.flush()
+
+        proposal = DraftProposal(
+            params_document=ParamsDocument(
+                params_version=1,
+                fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
+            ),
+            guard_document=GuardDocument(
+                guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
+            ),
+            answer_expression=FieldRefNode(field="n"),
+            animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+            classifier_bullet="use for X",
+            fixtures=fixtures,
+        )
+        draft = create_generated_draft(session, new_id=draft_id, job=job, proposal=proposal, now=_now())
+
+        for fx in session.query(models.TemplateDraftFixture).filter_by(draft_id=draft.id).all():
+            if fx.kind == "positive":
+                if set_expected_result:
+                    fx.expected_result_json = json.dumps({"answer": "5"})
+                fx.structural_check_passed = True
+            else:
+                fx.structural_check_passed = True
+
+        draft.status = status
+        draft.preview_artifact_hash = "preview-hash"
+        cov = coverage if coverage is not None else [0]
+        report = {
+            "passed": passed,
+            "compile_error": None,
+            "fixture_results": [],
+            "preview_ok": passed,
+            "preview_error": None,
+            "artifact_hash": report_hash if report_hash is not None else draft.artifact_hash,
+            "compiler_version": DSL_COMPILER_VERSION,
+            "renderer_version": DYNAMIC_RENDERER_VERSION,
+            "negative_predicate_coverage": cov,
+        }
+        draft.validation_report_json = json.dumps(report)
+        session.flush()
+        return draft.id
 
 
 def test_list_drafts_filters_by_status(client):
@@ -259,10 +363,114 @@ def test_reject_draft_restores_pending_review_when_refinement_fails(mock_call, c
         assert session.query(models.TemplateReview).filter_by(draft_id=draft.id).count() == 1
 
 
-def test_approve_draft_is_disabled(client):
-    draft = _seed_pending_review_draft()
-    resp = client.post(f"/meta/drafts/{draft.id}/approve")
+def test_approve_disabled_returns_409_before_checking_preconditions(client):
+    # meta_approval_enabled defaults to False on the `client` fixture. The
+    # flag must be checked before the request is even validated against real
+    # preconditions -- proven here by sending a deliberately-failing
+    # confirmation flag and still getting 409, not 422.
+    draft_id = _seed_approvable_draft(draft_id="draft-disabled", fingerprint_key="k-disabled")
+    resp = client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "apples_count", "math_semantics_confirmed": False},
+    )
     assert resp.status_code == 409
+    assert "disabled" in resp.json()["detail"].lower()
+
+
+def test_approve_success_returns_200_and_publishes_version(approval_client):
+    draft_id = _seed_approvable_draft(draft_id="draft-ok", fingerprint_key="k-ok")
+    resp = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "apples_count", "reviewer_label": "qa", "math_semantics_confirmed": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["template_name"] == "apples_count"
+    assert body["status"] == "enabled"
+    assert body["template_version_id"]
+
+    with db.meta_session() as session:
+        version = session.query(models.TemplateVersion).filter_by(fingerprint_key="k-ok").one()
+        assert version.status == "enabled"
+        assert version.id == body["template_version_id"]
+        reloaded_draft = session.get(models.TemplateDraft, draft_id)
+        assert reloaded_draft.status == models.DRAFT_APPROVED
+
+
+def test_approve_unconfirmed_semantics_returns_422(approval_client):
+    draft_id = _seed_approvable_draft(draft_id="draft-unconf", fingerprint_key="k-unconf")
+    resp = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "apples", "math_semantics_confirmed": False},
+    )
+    assert resp.status_code == 422
+
+
+def test_approve_unknown_draft_returns_404(approval_client):
+    resp = approval_client.post(
+        "/meta/drafts/does-not-exist/approve",
+        json={"template_name": "apples", "math_semantics_confirmed": True},
+    )
+    assert resp.status_code == 404
+
+
+def test_approve_wrong_status_returns_409(approval_client):
+    draft_id = _seed_approvable_draft(
+        draft_id="draft-wrong-status", fingerprint_key="k-wrong-status", status=models.DRAFT_GENERATED,
+    )
+    resp = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "apples", "math_semantics_confirmed": True},
+    )
+    assert resp.status_code == 409
+
+
+def test_approve_revoked_fingerprint_returns_409(approval_client):
+    draft_id = _seed_approvable_draft(draft_id="draft-revoked", fingerprint_key="k-revoked")
+    with db.meta_session() as session:
+        session.add(models.TemplateVersion(
+            id="ver-revoked", fingerprint_key="k-revoked", template_name="old_name",
+            draft_id=None, artifact_hash="sha256:old", status=models.TEMPLATE_VERSION_REVOKED,
+            created_at=_now(), updated_at=_now(),
+        ))
+    resp = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "apples", "math_semantics_confirmed": True},
+    )
+    assert resp.status_code == 409
+
+
+def test_approve_template_name_collision_returns_409(approval_client):
+    draft_id = _seed_approvable_draft(draft_id="draft-name-collision", fingerprint_key="k-collision")
+    with db.meta_session() as session:
+        session.add(models.TemplateVersion(
+            id="ver-other", fingerprint_key="k-other", template_name="taken",
+            draft_id=None, artifact_hash="sha256:other", status=models.TEMPLATE_VERSION_ENABLED,
+            created_at=_now(), updated_at=_now(),
+        ))
+    resp = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "taken", "math_semantics_confirmed": True},
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.parametrize("exc_cls,expected_status", [
+    (DraftNotFoundError, 404),
+    (DraftNotApprovableError, 409),
+    (ApprovalPreconditionError, 422),
+    (RevokedConflictError, 409),
+    (TemplateNameConflictError, 409),
+    (ApprovalConflictError, 409),
+])
+def test_approve_maps_each_service_exception_to_http_status(exc_cls, expected_status, approval_client):
+    with patch("app.meta.review_api.approve_draft_service", side_effect=exc_cls("boom")):
+        resp = approval_client.post(
+            "/meta/drafts/any-id/approve",
+            json={"template_name": "apples", "math_semantics_confirmed": True},
+        )
+    assert resp.status_code == expected_status
+    assert resp.json()["detail"] == "boom"
 
 
 def test_review_router_absent_when_meta_templates_disabled(monkeypatch, tmp_path):

@@ -123,5 +123,8 @@ def test_full_flow_from_observation_to_reject_and_refine(
     assert body["needs_manual_authoring"] is False
     assert body["new_draft"]["revision"] == 2
 
-    approve_response = client.post(f"/meta/drafts/{body['new_draft']['id']}/approve")
+    approve_response = client.post(
+        f"/meta/drafts/{body['new_draft']['id']}/approve",
+        json={"template_name": "fraction_bars", "math_semantics_confirmed": True},
+    )
     assert approve_response.status_code == 409

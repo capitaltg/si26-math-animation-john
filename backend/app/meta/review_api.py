@@ -17,6 +17,15 @@ from app.meta.models import (
     TemplateDraft,
     TemplateDraftFixture,
 )
+from app.meta.approval import (
+    ApprovalConflictError,
+    ApprovalPreconditionError,
+    DraftNotApprovableError,
+    DraftNotFoundError,
+    RevokedConflictError,
+    TemplateNameConflictError,
+    approve_draft_service,
+)
 from app.meta.review_actions import (
     DraftNotRefinableError,
     DraftRefinementFailedError,
@@ -85,6 +94,18 @@ class RejectResponse(BaseModel):
 class FixtureUpdateRequest(BaseModel):
     params: dict
     expected_result: dict
+
+
+class ApproveRequest(BaseModel):
+    template_name: str
+    reviewer_label: str = "dev-reviewer"
+    math_semantics_confirmed: bool
+
+
+class ApproveResponse(BaseModel):
+    template_version_id: str
+    template_name: str
+    status: str
 
 
 def _draft_summary(draft: TemplateDraft) -> DraftSummaryOut:
@@ -247,9 +268,34 @@ def reject_draft(draft_id: str, request: RejectRequest):
     return RejectResponse(new_draft=_draft_summary(new_draft), needs_manual_authoring=False)
 
 
-@router.post("/drafts/{draft_id}/approve")
-def approve_draft(draft_id: str):
-    raise HTTPException(
-        status_code=409,
-        detail="Approval is disabled in this phase; it is enabled once the publication-gate tests pass (Phase 5)",
+@router.post("/drafts/{draft_id}/approve", response_model=ApproveResponse)
+def approve_draft(draft_id: str, request: ApproveRequest):
+    settings = get_settings()
+    if not settings.meta_approval_enabled:
+        raise HTTPException(status_code=409, detail="Approval is disabled in this environment")
+
+    try:
+        version = approve_draft_service(
+            draft_id=draft_id,
+            template_name=request.template_name,
+            reviewer_label=request.reviewer_label,
+            math_semantics_confirmed=request.math_semantics_confirmed,
+        )
+    except DraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftNotApprovableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApprovalPreconditionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RevokedConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TemplateNameConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApprovalConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return ApproveResponse(
+        template_version_id=version.id,
+        template_name=version.template_name,
+        status=version.status,
     )
