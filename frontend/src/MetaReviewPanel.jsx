@@ -129,9 +129,12 @@ export default function MetaReviewPanel() {
     }
   }
 
-  useEffect(() => () => {
-    isMountedRef.current = false
-    if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current)
+    }
   }, [])
 
   async function loadDrafts() {
