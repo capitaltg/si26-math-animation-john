@@ -245,3 +245,97 @@ def test_template_option_accepts_a_dynamic_template_name():
 
     option = TemplateOption(template="decimal_comparison_grid", rationale="x")
     assert option.template == "decimal_comparison_grid"
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classify_includes_dynamic_options_when_flag_enabled_and_session_given(mock_call, monkeypatch):
+    from app.config import get_settings
+    from app.meta.dynamic_templates import DynamicSnapshotEntry, EnabledSnapshot
+    from app.pipeline.classification import classify_candidate
+
+    monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", True)
+    snapshot = EnabledSnapshot(
+        _entries={
+            "decimal_comparison_grid": DynamicSnapshotEntry(
+                version_id="v1", artifact_hash="sha256:x",
+                classifier_bullet="- decimal_comparison_grid: compares two decimals on a grid.",
+            )
+        }
+    )
+    monkeypatch.setattr(
+        "app.pipeline.classification.load_enabled_snapshot", lambda session: snapshot
+    )
+    mock_call.return_value = (
+        "classify_problem",
+        {
+            "options": [
+                {"template": "decimal_comparison_grid", "rationale": "compares two decimals"},
+            ],
+            "grade_level": 4,
+            "ambiguous": False,
+        },
+    )
+
+    result = classify_candidate("Compare 0.4 and 0.35", session=object())
+
+    dynamic_option = next(o for o in result.options if o.template == "decimal_comparison_grid")
+    assert dynamic_option.version_id == "v1"
+    # The tool schema call included the dynamic bullet and a closed enum containing it.
+    called_kwargs = mock_call.call_args.kwargs
+    assert "decimal_comparison_grid" in called_kwargs["system_prompt"]
+    schema = called_kwargs["tools"][0]["schema"]
+    template_enum = schema["$defs"]["TemplateOption"]["properties"]["template"]["enum"]
+    assert "decimal_comparison_grid" in template_enum
+    assert "number_line" in template_enum
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classify_drops_an_option_outside_the_snapshot(mock_call, monkeypatch):
+    from app.config import get_settings
+    from app.meta.dynamic_templates import EnabledSnapshot
+    from app.pipeline.classification import classify_candidate
+
+    monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", True)
+    monkeypatch.setattr(
+        "app.pipeline.classification.load_enabled_snapshot",
+        lambda session: EnabledSnapshot(_entries={}),
+    )
+    mock_call.return_value = (
+        "classify_problem",
+        {
+            "options": [
+                {"template": "hallucinated_template", "rationale": "made this up"},
+                {"template": "number_line", "rationale": "shows one forward jump"},
+            ],
+            "grade_level": 1,
+            "ambiguous": False,
+        },
+    )
+
+    result = classify_candidate("6 + 3 = ?", session=object())
+
+    names = [o.template for o in result.options]
+    assert "hallucinated_template" not in names
+    assert "number_line" in names
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classify_without_a_session_ignores_dynamic_templates_even_if_flag_enabled(mock_call, monkeypatch):
+    from app.config import get_settings
+    from app.pipeline.classification import classify_candidate
+
+    monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", True)
+    mock_call.return_value = (
+        "classify_problem",
+        {"options": [], "grade_level": 1, "ambiguous": False},
+    )
+
+    classify_candidate("6 + 3 = ?")  # no session passed
+
+    called_kwargs = mock_call.call_args.kwargs
+    schema = called_kwargs["tools"][0]["schema"]
+    # No session was passed, so the snapshot was never loaded and the schema
+    # is left completely unpatched -- byte-identical to today's schema, which
+    # has no "enum" constraint on the (already-widened-to-str) template field.
+    template_property = schema["$defs"]["TemplateOption"]["properties"]["template"]
+    assert "enum" not in template_property
