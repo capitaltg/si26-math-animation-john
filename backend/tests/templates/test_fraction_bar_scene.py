@@ -5,6 +5,7 @@ from app.models.scene import TemplateName
 from app.render.full_render import render_scene_to_mp4
 from app.templates.fraction_bar.params import FractionBarParams, FractionStep
 from app.templates.fraction_bar.scene import draw_fraction_bar
+from app.templates.registry import static_ref
 
 
 class _StubScene:
@@ -97,7 +98,7 @@ def test_fraction_bar_renders_to_mp4(tmp_path):
     )
     output_path = tmp_path / "fraction_bar.mp4"
 
-    result_path = render_scene_to_mp4(TemplateName.FRACTION_BAR, params, output_path)
+    result_path = render_scene_to_mp4(static_ref(TemplateName.FRACTION_BAR), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()

@@ -53,11 +53,11 @@ def _fallback_scene(
     try:
         if thumbnail:
             out = _unique_thumbnail_path(candidate, output_dir)
-            render_scene_thumbnail(TemplateName.TEXT_CARD, params, out)
+            render_scene_thumbnail(text_card_ref, params, out)
             thumbnail_path = out
         else:
             out = _unique_output_path(candidate, output_dir)
-            render_scene_to_mp4(TemplateName.TEXT_CARD, params, out)
+            render_scene_to_mp4(text_card_ref, params, out)
             render_path = out
     except Exception:
         logger.warning(
@@ -91,7 +91,7 @@ def assemble_scene(
         thumb_path = _unique_thumbnail_path(candidate, output_dir)
         failure_kind = None
         try:
-            render_scene_thumbnail(template.name, params, thumb_path)
+            render_scene_thumbnail(template, params, thumb_path)
         except Exception:
             logger.warning(
                 "Thumbnail render failed for candidate %s; returning scene without preview",
@@ -138,7 +138,7 @@ def assemble_scene(
 
     thumb_path = _unique_thumbnail_path(candidate, output_dir)
     try:
-        render_scene_thumbnail(template.name, params, thumb_path)
+        render_scene_thumbnail(template, params, thumb_path)
     except Exception:
         logger.warning(
             "Thumbnail render failed for candidate %s; returning scene without preview",

@@ -236,11 +236,11 @@ def render(session_id: str | None = Cookie(default=None)):
             if scene.candidate_ids:
                 _, params_cls = get_chained_template(scene.template)
                 params = params_cls.model_validate(scene.params)
-                render_chained_scene_to_mp4(scene.template.name, params, output_path)
+                render_chained_scene_to_mp4(scene.template, params, output_path)
             else:
                 _, params_cls = get_template(scene.template)
                 params = params_cls.model_validate(scene.params)
-                render_scene_to_mp4(scene.template.name, params, output_path)
+                render_scene_to_mp4(scene.template, params, output_path)
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
             status = "fallback" if scene.fallback_reason else "approved"
@@ -459,7 +459,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
 
     thumb_path = session.output_dir / f"chain-{uuid4()}.png"
     try:
-        render_chained_scene_thumbnail(template.name, chained_params, thumb_path)
+        render_chained_scene_thumbnail(template, chained_params, thumb_path)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
 
@@ -561,9 +561,9 @@ def edit_scene(
         out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
         try:
             if scene.candidate_ids:
-                render_chained_scene_thumbnail(scene.template.name, params, out)
+                render_chained_scene_thumbnail(scene.template, params, out)
             else:
-                render_scene_thumbnail(scene.template.name, params, out)
+                render_scene_thumbnail(scene.template, params, out)
         except Exception as exc:
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")

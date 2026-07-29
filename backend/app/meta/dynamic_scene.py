@@ -161,8 +161,11 @@ def render_animation_node(scene, node, values: dict, mobjects: dict, collect_ani
 class DynamicTemplateScene(MovingCameraScene):
     compiled_animation = None
     field_values = None
+    params = None
 
     def construct(self):
+        if self.field_values is None and self.params is not None:
+            self.field_values = self.params.model_dump()
         if self.compiled_animation is None or self.field_values is None:
             raise ValueError(
                 "DynamicTemplateScene.compiled_animation and .field_values must be set before construct() runs"

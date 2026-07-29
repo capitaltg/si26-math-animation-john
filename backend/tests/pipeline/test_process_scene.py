@@ -146,7 +146,7 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path)
     ref = static_ref(TemplateName.NUMBER_LINE)
 
     def fail_number_line_preview(template, *_args):
-        if template == TemplateName.NUMBER_LINE:
+        if template.name == TemplateName.NUMBER_LINE:
             raise RuntimeError("preview failed")
 
     with patch(
