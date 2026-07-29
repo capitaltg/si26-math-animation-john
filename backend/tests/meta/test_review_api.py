@@ -188,6 +188,50 @@ def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
     assert fixture["expected_result"] is None
 
 
+def test_update_fixture_revalidates_and_refreshes_preview(client):
+    draft = _seed_pending_review_draft()
+    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
+    with db.meta_session() as session:
+        obs = session.get(models.FallbackObservation, "obs-1")
+        obs.source_excerpt = "there are 5 or 6 apples"
+
+    with patch("app.meta.validation_pipeline.render_and_store_preview") as mock_render:
+        mock_render.return_value = "hash-after-edit"
+        response = client.post(
+            f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
+            json={"params": {"n": 6}, "expected_result": {"answer": "6"}},
+        )
+
+    assert response.status_code == 200
+    assert mock_render.called
+    detail = client.get(f"/meta/drafts/{draft.id}").json()
+    assert detail["status"] == "pending_review"
+    assert detail["preview_url"] == "/meta/preview/hash-after-edit"
+    assert detail["validation_report"]["artifact_hash"] == draft.artifact_hash
+    assert detail["validation_report"]["passed"] is True
+
+
+def test_update_fixture_rejects_edit_on_approved_draft_without_mutation(client):
+    draft = _seed_pending_review_draft()
+    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
+    with db.meta_session() as session:
+        stored = session.get(models.TemplateDraft, draft.id)
+        stored.status = models.DRAFT_APPROVED
+
+    response = client.post(
+        f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
+        json={"params": {"n": 6}, "expected_result": {"answer": "6"}},
+    )
+
+    assert response.status_code == 409
+    fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
+    assert fixture["params"] == {"n": 5}
+    assert fixture["expected_result"] is None
+    with db.meta_session() as session:
+        stored = session.get(models.TemplateDraft, draft.id)
+        assert stored.status == models.DRAFT_APPROVED
+
+
 @patch("app.meta.draft_generation.call_with_tool")
 def test_reject_draft_creates_new_revision(mock_call, client):
     draft = _seed_pending_review_draft()

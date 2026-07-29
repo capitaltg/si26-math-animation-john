@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
@@ -10,7 +10,13 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from app.config import get_settings
 from app.meta.artifacts import artifact_path
 from app.meta.db import meta_session
-from app.meta.models import FallbackObservation, TemplateDraft, TemplateDraftFixture
+from app.meta.models import (
+    DRAFT_FAILED_VALIDATION,
+    DRAFT_PENDING_REVIEW,
+    FallbackObservation,
+    TemplateDraft,
+    TemplateDraftFixture,
+)
 from app.meta.review_actions import (
     DraftNotRefinableError,
     DraftRefinementFailedError,
@@ -22,6 +28,9 @@ from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
 from app.meta.validation import compile_draft_documents
+from app.meta.validation_pipeline import persist_validation
+
+_FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
 
 router = APIRouter(prefix="/meta")
 
@@ -163,6 +172,12 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         if fixture is None or fixture.draft_id != draft_id:
             raise HTTPException(status_code=404, detail=f"Unknown fixture {fixture_id}")
         draft = session.get(TemplateDraft, draft_id)
+        if draft is None or draft.status not in _FIXTURE_EDITABLE_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Draft {draft_id} fixtures are not editable in status "
+                f"{draft.status if draft else 'unknown'}",
+            )
         params_document = ParamsDocument.model_validate(json.loads(draft.params_document_json))
         guard_document = GuardDocument.model_validate(json.loads(draft.guard_document_json))
         answer_expression = TypeAdapter(ExpressionNode).validate_python(
@@ -196,6 +211,21 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         fixture.params_json = json.dumps(request.params)
         fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
         session.flush()
+
+        draft_fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
+        observation_ids = {f.observation_id for f in draft_fixtures if f.observation_id}
+        observations_by_id = {
+            observation.id: observation
+            for observation in session.query(FallbackObservation)
+            .filter(FallbackObservation.id.in_(observation_ids))
+            .all()
+        }
+        persist_validation(
+            session, draft, observations_by_id, datetime.now(timezone.utc),
+            get_settings().meta_artifact_root,
+        )
+        session.flush()
+
         return _fixture_out(session, fixture)
 
 
