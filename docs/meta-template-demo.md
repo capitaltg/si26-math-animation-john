@@ -115,12 +115,12 @@ structural templates:
 
 ### 2. Seed a new template with slide 1
 
-Select only the detected candidate from slide 1 and click **Get options**.
+Select only the detected candidate from slide 1 and click **Get options.**
 Before proceeding, verify that `text_card` is the only compatible fallback.
 Choosing it manually instead of an offered structural template does not create
 a learning observation.
 
-Select `text_card`, click **Review storyboard**, approve the scene, and render
+Select `text_card`, click **Review storyboard.**, approve the scene, and render
 through the normal workflow. The slide 1 rectangle perimeter is 22.
 
 ### 3. Watch the worker create a draft
@@ -154,7 +154,7 @@ is valid, and the reviewer explicitly confirms the mathematics.
 ### 5. Reuse the template with slide 2
 
 Return to `http://localhost:5173` and upload the same fixture again. Select only
-slide 2 and click **Get options**. The problem has the same rectangle-perimeter
+slide 2 and click **Get options.** The problem has the same rectangle-perimeter
 structure with a correct answer of `28`; the published
 `rectangle_perimeter` template should now appear in the point-in-time option
 list.

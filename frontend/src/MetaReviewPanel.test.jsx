@@ -311,6 +311,9 @@ it('enables Approve when the configured fixture threshold is met', async () => {
   fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
   fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
 
+  expect(
+    screen.getByRole('heading', { name: 'Approve' }).nextElementSibling.textContent,
+  ).toContain('Verified fixtures: 1 / 1 required.')
   expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(false)
 })
 
