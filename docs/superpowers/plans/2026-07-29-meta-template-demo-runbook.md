@@ -14,12 +14,111 @@
 - `docs/meta-template-demo.md` is the canonical workflow.
 - The README must not retain a second full copy of the workflow.
 - The guide must use `eval/fixtures/meta_template_unsupported_shapes_deck.pptx`.
-- The change must not modify application behavior or configuration defaults.
+- The review UI must use the backend-configured fixture threshold without
+  changing configuration defaults or approval-service rules.
 - Preserve the user's unrelated untracked `CLAUDE.md`.
 
 ---
 
-### Task 1: Write the canonical demo runbook
+### Task 1: Align the review UI with the backend fixture threshold
+
+**Files:**
+- Modify: `backend/app/meta/review_api.py`
+- Modify: `backend/tests/meta/test_review_api.py`
+- Modify: `frontend/src/MetaReviewPanel.jsx`
+- Modify: `frontend/src/MetaReviewPanel.test.jsx`
+
+**Interfaces:**
+- Consumes: `Settings.fingerprint_observation_threshold`
+- Produces: `DraftDetailOut.required_fixture_count: int` for the review panel
+
+- [ ] **Step 1: Add failing backend coverage**
+
+Extend `test_get_draft_detail_includes_fixtures_and_preview_url` to override
+`FINGERPRINT_OBSERVATION_THRESHOLD=1`, clear the settings cache, request the
+draft detail, and assert:
+
+```python
+assert body["required_fixture_count"] == 1
+```
+
+Run:
+
+```bash
+cd backend
+../.venv/bin/python -m pytest tests/meta/test_review_api.py::test_get_draft_detail_includes_fixtures_and_preview_url -q
+```
+
+Expected: FAIL because `required_fixture_count` is absent.
+
+- [ ] **Step 2: Return the configured threshold**
+
+Add this field to `DraftDetailOut`:
+
+```python
+required_fixture_count: int
+```
+
+Set it in `_draft_detail`:
+
+```python
+required_fixture_count=get_settings().fingerprint_observation_threshold,
+```
+
+Run the focused backend test again. Expected: PASS.
+
+- [ ] **Step 3: Add failing frontend coverage**
+
+Set `required_fixture_count: 1` on the single-fixture `draftDetail`, give that
+fixture an expected result, and add a test that enters a valid template name,
+checks the mathematical-semantics checkbox, and expects **Approve and publish**
+to become enabled.
+
+Run:
+
+```bash
+cd frontend
+npm test -- --run src/MetaReviewPanel.test.jsx
+```
+
+Expected: FAIL while the panel still compares against the hardcoded value five.
+
+- [ ] **Step 4: Consume the API threshold**
+
+Remove `FIXTURE_THRESHOLD`. Compute:
+
+```jsx
+const requiredFixtureCount = selected?.required_fixture_count ?? 5
+```
+
+Use `requiredFixtureCount` in both `canApprove` and the `Verified fixtures`
+copy.
+
+Run the focused frontend test again. Expected: PASS.
+
+- [ ] **Step 5: Run focused suites and commit**
+
+Run:
+
+```bash
+cd backend
+../.venv/bin/python -m pytest tests/meta/test_review_api.py -q
+cd ../frontend
+npm test -- --run src/MetaReviewPanel.test.jsx
+```
+
+Expected: both suites pass with no failures.
+
+Commit:
+
+```bash
+git add backend/app/meta/review_api.py backend/tests/meta/test_review_api.py frontend/src/MetaReviewPanel.jsx frontend/src/MetaReviewPanel.test.jsx
+git commit -m "fix: align meta review fixture threshold"
+```
+
+---
+
+### Task 2: Write the canonical demo runbook
 
 **Files:**
 - Create: `docs/meta-template-demo.md`
@@ -100,7 +199,7 @@ finds all five concepts, and `git diff --check` exits successfully.
 
 ---
 
-### Task 2: Make the README route to the canonical guide
+### Task 3: Make the README route to the canonical guide
 
 **Files:**
 - Modify: `README.md`
@@ -144,7 +243,7 @@ search has no matches, and `git diff --check` exits successfully.
 
 ---
 
-### Task 3: Verify and commit the documentation
+### Task 4: Verify and commit the documentation
 
 **Files:**
 - Verify: `docs/meta-template-demo.md`

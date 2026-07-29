@@ -58,16 +58,39 @@ The runbook will use:
 Answers are documented for reviewer fixture entry but do not appear on the
 slides.
 
+## Approval-threshold consistency
+
+Review found that the backend approval service uses the configured
+`FINGERPRINT_OBSERVATION_THRESHOLD`, while the frontend independently
+hardcodes the production default of five. That mismatch leaves **Approve and
+publish** disabled during the one-observation demo even though the server
+would accept the draft.
+
+The draft-detail API will therefore include the configured required fixture
+count. The review panel will use that value for both its disabled-state gate
+and its `Verified fixtures` progress copy. The existing value of five remains
+the normal default; setting the demo threshold to one will make both layers
+require one.
+
+This behavior change must be implemented test-first:
+
+- a backend route test must fail before the response field is added;
+- a frontend test must fail while the panel still uses the hardcoded value;
+- focused backend and frontend suites must pass after implementation.
+
 ## Scope
 
-This change updates documentation only. It does not alter the worker, backend,
-frontend, fixture deck, feature flags, or deployment behavior.
+This change updates the runbook and aligns the dev review UI with the backend's
+existing approval threshold. It does not alter the worker, fixture deck,
+configuration defaults, approval service rules, or deployment behavior.
 
 ## Verification
 
 - Confirm every command and path exists in the current repository.
 - Confirm UI labels match the current frontend.
 - Confirm all feature flags match backend configuration.
+- Confirm the draft-detail API reports the configured fixture threshold.
+- Confirm the review panel gates approval using the API-provided threshold.
 - Confirm the bundled fixture contains four slides.
 - Confirm the README points to the canonical guide and does not retain a second
   full workflow.
