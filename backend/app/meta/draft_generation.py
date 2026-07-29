@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +51,25 @@ _DRAFT_SYSTEM_PROMPT = (
 )
 
 
+def _coerce_stringified_json_fields(raw: dict) -> dict:
+    """Bedrock tool-use output occasionally stringifies a nested object/array
+    field instead of emitting it inline (seen so far on ``answer_expression``,
+    whose schema is a recursive discriminated union). Undo that one layer of
+    over-serialization before handing the payload to pydantic.
+    """
+    coerced = dict(raw)
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            coerced[key] = parsed
+    return coerced
+
+
 def _observation_context(observations: list[FallbackObservation]) -> str:
     lines = [
         f"- id={obs.id} grade={obs.grade_level}: {obs.source_excerpt}" for obs in observations
@@ -78,7 +98,7 @@ def propose_template_draft(
         user_message=user_message,
         tools=[{"name": "propose_template_draft", "schema": DraftProposal.model_json_schema()}],
     )
-    proposal = DraftProposal.model_validate(raw)
+    proposal = DraftProposal.model_validate(_coerce_stringified_json_fields(raw))
     observation_ids = {observation.id for observation in observations}
     for fixture in proposal.fixtures:
         if fixture.observation_id is not None and fixture.observation_id not in observation_ids:
