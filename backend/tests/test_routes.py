@@ -267,6 +267,71 @@ def test_options_response_includes_a_static_version_id():
     assert number_line["version_id"] == number_line_ref.version_id
 
 
+def test_options_passes_no_session_when_dynamic_classifier_flag_is_off():
+    from unittest.mock import patch
+
+    client = _client()
+    _upload_candidate(client)
+
+    with patch("app.routes.classify_candidate") as mock_classify:
+        from app.pipeline.classification import ClassificationResult
+
+        mock_classify.return_value = ClassificationResult(options=[], grade_level=1, ambiguous=False)
+        client.post("/options", json={"candidate_ids": ["c1"]})
+
+    assert mock_classify.call_args.kwargs.get("session") is None
+
+
+def test_storyboard_resolves_a_dynamic_template_pick():
+    from unittest.mock import MagicMock, patch
+
+    from app.models.scene import Scene, TemplateRef
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+
+    client = _client()
+    _upload_candidate(client)
+
+    classification = ClassificationResult(
+        options=[
+            TemplateOption(template="decimal_comparison_grid", rationale="fits", version_id="v1"),
+            TemplateOption(
+                template="text_card",
+                rationale="always-compatible fallback",
+                version_id="static:text_card:1",
+            ),
+        ],
+        grade_level=4,
+        ambiguous=False,
+    )
+    dynamic_ref = TemplateRef(name="decimal_comparison_grid", version_id="v1", artifact_hash="sha256:x")
+
+    fake_params_cls = MagicMock()
+    fake_params_cls.model_json_schema.return_value = {}
+
+    with patch("app.routes.classify_candidate", return_value=classification), patch(
+        "app.routes.resolve_dynamic_ref", return_value=dynamic_ref
+    ) as mock_resolve_dynamic, patch("app.routes.assemble_scene") as mock_assemble, patch(
+        "app.meta.dynamic_templates.get_dynamic_template",
+        return_value=(MagicMock(), fake_params_cls),
+    ):
+        mock_assemble.return_value = Scene(
+            scene_id="s1",
+            candidate_id="c1",
+            template=dynamic_ref,
+            grade_level=4,
+            params={},
+            status="pending_review",
+        )
+        client.post("/options", json={"candidate_ids": ["c1"]})
+        resp = client.post(
+            "/storyboard",
+            json={"picks": [{"candidate_id": "c1", "template": "decimal_comparison_grid"}]},
+        )
+
+    assert resp.status_code == 200
+    mock_resolve_dynamic.assert_called_once()
+
+
 def test_options_unknown_candidate_is_404():
     client = _client()
     _upload_candidate(client)

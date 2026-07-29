@@ -8,11 +8,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
+from app.meta.db import meta_session
+from app.meta.dynamic_templates import resolve_dynamic_ref
 from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
 from app.models.scene import (
     Scene,
-    TemplateName,
     TemplateRef,
     TemplateVersionMismatchError,
 )
@@ -27,7 +28,12 @@ from app.render.full_render import (
     render_scene_to_mp4,
 )
 from app.session import SessionStore
-from app.templates.registry import get_chained_template, get_template, resolve_static_ref
+from app.templates.registry import (
+    get_chained_template,
+    get_template,
+    is_static_template_name,
+    resolve_static_ref,
+)
 
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
@@ -56,7 +62,7 @@ class OptionsRequest(BaseModel):
 
 
 class TemplateOptionOut(BaseModel):
-    template: TemplateName
+    template: str
     version_id: str
     rationale: str
 
@@ -193,8 +199,13 @@ def get_options(
         candidates.append((candidate_id, candidate))
 
     results: list[CandidateOptionsOut] = []
+    settings = get_settings()
     for candidate_id, candidate in candidates:
-        classification = classify_candidate(candidate.source_excerpt)
+        if settings.meta_dynamic_classifier_enabled:
+            with meta_session() as meta_db_session:
+                classification = classify_candidate(candidate.source_excerpt, session=meta_db_session)
+        else:
+            classification = classify_candidate(candidate.source_excerpt)
         session.options[candidate_id] = classification
         results.append(
             CandidateOptionsOut(
@@ -368,7 +379,13 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
             option for option in classification.options if option.template == pick.template
         )
         try:
-            template = resolve_static_ref(selected_option.template, selected_option.version_id)
+            if is_static_template_name(selected_option.template):
+                template = resolve_static_ref(selected_option.template, selected_option.version_id)
+            else:
+                with meta_session() as meta_db_session:
+                    template = resolve_dynamic_ref(
+                        meta_db_session, selected_option.template, selected_option.version_id
+                    )
         except TemplateVersionMismatchError as exc:
             raise HTTPException(
                 status_code=409,
