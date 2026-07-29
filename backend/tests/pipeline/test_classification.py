@@ -131,9 +131,13 @@ def test_classify_rejects_an_unknown_template(mock_call):
     )
 
     # With widened template field, validation of membership happens downstream
-    # in static_ref() which raises ValueError for unknown template names
-    with pytest.raises(ValueError):
+    # in static_ref() which raises ValueError for unknown template names.
+    # pydantic.ValidationError is a ValueError subclass, so a bare pytest.raises(ValueError)
+    # would pass even if validation still happened at Pydantic construction time.
+    # We assert NOT ValidationError to prove validation moved downstream.
+    with pytest.raises(ValueError) as exc_info:
         classify_candidate("anything")
+    assert not isinstance(exc_info.value, ValidationError)
 
 
 @patch("app.pipeline.classification.call_with_tool")
