@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import FieldRefNode
+from app.meta.dsl.expression import FieldRefNode, FractionNode
 from app.meta.dsl.guard import DivisibleByPredicate, GuardDocument, PositivePredicate, compile_guard
 from app.meta.dsl.params import (
     ArrayFieldSpec,
@@ -278,3 +278,80 @@ def test_array_field_spec_rejects_optional_with_min_items_positive():
             max_items=3,
             item_fields=[IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99)],
         )
+
+
+def test_grounding_number_tokens_includes_a_field_ref_fraction_pair():
+    from app.meta.dsl.guard import GuardDocument, RangePredicate
+    from app.meta.dsl.expression import LiteralNode
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="numerator", label="Numerator", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="denominator", label="Denominator", description="", minimum=1, maximum=20),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            RangePredicate(
+                value=FractionNode(
+                    operands=[FieldRefNode(field="numerator"), FieldRefNode(field="denominator")]
+                ),
+                minimum=LiteralNode(value=0),
+                maximum=LiteralNode(value=1),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"numerator", "denominator"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(numerator=3, denominator=4)
+    tokens = params.grounding_number_tokens()
+
+    assert "3/4" in tokens
+    assert "3" in tokens
+    assert "4" in tokens
+
+
+def test_grounding_derived_totals_covers_sum_equals_predicates():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="a", label="A", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="b", label="B", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="total", label="Total", description="", minimum=1, maximum=40),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), FieldRefNode(field="b")],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "b", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=3, b=4, total=7)
+    totals = params.grounding_derived_totals()
+
+    assert totals == [("7", ["3", "4"])]
+
+
+def test_grounding_number_tokens_falls_back_to_default_stringification_without_fraction_predicates():
+    Params = compile_template_params(
+        ParamsDocument(
+            params_version=1,
+            fields=[
+                IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            ],
+        ),
+        _guard_for("rows"),
+    )
+    params = Params(rows=5)
+    assert params.grounding_number_tokens() == ["5"]
