@@ -515,6 +515,50 @@ it('revokes a preview blob URL created by a fetch that resolves after the compon
   await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`))
 })
 
+it('revokes a preview blob URL whose fetch was still in flight when Back to list was clicked before it resolved', async () => {
+  let resolvePreviewFetch
+  const previewFetchPromise = new Promise((resolve) => { resolvePreviewFetch = resolve })
+
+  const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts?status=failed_validation') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      return { ok: true, json: async () => draftDetail }
+    }
+    if (url === draftDetail.preview_url) {
+      // Deliberately left pending: "Back to list" must be clicked (and
+      // navigate away) before this preview fetch resolves. `selected` is
+      // set by openDraft before it awaits loadPreview, so the button is
+      // clickable at this point in the real app.
+      return previewFetchPromise
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(draftDetail.preview_url, expect.anything()))
+
+  // Navigate away before the pending preview fetch resolves.
+  fireEvent.click(screen.getByText('Back to list'))
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Pending drafts' })).not.toBeNull())
+
+  // Now let the in-flight preview fetch resolve. It must recognize it was
+  // superseded by the navigation and revoke its blob URL instead of
+  // committing it to state (there is no preview <img> to commit into
+  // anyway, since the list view is showing).
+  resolvePreviewFetch({ ok: true, blob: async () => ({ __sourceUrl: draftDetail.preview_url }) })
+
+  await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${draftDetail.preview_url}`))
+  expect(screen.queryByAltText('preview')).toBeNull()
+})
+
 it('shows approve errors from the server', async () => {
   installApprovableFetchMock({
     approveResponse: {

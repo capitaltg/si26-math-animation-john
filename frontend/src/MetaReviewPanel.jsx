@@ -70,8 +70,23 @@ export default function MetaReviewPanel() {
   // list") must revoke the current preview blob URL: the <img> disappears
   // because it's gated on `selected`, but the blob itself would otherwise
   // stay alive -- and leaked -- until the next loadPreview call or unmount.
+  //
+  // It must also invalidate any loadPreview call already in flight at the
+  // moment of navigation (selected is set, and "Back to list" is clickable,
+  // before openDraft's loadPreview call resolves). Bumping the token here
+  // means that in-flight call's own staleness check -- the same one used
+  // for out-of-order loadPreview calls -- will see it's been superseded
+  // once it resolves, and self-revoke instead of writing a blob URL into
+  // state for a list view that's no longer showing a preview at all.
+  //
+  // This bump deliberately lives here rather than inside clearPreview():
+  // loadPreview() also calls clearPreview() itself (to revoke the previous
+  // blob) *after* capturing its own loadId into a local variable, so a
+  // bump inside clearPreview() would make every loadPreview call see its
+  // own freshly-claimed id as already stale.
   function returnToList() {
     clearPreview()
+    previewLoadIdRef.current += 1
     setSelected(null)
   }
 
