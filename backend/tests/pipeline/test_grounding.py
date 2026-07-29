@@ -118,6 +118,17 @@ def test_derived_total_rejected_when_value_does_not_equal_component_sum():
     assert check_params_grounded(params, "3 4") == ["8"]
 
 
+def test_derived_product_total_is_allowed_when_its_components_are_grounded():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["3", "4", "12"],
+        derived_totals=[("12", ["3", "4"], "product")],
+    )
+
+    assert check_params_grounded(params, "3 × 4 = ?") == []
+
+
 def test_balance_scale_declares_right_total_as_derived():
     from app.pipeline.grounding import check_params_grounded
     from app.templates.balance_scale.params import BalanceScaleParams

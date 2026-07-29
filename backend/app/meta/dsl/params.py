@@ -276,8 +276,10 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
             for predicate in compiled_guard.document.predicates:
                 if predicate.predicate == "sum_equals":
                     terms, total = predicate.terms, predicate.total
+                    operation = "sum"
                 elif predicate.predicate == "product_equals":
                     terms, total = predicate.factors, predicate.total
+                    operation = "product"
                 else:
                     continue
                 if getattr(total, "node", None) not in ("literal", "field_ref"):
@@ -286,7 +288,10 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     continue
                 component_tokens = [format_component(term) for term in terms]
                 total_token = format_component(total)
-                derived.append((total_token, component_tokens))
+                if operation == "sum":
+                    derived.append((total_token, component_tokens))
+                else:
+                    derived.append((total_token, component_tokens, operation))
             return derived
 
     return DynamicTemplateParams

@@ -122,7 +122,11 @@ def get_dynamic_template(ref: TemplateRef) -> tuple[type, type]:
 
     with meta_session() as session:
         version = session.get(TemplateVersion, ref.version_id)
-        if version is None or version.template_name != ref.name:
+        if (
+            version is None
+            or version.template_name != ref.name
+            or version.status == TEMPLATE_VERSION_REVOKED
+        ):
             raise TemplateVersionMismatchError(
                 f"No dynamic template version {ref.version_id!r} for {ref.name!r}"
             )

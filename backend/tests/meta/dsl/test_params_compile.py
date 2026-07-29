@@ -369,7 +369,7 @@ def test_grounding_derived_totals_covers_product_equals_predicates():
     params = Params(a=3, b=4, total=12)
     totals = params.grounding_derived_totals()
 
-    assert totals == [("12", ["3", "4"])]
+    assert totals == [("12", ["3", "4"], "product")]
 
 
 def test_grounding_derived_totals_skips_predicates_with_compound_total():
