@@ -227,6 +227,7 @@ class CompiledAnimation:
     refs: frozenset[str]
     total_duration_seconds: float
     answer_expressions: tuple[ExpressionNode, ...] = ()
+    visible_answer_expressions: tuple[ExpressionNode, ...] = ()
 
 
 def _children_of(node) -> list:
@@ -253,6 +254,8 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     node_count = 0
     duration = 0.0
     answer_expressions: list[ExpressionNode] = []
+    answer_expressions_by_ref: dict[str, ExpressionNode] = {}
+    visible_answer_expressions: list[ExpressionNode] = []
 
     def walk(node, depth: int, layout_ancestors: tuple[int, ...] = ()) -> None:
         nonlocal node_count, duration
@@ -282,6 +285,9 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
 
         if node.kind == "appear":
             appeared_refs.add(node.target_ref)
+            visible_answer = answer_expressions_by_ref.get(node.target_ref)
+            if visible_answer is not None:
+                visible_answer_expressions.append(visible_answer)
 
         for field_name in _VISUAL_EXPRESSION_FIELDS.get(node.kind, ()):
             compile_expression(getattr(node, field_name), known_fields)
@@ -294,6 +300,8 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
                 static_text = (node.prefix, node.suffix)
                 if node.role == "answer":
                     answer_expressions.append(node.expression)
+                    if node.ref is not None:
+                        answer_expressions_by_ref[node.ref] = node.expression
             if any(_contains_field_placeholder(text, known_fields) for text in static_text):
                 raise DslValidationError(
                     "unsupported_text_placeholder",
@@ -365,4 +373,5 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
         refs=frozenset(declared_refs),
         total_duration_seconds=duration,
         answer_expressions=tuple(answer_expressions),
+        visible_answer_expressions=tuple(visible_answer_expressions),
     )

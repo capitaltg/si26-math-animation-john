@@ -74,10 +74,16 @@ def _valid_proposal_dict(observation_id="obs-1"):
         ),
         guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={
+        animation_document=AnimationDocument(animation_version=2, root={
             "kind": "sequence",
             "steps": [
-                {"kind": "label", "ref": "n_label", "text": "n"},
+                {
+                    "kind": "expression_label",
+                    "ref": "n_label",
+                    "expression": {"node": "field_ref", "field": "n"},
+                    "prefix": "Answer: ",
+                    "role": "answer",
+                },
                 {"kind": "appear", "target_ref": "n_label"},
                 {"kind": "wait", "seconds": 1},
             ],

@@ -33,7 +33,7 @@ def compile_draft_documents(
     compiled_animation = compile_animation_document(animation_document, known_fields)
     if (
         animation_document.animation_version == 2
-        and answer_expression not in compiled_animation.answer_expressions
+        and answer_expression not in compiled_animation.visible_answer_expressions
     ):
         raise DslValidationError(
             "answer_not_displayed",

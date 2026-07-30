@@ -106,6 +106,7 @@ def test_generation_prompt_requires_shared_spatial_layout(mock_call):
     prompt = kwargs["system_prompt"]
     assert "sequence controls time, not spatial position" in prompt
     assert "one shared row, column, overlay, align, or padding layout tree" in prompt
+    assert "answer-role expression_label must have its own ref and appear" in prompt
 
 
 @patch("app.meta.draft_generation.call_with_tool")
