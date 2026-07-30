@@ -4,6 +4,7 @@ from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
     ArrowNode,
+    ColumnNode,
     HighlightNode,
     LabelNode,
     NumberLineNode,
@@ -187,6 +188,116 @@ def test_layout_rejects_timed_action_children():
     with pytest.raises(DslValidationError) as exc:
         compile_animation_document(document, known_fields=frozenset())
     assert exc.value.code == "invalid_layout_child"
+
+
+def test_multiple_independent_appeared_visuals_require_shared_layout():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                LabelNode(ref="title", text="Perimeter of a Rectangle"),
+                AppearNode(target_ref="title"),
+                ObjectSetNode(ref="diagram", count=LiteralNode(value=3)),
+                AppearNode(target_ref="diagram"),
+                LabelNode(ref="formula", text="Perimeter = 2 × (length + width)"),
+                AppearNode(target_ref="formula"),
+            ]
+        ),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+
+    assert exc.value.code == "missing_shared_layout"
+    assert "diagram, formula, title" in exc.value.message
+
+
+def test_progressively_appeared_visuals_in_one_column_compile():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                ColumnNode(
+                    children=[
+                        LabelNode(ref="title", text="Perimeter of a Rectangle"),
+                        ObjectSetNode(ref="diagram", count=LiteralNode(value=3)),
+                        LabelNode(ref="formula", text="Perimeter = 2 × (length + width)"),
+                    ]
+                ),
+                AppearNode(target_ref="title"),
+                AppearNode(target_ref="diagram"),
+                AppearNode(target_ref="formula"),
+            ]
+        ),
+    )
+
+    compiled = compile_animation_document(document, known_fields=frozenset())
+
+    assert compiled.refs == {"title", "diagram", "formula"}
+
+
+def test_single_independent_appeared_visual_still_compiles():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                LabelNode(ref="title", text="Perimeter"),
+                AppearNode(target_ref="title"),
+                AppearNode(target_ref="title"),
+            ]
+        ),
+    )
+
+    compiled = compile_animation_document(document, known_fields=frozenset())
+
+    assert compiled.refs == {"title"}
+
+
+def test_nested_layouts_share_their_outer_layout_root():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                ColumnNode(
+                    children=[
+                        LabelNode(ref="title", text="Perimeter"),
+                        RowNode(
+                            children=[
+                                LabelNode(ref="length", text="Length"),
+                                LabelNode(ref="width", text="Width"),
+                            ]
+                        ),
+                    ]
+                ),
+                AppearNode(target_ref="title"),
+                AppearNode(target_ref="length"),
+                AppearNode(target_ref="width"),
+            ]
+        ),
+    )
+
+    compiled = compile_animation_document(document, known_fields=frozenset())
+
+    assert compiled.refs == {"title", "length", "width"}
+
+
+def test_appeared_visuals_in_separate_layout_trees_are_rejected():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                RowNode(children=[LabelNode(ref="left", text="Left")]),
+                ColumnNode(children=[LabelNode(ref="right", text="Right")]),
+                AppearNode(target_ref="left"),
+                AppearNode(target_ref="right"),
+            ]
+        ),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+
+    assert exc.value.code == "missing_shared_layout"
 
 
 def test_parallel_rejects_control_flow_steps():

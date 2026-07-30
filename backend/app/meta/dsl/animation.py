@@ -220,12 +220,18 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     declared_refs: set[str] = set()
     producing_refs: set[str] = set()
     referenced_refs: set[str] = set()
+    appeared_refs: set[str] = set()
+    layout_ancestors_by_ref: dict[str, frozenset[int]] = {}
     node_count = 0
     duration = 0.0
 
-    def walk(node, depth: int) -> None:
+    def walk(node, depth: int, layout_ancestors: tuple[int, ...] = ()) -> None:
         nonlocal node_count, duration
         node_count += 1
+        node_id = node_count
+        current_layout_ancestors = layout_ancestors
+        if node.kind in _LAYOUT_KINDS:
+            current_layout_ancestors = (*layout_ancestors, node_id)
         if node_count > MAX_ANIMATION_NODES:
             raise DslValidationError("too_many_nodes", f"max {MAX_ANIMATION_NODES} exceeded")
         if depth > MAX_ANIMATION_DEPTH:
@@ -237,10 +243,14 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             declared_refs.add(node.ref)
             if node.kind in _PRODUCING_KINDS:
                 producing_refs.add(node.ref)
+                layout_ancestors_by_ref[node.ref] = frozenset(current_layout_ancestors)
 
         for field_name in _REF_FIELDS:
             if hasattr(node, field_name):
                 referenced_refs.add(getattr(node, field_name))
+
+        if node.kind == "appear":
+            appeared_refs.add(node.target_ref)
 
         for field_name in _VISUAL_EXPRESSION_FIELDS.get(node.kind, ()):
             compile_expression(getattr(node, field_name), known_fields)
@@ -271,7 +281,7 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
                         f"step kind '{step.kind}' does not return a batchable Animation",
                     )
         for child in children:
-            walk(child, depth + 1)
+            walk(child, depth + 1, current_layout_ancestors)
 
     walk(document.root, 0)
 
@@ -288,6 +298,17 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     dangling = referenced_refs - producing_refs
     if dangling:
         raise DslValidationError("dangling_ref", ", ".join(sorted(dangling)))
+
+    if len(appeared_refs) > 1:
+        shared_layouts = set.intersection(
+            *(set(layout_ancestors_by_ref[ref]) for ref in appeared_refs)
+        )
+        if not shared_layouts:
+            refs = ", ".join(sorted(appeared_refs))
+            raise DslValidationError(
+                "missing_shared_layout",
+                f"appeared visuals require a common row/column/layout ancestor: {refs}",
+            )
 
     if duration > MAX_TOTAL_DURATION_SECONDS:
         raise DslValidationError(
