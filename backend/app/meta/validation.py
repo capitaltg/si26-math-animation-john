@@ -31,6 +31,15 @@ def compile_draft_documents(
     params_cls = compile_template_params(params_document, compiled_guard)
     compile_expression(answer_expression, known_fields)
     compiled_animation = compile_animation_document(animation_document, known_fields)
+    if (
+        animation_document.animation_version == 2
+        and answer_expression not in compiled_animation.answer_expressions
+    ):
+        raise DslValidationError(
+            "answer_not_displayed",
+            "version 2 animations must display answer_expression "
+            "with an answer-role expression_label",
+        )
     return CompiledDraft(
         params_cls=params_cls,
         compiled_animation=compiled_animation,

@@ -50,8 +50,19 @@ def _raw_proposal(observation_id="obs-1"):
             ],
         },
         "animation_document": {
-            "animation_version": 1,
-            "root": {"kind": "label", "text": "3/4"},
+            "animation_version": 2,
+            "root": {
+                "kind": "expression_label",
+                "expression": {
+                    "node": "fraction",
+                    "operands": [
+                        {"node": "field_ref", "field": "numerator"},
+                        {"node": "field_ref", "field": "denominator"},
+                    ],
+                },
+                "prefix": "Answer: ",
+                "role": "answer",
+            },
         },
         "classifier_bullet": "Use for shading a fraction of one bar.",
         "fixtures": [
@@ -74,6 +85,15 @@ def test_propose_template_draft_validates_bedrock_response(mock_call):
     mock_call.assert_called_once()
     _, kwargs = mock_call.call_args
     assert kwargs["tools"][0]["name"] == "propose_template_draft"
+
+
+@patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_rejects_legacy_animation_version(mock_call):
+    proposal = _raw_proposal()
+    proposal["animation_document"]["animation_version"] = 1
+    mock_call.return_value = ("propose_template_draft", proposal)
+    with pytest.raises(ValueError, match="animation_version 2"):
+        propose_template_draft(_fingerprint(), [_observation()])
 
 
 @patch("app.meta.draft_generation.call_with_tool")
