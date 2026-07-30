@@ -22,8 +22,8 @@ def _field(name):
     return {"node": "field_ref", "field": name}
 
 
-def _measured_visual(ref, height):
-    bounds = Bounds(-1, 1, -height / 2, height / 2)
+def _measured_visual(ref, height, width=2):
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
     return MeasuredVisual(
         ref=ref,
         bounds=bounds,
@@ -184,15 +184,38 @@ def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
     original_gap = 0.45
     primary, supporting, conclusion = place_vertical_lesson([
         _measured_visual("primary", 3),
-        _measured_visual("supporting", 3),
+        _measured_visual("supporting", 3, width=7),
         _measured_visual("evaluated_answer", 1),
     ])
     scale = (primary.bounds.top - primary.bounds.bottom) / 3
 
     assert scale < 1
-    assert primary.bounds.bottom - supporting.bounds.top == pytest.approx(original_gap * scale)
+    assert primary.bounds.left - supporting.bounds.right == pytest.approx(original_gap * scale)
     for visual in (primary, supporting, conclusion):
-        assert visual.bounds.left >= SAFE_FRAME.left
-        assert visual.bounds.right <= SAFE_FRAME.right
+        assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
+        assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
+        assert visual.bounds.top <= SAFE_FRAME.top + 1e-9
+
+
+def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_visuals():
+    primary, supporting, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 2),
+        _measured_visual("supporting", 0.8),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    assert primary.bounds.center.y == pytest.approx(0.6)
+    assert primary.bounds.left - supporting.bounds.right == pytest.approx(0.45)
+    assert conclusion.bounds.top <= -2.4
+    for visual in (primary, supporting, conclusion):
         assert visual.bounds.bottom >= SAFE_FRAME.bottom
         assert visual.bounds.top <= SAFE_FRAME.top
+
+
+def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
+    conclusion, = place_vertical_lesson([_measured_visual("evaluated_answer", 0.6)])
+
+    assert conclusion.bounds.center.y == pytest.approx(-3.0)
+    assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
+    assert conclusion.bounds.top <= -2.4

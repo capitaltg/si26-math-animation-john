@@ -48,13 +48,19 @@ class ResolvedScene:
     total_duration_seconds: float
     style_recipe: StyleRecipeDocument
 
-    def visual(self, ref):
+    def visual(self, ref: str) -> PlacedVisual:
         return next(item for item in self.visuals if item.measured.ref == ref)
 
-    def relation(self, ref):
+    def relation(self, ref: str) -> ResolvedRelation:
         return next(item for item in self.relations if item.ref == ref)
 
-    def anchor(self, visual_ref, part, index, name):
+    def anchor(
+        self,
+        visual_ref: str,
+        part: str | None,
+        index: int | None,
+        name: str,
+    ) -> Point:
         return self.visual(visual_ref).anchor(part, index, name)
 
 
