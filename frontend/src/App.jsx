@@ -575,9 +575,20 @@ function MainApp() {
                     Render failed for {ids.join(', ')}
                   </span>
                 ) : result.clip_url ? (
-                  <a href={result.clip_url} download>
-                    Download clip ({ids.join(', ')})
-                  </a>
+                  <div>
+                    <video
+                      aria-label={`Rendered clip ${ids.join(', ')}`}
+                      src={result.clip_url}
+                      controls
+                      preload="metadata"
+                      style={{ display: 'block', width: '100%', height: 'auto', marginBottom: '0.5rem' }}
+                    >
+                      Your browser does not support HTML video playback.
+                    </video>
+                    <a href={result.clip_url} download>
+                      Download clip ({ids.join(', ')})
+                    </a>
+                  </div>
                 ) : (
                   <span>Clip {ids.join(', ')}</span>
                 )}

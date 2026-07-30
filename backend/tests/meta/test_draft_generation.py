@@ -77,6 +77,18 @@ def test_propose_template_draft_validates_bedrock_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_generation_prompt_requires_shared_spatial_layout(mock_call):
+    mock_call.return_value = ("propose_template_draft", _raw_proposal())
+
+    propose_template_draft(_fingerprint(), [_observation()])
+
+    _, kwargs = mock_call.call_args
+    prompt = kwargs["system_prompt"]
+    assert "sequence controls time, not spatial position" in prompt
+    assert "one shared row, column, overlay, align, or padding layout tree" in prompt
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_propose_template_draft_rejects_malformed_response(mock_call):
     bad = _raw_proposal()
     bad["fixtures"][0]["kind"] = "not_a_real_kind"
