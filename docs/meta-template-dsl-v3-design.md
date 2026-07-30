@@ -92,10 +92,17 @@ Deterministic Teaching Compiler
           |
           v
 Executable SceneProgram
-  - stable scene graph
-  - semantic child anchors
+  - stable parameterized scene graph
+  - semantic child-anchor references
   - explicit visual states
   - timed action track
+          |
+          v
+Runtime Scene Resolver
+  - evaluate current parameter values
+  - measure current labels and visuals
+  - solve layout
+  - resolve anchors and relations
           |
           v
 Deterministic Renderer + Rendered Quality Probes
@@ -110,9 +117,12 @@ A v3 draft proposal retains the existing parameter schema, guard schema, answer
 expression, classifier contract, and fixtures. It replaces the generated
 `animation_document` with a `teaching_plan_document`.
 
-After successful compilation, the draft also stores the deterministic
-`scene_program_document` and `quality_report`. Persisting both makes preview and
-publication reproducible and lets reviewers inspect the generated intent
+After successful compilation, the draft also stores the deterministic,
+parameterized `scene_program_document` and `quality_report`. The scene program
+contains expressions, layout constraints, semantic anchor references, and a
+timeline, but no fixture-specific coordinates. Preview and full rendering
+resolve it against their current parameter values. Persisting both documents
+makes compilation reproducible and lets reviewers inspect the generated intent
 separately from its compiled execution.
 
 Conceptually:
@@ -229,14 +239,23 @@ indices.
 
 ## Anchored Scene Graph
 
-The compiler produces a stable scene graph in five phases:
+The compiler produces a stable, parameterized scene graph and timeline. Every
+preview or full render then resolves that program for the current parameter
+values in five phases:
 
-1. **Instantiate:** build semantic visuals and measure intrinsic bounds.
+1. **Evaluate and instantiate:** evaluate visual expressions, build semantic
+   visuals, and measure their current intrinsic bounds.
 2. **Solve layout:** place the complete visual hierarchy inside the frame.
 3. **Resolve relations:** create callouts, braces, arrows, and paths against the
    final bounds of their targets.
-4. **Schedule:** lower beats and custom actions into a bounded timeline.
+4. **Bind timeline:** bind the compiled actions to the resolved visual
+   identities, paths, and state transitions.
 5. **Render:** execute without changing the solved structural layout.
+
+The same approved template can therefore render `3 5 6 8 9 12 15` and a later
+input with different digit widths without reusing coordinates from the review
+fixture. The teaching plan and scene program compile once; layout and anchors
+resolve deterministically for each set of values.
 
 ### Anchor references
 
@@ -363,11 +382,12 @@ The teaching compiler is divided into independently testable units:
    paths, and supported operations.
 
 4. **Layout solver**  
-   Chooses a bounded composition and computes final visual geometry.
+   Chooses a bounded composition at compile time and computes final visual
+   geometry from evaluated runtime values during scene resolution.
 
 5. **Relation resolver**  
    Resolves typed item, edge, cell, vertex, and other semantic anchors after
-   layout; checks callout placement and collisions.
+   runtime layout; checks callout placement and collisions.
 
 6. **Timeline scheduler**  
    Allocates the adaptive duration, batches related actions, and guarantees
@@ -381,16 +401,18 @@ The teaching compiler is divided into independently testable units:
    Enforces resource, security, layout, timing, salience, and concept-affordance
    rules on the compiled program.
 
-9. **Renderer adapter**  
-   Converts the scene program into Manim objects and animations without
-   interpreting generated code.
+9. **Runtime scene resolver and renderer adapter**
+   Evaluates the scene program with current field values, measures and lays out
+   the resulting visuals, resolves relations, and converts the resolved scene
+   into Manim objects and animations without interpreting generated code.
 
 10. **Rendered-quality probe**  
     Samples frames at beat boundaries and verifies the properties that require
     actual pixels or final renderer geometry.
 
-No component needs to know how the model produced the plan. The renderer
-receives only a validated scene program.
+No component needs to know how the model produced the plan. The runtime resolver
+receives only a validated scene program and validated field values; the renderer
+receives only the resulting resolved scene.
 
 ## Quality Gates
 
