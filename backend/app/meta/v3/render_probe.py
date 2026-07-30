@@ -36,6 +36,7 @@ class ProbeOutput:
 
 def validate_rendered_quality(manifest: dict) -> QualityReport:
     checks = [
+        check_manifest_contract(manifest),
         check_non_blank_frames(manifest),
         check_frame_bounds(manifest),
         check_relation_alignment(manifest),
@@ -46,6 +47,52 @@ def validate_rendered_quality(manifest: dict) -> QualityReport:
         check_final_answer_persistence(manifest),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
+
+
+def check_manifest_contract(manifest: dict) -> QualityCheck:
+    required = {
+        "frame_size": (list, tuple),
+        "total_duration_seconds": (int, float),
+        "conclusion_hold_seconds": (int, float),
+        "simple_reveal_mode": (str, type(None)),
+        "frames": list,
+        "visual_bounds": dict,
+        "anchors": dict,
+        "relations": dict,
+        "declared_relations": list,
+        "path_events": list,
+        "declared_path_events": list,
+        "dimension_anchor_checks": dict,
+        "declared_dimension_anchors": list,
+        "state_events": list,
+        "declared_state_events": list,
+        "final_answer_visible": bool,
+        "derivation_visible": bool,
+    }
+    for field, expected_type in required.items():
+        if field not in manifest or not isinstance(manifest[field], expected_type):
+            return _failed("render_probe_contract_invalid", field, "required probe evidence is missing or malformed")
+    if len(manifest["frame_size"]) != 2 or not manifest["frames"]:
+        return _failed("render_probe_contract_invalid", "frames", "probe needs a frame size and at least one sampled frame")
+    if not _numbers(manifest["frame_size"], 2):
+        return _failed("render_probe_contract_invalid", "frame_size", "frame dimensions must be numeric")
+    if not all(_frame_contract(frame) for frame in manifest["frames"]):
+        return _failed("render_probe_contract_invalid", "frames", "sampled frames need beat, time, and path evidence")
+    if not all(_numbers(bounds, 4) for bounds in manifest["visual_bounds"].values()):
+        return _failed("render_probe_contract_invalid", "visual_bounds", "visual bounds must be four numeric coordinates")
+    if not all(_numbers(anchor, 2) for anchor in manifest["anchors"].values()):
+        return _failed("render_probe_contract_invalid", "anchors", "anchors must be two numeric coordinates")
+    if not all(_relation_contract(relation) for relation in manifest["relations"].values()):
+        return _failed("render_probe_contract_invalid", "relations", "relation evidence is incomplete")
+    if not all(isinstance(value, str) for field in ("declared_relations", "path_events", "declared_path_events", "declared_dimension_anchors") for value in manifest[field]):
+        return _failed("render_probe_contract_invalid", "manifest", "declared and observed identifiers must be strings")
+    if not all(_state_contract(event, observed=True) for event in manifest["state_events"]):
+        return _failed("render_probe_contract_invalid", "state_events", "observed state evidence is incomplete")
+    if not all(_state_contract(event, observed=False) for event in manifest["declared_state_events"]):
+        return _failed("render_probe_contract_invalid", "declared_state_events", "declared state evidence is incomplete")
+    if not all(_dimension_contract(outcome) for outcome in manifest["dimension_anchor_checks"].values()):
+        return _failed("render_probe_contract_invalid", "dimension_anchor_checks", "dimension evidence is incomplete")
+    return _passed("render_probe_contract_invalid", "manifest")
 
 
 def run_probe_subprocess(request: ProbeRequest) -> ProbeOutput:
@@ -127,6 +174,9 @@ def check_relation_alignment(manifest: dict) -> QualityCheck:
         target, tip = relation.get("target"), relation.get("tip")
         if not _points(target, tip) or _normalized_distance(target, tip, width, height) > ANCHOR_TOLERANCE:
             return _failed("anchor_alignment_mismatch", f"relations.{ref}", "callout tip is not aligned to its semantic anchor")
+    missing = set(manifest.get("declared_relations", [])) - set(manifest.get("relations", {}))
+    if missing:
+        return _failed("rendered_relation_mismatch", "relations", "a declared relation was not rendered")
     return _passed("anchor_alignment_mismatch", "relations")
 
 
@@ -142,6 +192,10 @@ def check_callout_collisions(manifest: dict) -> QualityCheck:
 
 
 def check_state_order(manifest: dict) -> QualityCheck:
+    observed = {(event.get("target"), event.get("role")) for event in manifest.get("state_events", [])}
+    declared = {(event.get("target"), event.get("role")) for event in manifest.get("declared_state_events", [])}
+    if not declared <= observed:
+        return _failed("rendered_state_mismatch", "state_events", "a declared semantic state was not rendered")
     events = [event for event in manifest.get("state_events", []) if event.get("target") == "values.item[3]"]
     if not events:
         return _passed("state_order_invalid", "state_events")
@@ -162,6 +216,9 @@ def check_declared_path_events(manifest: dict) -> QualityCheck:
 
 
 def check_dimension_attachments(manifest: dict) -> QualityCheck:
+    missing = set(manifest.get("declared_dimension_anchors", [])) - set(manifest.get("dimension_anchor_checks", {}))
+    if missing:
+        return _failed("dimension_anchor_mismatch", "dimension_anchor_checks", "dimension attachment evidence is missing")
     for ref, outcome in manifest.get("dimension_anchor_checks", {}).items():
         passed = outcome if isinstance(outcome, bool) else outcome.get("passed", False)
         if not passed:
@@ -187,6 +244,12 @@ def _load_manifest(path: Path) -> dict:
         raise _probe_failure(
             "render_probe_contract_invalid", "manifest", "manifest object with sampled frames",
             "probe manifest has an invalid shape", "regenerate the candidate and retry the preview",
+        )
+    contract = check_manifest_contract(manifest)
+    if not contract.passed:
+        raise _probe_failure(
+            "render_probe_contract_invalid", contract.path, "complete probe evidence",
+            contract.detail, "regenerate the candidate and retry the preview",
         )
     return manifest
 
@@ -228,6 +291,47 @@ def _frame_size(manifest: dict) -> tuple[float, float]:
     if not isinstance(size, (list, tuple)) or len(size) != 2 or size[0] <= 0 or size[1] <= 0:
         return 1.0, 1.0
     return float(size[0]), float(size[1])
+
+
+def _frame_contract(frame) -> bool:
+    return (
+        isinstance(frame, dict)
+        and isinstance(frame.get("beat_id"), str)
+        and isinstance(frame.get("seconds"), (int, float))
+        and isinstance(frame.get("path"), str)
+    )
+
+
+def _relation_contract(relation) -> bool:
+    return (
+        isinstance(relation, dict)
+        and isinstance(relation.get("target_anchor"), str)
+        and _numbers(relation.get("target"), 2)
+        and _numbers(relation.get("tip"), 2)
+        and _numbers(relation.get("bounds"), 4)
+    )
+
+
+def _state_contract(event, *, observed: bool) -> bool:
+    return (
+        isinstance(event, dict)
+        and isinstance(event.get("target"), str)
+        and isinstance(event.get("role"), str)
+        and (not observed or isinstance(event.get("seconds"), (int, float)))
+    )
+
+
+def _dimension_contract(outcome) -> bool:
+    return isinstance(outcome, bool) or (
+        isinstance(outcome, dict) and isinstance(outcome.get("passed"), bool)
+    )
+
+
+def _numbers(value, count: int) -> bool:
+    return (
+        isinstance(value, (list, tuple)) and len(value) == count
+        and all(isinstance(item, (int, float)) for item in value)
+    )
 
 
 def _inside(bounds, width, height) -> bool:

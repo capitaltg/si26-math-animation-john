@@ -135,4 +135,9 @@ def test_worker_probe_mode_writes_final_frame_and_manifest(tmp_path):
         "reveal_values", "organize_pairs", "focus_middle", "show_answer",
     ]
     assert manifest["relations"]["median_callout"]["target_anchor"] == "values.item[3].bottom"
+    assert {"target": "values.item[3]", "role": "focus"} in manifest["declared_state_events"]
+    assert any(
+        event["target"] == "values.item[3]" and event["role"] == "focus"
+        for event in manifest["state_events"]
+    )
     assert manifest["final_answer_visible"] is True

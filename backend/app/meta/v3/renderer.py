@@ -42,6 +42,8 @@ def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene
     motion = _MOTIONS[resolved_scene.style_recipe.motion_variant]
     palette = resolved_scene.style_recipe.palette
     rendered = composition(resolved_scene, palette)
+    if hasattr(scene, "set_rendered_scene"):
+        scene.set_rendered_scene(rendered)
 
     cursor = 0.0
     for at_seconds, actions in _actions_by_start(resolved_scene.timeline):
@@ -234,7 +236,10 @@ def _play_together_reveals(scene, actions, rendered: RenderedScene, motion) -> N
             if target.ref.visual_ref not in refs:
                 refs.append(target.ref.visual_ref)
     animation = AnimationGroup(*animations)
-    _play(scene, animation, max(action.duration_seconds for action in actions), "group_reveal", target_refs=tuple(refs))
+    _play(
+        scene, animation, max(action.duration_seconds for action in actions), "group_reveal",
+        target_refs=tuple(refs), events=tuple(_probe_event(action) for action in actions),
+    )
 
 
 def _play_role_batches(scene, actions, rendered: RenderedScene, palette: str) -> None:
@@ -262,6 +267,7 @@ def _play_role_batches(scene, actions, rendered: RenderedScene, palette: str) ->
             target=target,
             targets=target_keys,
             role=role,
+            events=tuple(_probe_event(action) for action in batch),
         )
 
 
@@ -282,6 +288,7 @@ def _play_parallel_actions(scene, actions, rendered: RenderedScene, motion, pale
         AnimationGroup(*animations),
         max(action.duration_seconds for action in actions),
         "parallel",
+        events=tuple(_probe_event(action) for action in actions),
     )
 
 
@@ -289,9 +296,12 @@ def _play_action(scene, action: ResolvedAction, rendered: RenderedScene, motion,
     animation = _action_animation(action, rendered, motion, palette)
     kind = action.action.kind
     if kind == "reveal":
-        _play(scene, animation, action.duration_seconds, "stagger_reveal", target_refs=tuple(target.ref.visual_ref for target in action.targets))
+        _play(
+            scene, animation, action.duration_seconds, "stagger_reveal",
+            target_refs=tuple(target.ref.visual_ref for target in action.targets), events=(_probe_event(action),),
+        )
     else:
-        _play(scene, animation, action.duration_seconds, kind, target=_action_target(action))
+        _play(scene, animation, action.duration_seconds, kind, target=_action_target(action), events=(_probe_event(action),))
 
 
 def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, palette: str):
@@ -333,10 +343,22 @@ def _target_tuple(ref):
     return ref.visual_ref, ref.part, ref.index
 
 
-def _play(scene, animation, run_time: float, kind: str, *, target_refs=(), target=None, targets=(), role=None) -> None:
+def _probe_event(action: ResolvedAction) -> dict:
+    return {
+        "beat_id": action.beat_id,
+        "kind": action.action.kind,
+        "targets": tuple(_target_tuple(target.ref) for target in action.targets),
+        "role": action.action.role if action.action.kind == "set_role" else None,
+        "path_ref": action.action.path_ref if action.action.kind in {"trace", "move"} else None,
+        "relation_ref": action.action.relation_ref if action.action.kind == "show_relation" else None,
+    }
+
+
+def _play(scene, animation, run_time: float, kind: str, *, target_refs=(), target=None, targets=(), role=None, events=()) -> None:
     animation._semantic_kind = kind
     animation._semantic_target_refs = target_refs
     animation._semantic_target = target
     animation._semantic_targets = targets
     animation._semantic_role = role
+    animation._semantic_events = events
     scene.play(animation, run_time=run_time)

@@ -35,13 +35,19 @@ def valid_manifest():
                 "bounds": [420, 225, 482, 260],
             },
         },
+        "declared_relations": ["median_callout"],
         "path_events": [],
         "declared_path_events": [],
         "dimension_anchor_checks": {},
+        "declared_dimension_anchors": [],
         "state_events": [
             {"seconds": 1.5, "target": "values.item[3]", "role": "neutral"},
             {"seconds": 4.5, "target": "values.item[3]", "role": "focus"},
             {"seconds": 6.0, "target": "evaluated_answer", "role": "conclusion"},
+        ],
+        "declared_state_events": [
+            {"target": "values.item[3]", "role": "neutral"},
+            {"target": "values.item[3]", "role": "focus"},
         ],
         "final_answer_visible": True,
         "derivation_visible": True,
@@ -88,6 +94,29 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
 
 def test_rendered_quality_accepts_complete_manifest(valid_manifest):
     assert validate_rendered_quality(valid_manifest).passed is True
+
+
+@pytest.mark.parametrize("field", [
+    "relations", "state_events", "path_events", "dimension_anchor_checks", "final_answer_visible",
+])
+def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
+    del valid_manifest[field]
+
+    report = validate_rendered_quality(valid_manifest)
+
+    assert report.passed is False
+    assert "render_probe_contract_invalid" in [check.code for check in report.checks if not check.passed]
+
+
+def test_rendered_quality_rejects_declared_state_not_observed_by_renderer(valid_manifest):
+    valid_manifest["state_events"] = [
+        {"seconds": 1.5, "target": "values.item[3]", "role": "neutral"},
+    ]
+
+    report = validate_rendered_quality(valid_manifest)
+
+    assert report.passed is False
+    assert "rendered_state_mismatch" in [check.code for check in report.checks if not check.passed]
 
 
 def test_rendered_report_surfaces_only_structured_failure(valid_manifest):

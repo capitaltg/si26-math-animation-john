@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from app.meta.dsl.animation import AnimationDocument, compile_animation_document
+from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.manim_measurer import ManimTextMeasurer
@@ -87,7 +88,8 @@ def _render_probe(
             self.frames = []
             self.captured_beats = set()
             self.rendered = None
-            self.answer_was_rendered = False
+            self.render_events = []
+            self.final_answer_visible = False
             self.beat_end_times = {
                 beat_id: max(
                     action.at_seconds + action.duration_seconds
@@ -100,22 +102,44 @@ def _render_probe(
             duration = kwargs.get("run_time", 0.0)
             result = super().play(*animations, **kwargs)
             self.elapsed += duration
-            self._update_visible_answer()
+            self.render_events.extend(
+                self._observe_render_event(event)
+                for event in getattr(animations[0], "_semantic_events", ())
+            )
             self._capture_completed_beats()
             return result
 
         def wait(self, duration=1, *args, **kwargs):
             result = super().wait(duration, *args, **kwargs)
             self.elapsed += duration
-            self._update_visible_answer()
             self._capture_completed_beats()
             return result
 
         def construct(self):
             self.rendered = render_resolved_scene(self, resolved)
+            answer = self.rendered.visuals.get("evaluated_answer")
+            self.final_answer_visible = answer is not None and _mobject_is_visible(self, answer)
             self._capture_completed_beats(force=True)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             self.camera.get_image().save(output_path)
+
+        def set_rendered_scene(self, rendered):
+            self.rendered = rendered
+
+        def _observe_render_event(self, event):
+            observed = {**event, "seconds": self.elapsed}
+            if event["kind"] == "reveal":
+                observed["visible_targets"] = tuple(
+                    target for target in event["targets"]
+                    if _mobject_is_visible(self, self.rendered.targets[target])
+                )
+            if event["kind"] == "set_role":
+                expected = resolve_semantic_style(resolved.style_recipe.palette, event["role"])["color"]
+                observed["state_applied"] = all(
+                    _mobject_has_color(self.rendered.targets[target], expected)
+                    for target in event["targets"]
+                )
+            return observed
 
         def _capture_completed_beats(self, force=False):
             for beat_id, end_seconds in sorted(self.beat_end_times.items(), key=lambda item: item[1]):
@@ -126,13 +150,6 @@ def _render_probe(
                 self.frames.append({"beat_id": beat_id, "seconds": end_seconds, "path": path})
                 self.captured_beats.add(beat_id)
 
-        def _update_visible_answer(self):
-            self.answer_was_rendered = self.answer_was_rendered or any(
-                action.action.kind == "reveal"
-                and any(target.ref.visual_ref == "evaluated_answer" for target in action.targets)
-                and action.at_seconds + action.duration_seconds <= self.elapsed + 1e-6
-                for action in resolved.timeline
-            )
 
     overrides = {
         "media_dir": str(scratch_dir),
@@ -155,7 +172,13 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     }
     anchors = {}
     relations = {}
+    observed_relation_refs = {
+        event["relation_ref"] for event in scene.render_events
+        if event["kind"] == "show_relation" and event["relation_ref"] is not None
+    }
     for relation in resolved.relations:
+        if relation.ref not in observed_relation_refs:
+            continue
         target_anchor = _target_label(relation_specs[relation.ref].target)
         target_mobject = scene.rendered.targets[_target_key(relation_specs[relation.ref].target)]
         target = _pixel_array_point(_mobject_anchor(target_mobject, relation_specs[relation.ref].target.anchor), width, height)
@@ -169,19 +192,14 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
             "bounds": _pixel_mobject_bounds(mobject, width, height),
         }
 
-    path_events = [
-        action.action.path_ref for action in resolved.timeline
-        if action.action.kind in {"trace", "move"}
-    ]
-    state_events = _state_events(resolved)
+    path_events = [event["path_ref"] for event in scene.render_events if event["path_ref"] is not None]
+    state_events = _state_events(scene.render_events, resolved)
     dimensions = {
         relation.ref: {"passed": _point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02}
         for relation in program.relations if "dimension" in relation.ref
         for relation_data in [relations.get(relation.ref, {})]
         if relation_data
     }
-    answer = scene.rendered.visuals.get("evaluated_answer")
-    final_answer_visible = answer is not None and scene.answer_was_rendered
     conclusion_starts = [action.at_seconds for action in resolved.timeline if action.beat_id == _last_beat_id(resolved)]
     return {
         "frame_size": [width, height],
@@ -192,35 +210,56 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "visual_bounds": visual_bounds,
         "anchors": anchors,
         "relations": relations,
+        "declared_relations": [relation.ref for relation in program.relations],
         "path_events": path_events,
-        "declared_path_events": path_events,
+        "declared_path_events": [
+            action.action.path_ref for action in resolved.timeline if action.action.kind in {"trace", "move"}
+        ],
         "dimension_anchor_checks": dimensions,
+        "declared_dimension_anchors": [relation.ref for relation in program.relations if "dimension" in relation.ref],
         "state_events": state_events,
-        "final_answer_visible": final_answer_visible,
+        "declared_state_events": _declared_state_events(resolved),
+        "final_answer_visible": scene.final_answer_visible,
         "derivation_visible": bool(path_events) or any(event["role"] == "focus" for event in state_events),
     }
 
 
-def _state_events(resolved) -> list[dict]:
+def _state_events(render_events, resolved) -> list[dict]:
     events = []
+    for event in render_events:
+        if event["kind"] == "reveal":
+            for visual_ref, part, index in event["targets"]:
+                if (visual_ref, part, index) not in event["visible_targets"]:
+                    continue
+                visual = resolved.visual(visual_ref)
+                if part is None:
+                    events.extend({
+                        "seconds": event["seconds"],
+                        "target": f"{visual_ref}.{part_name}[{part_index}]",
+                        "role": "neutral",
+                    } for part_name, part_index in visual.measured.parts if part_name == "item")
+        elif event["kind"] == "set_role" and event["state_applied"]:
+            for target in event["targets"]:
+                events.append({
+                    "seconds": event["seconds"],
+                    "target": _target_label_from_key(target),
+                    "role": event["role"],
+                })
+    return events
+
+
+def _declared_state_events(resolved) -> list[dict]:
+    declared = []
     for action in resolved.timeline:
         if action.action.kind == "reveal":
             for target in action.targets:
                 visual = resolved.visual(target.ref.visual_ref)
                 if target.ref.part is None:
-                    events.extend({
-                        "seconds": action.at_seconds + action.duration_seconds,
-                        "target": f"{target.ref.visual_ref}.{part}[{index}]",
-                        "role": "neutral",
-                    } for part, index in visual.measured.parts if part == "item")
-        elif action.action.kind == "set_role":
-            for target in action.targets:
-                events.append({
-                    "seconds": action.at_seconds + action.duration_seconds,
-                    "target": _target_label(target.ref),
-                    "role": action.action.role,
-                })
-    return sorted(events, key=lambda event: event["seconds"])
+                    declared.extend({"target": f"{target.ref.visual_ref}.{part}[{index}]", "role": "neutral"}
+                                    for part, index in visual.measured.parts if part == "item")
+        elif action.action.kind == "set_role" and action.action.role == "focus":
+            declared.extend({"target": _target_label(target.ref), "role": action.action.role} for target in action.targets)
+    return declared
 
 
 def _simple_reveal_mode(resolved) -> str | None:
@@ -242,6 +281,20 @@ def _target_label(target) -> str:
         return target.visual_ref
     suffix = f".{target.part}[{target.index}]"
     return f"{target.visual_ref}{suffix}" + (f".{target.anchor}" if hasattr(target, "anchor") else "")
+
+
+def _target_label_from_key(target) -> str:
+    visual_ref, part, index = target
+    return visual_ref if part is None else f"{visual_ref}.{part}[{index}]"
+
+
+def _mobject_is_visible(scene, mobject) -> bool:
+    return any(member is mobject for root in scene.mobjects for member in root.get_family())
+
+
+def _mobject_has_color(mobject, expected) -> bool:
+    expected_hex = expected.to_hex()
+    return any(member.get_color().to_hex() == expected_hex for member in mobject.get_family())
 
 
 def _target_key(target):
