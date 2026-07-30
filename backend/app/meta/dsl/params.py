@@ -1,4 +1,5 @@
 from fractions import Fraction
+from itertools import product
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
@@ -280,6 +281,13 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     return str(node.value)
                 return _format_fraction_component(_evaluate(node, values))
 
+            def component_variants(node) -> tuple[str, ...]:
+                primary = format_component(node)
+                if getattr(node, "node", None) != "literal" or node.value.is_integer():
+                    return (primary,)
+                fraction = _format_fraction_component(_evaluate(node, values))
+                return (primary,) if fraction == primary else (primary, fraction)
+
             derived: list[tuple[str, list[str]]] = []
             for predicate in compiled_guard.document.predicates:
                 if predicate.predicate == "sum_equals":
@@ -294,12 +302,12 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     continue
                 if not all(getattr(term, "node", None) in ("literal", "field_ref") for term in terms):
                     continue
-                component_tokens = [format_component(term) for term in terms]
                 total_token = format_component(total)
-                if operation == "sum":
-                    derived.append((total_token, component_tokens))
-                else:
-                    derived.append((total_token, component_tokens, operation))
+                for component_tokens in product(*(component_variants(term) for term in terms)):
+                    if operation == "sum":
+                        derived.append((total_token, list(component_tokens)))
+                    else:
+                        derived.append((total_token, list(component_tokens), operation))
             return derived
 
     return DynamicTemplateParams
