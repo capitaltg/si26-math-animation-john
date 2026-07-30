@@ -113,19 +113,21 @@ def _good_perimeter_proposal(observation_id):
             "root": {
                 "kind": "sequence",
                 "steps": [
-                    {"kind": "column", "ref": "scene1", "children": [
-                        {"kind": "label", "ref": "title", "text": "Find the perimeter", "style": "primary"},
-                        {"kind": "grid", "ref": "rect",
-                         "rows": {"node": "field_ref", "field": "width"},
-                         "cols": {"node": "field_ref", "field": "length"}, "style": "primary"},
-                        {"kind": "label", "ref": "formula", "text": "P = 2 x (l + w)", "style": "muted"},
+                    {"kind": "column", "children": [
+                        {"kind": "column", "ref": "scene1", "children": [
+                            {"kind": "label", "ref": "title", "text": "Find the perimeter", "style": "primary"},
+                            {"kind": "grid", "ref": "rect",
+                             "rows": {"node": "field_ref", "field": "width"},
+                             "cols": {"node": "field_ref", "field": "length"}, "style": "primary"},
+                            {"kind": "label", "ref": "formula", "text": "P = 2 x (l + w)", "style": "muted"},
+                        ]},
+                        {"kind": "column", "ref": "scene2", "children": [
+                            {"kind": "object_set", "ref": "answer_set", "count": _ANSWER_EXPRESSION, "style": "success"},
+                            {"kind": "label", "ref": "answer", "text": "Perimeter (cm)", "style": "success"},
+                        ]},
                     ]},
                     {"kind": "appear", "target_ref": "scene1"},
                     {"kind": "wait", "seconds": 1},
-                    {"kind": "column", "ref": "scene2", "children": [
-                        {"kind": "object_set", "ref": "answer_set", "count": _ANSWER_EXPRESSION, "style": "success"},
-                        {"kind": "label", "ref": "answer", "text": "Perimeter (cm)", "style": "success"},
-                    ]},
                     {"kind": "appear", "target_ref": "scene2"},
                     {"kind": "wait", "seconds": 1},
                 ],
