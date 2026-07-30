@@ -49,20 +49,29 @@ def _raw_proposal(observation_id="obs-1"):
                 {"node": "field_ref", "field": "denominator"},
             ],
         },
-        "animation_document": {
-            "animation_version": 2,
-            "root": {
-                "kind": "expression_label",
-                "expression": {
-                    "node": "fraction",
-                    "operands": [
-                        {"node": "field_ref", "field": "numerator"},
-                        {"node": "field_ref", "field": "denominator"},
-                    ],
-                },
-                "prefix": "Answer: ",
-                "role": "answer",
+        "teaching_plan_document": {
+            "plan_version": 3,
+            "learning_objective": "Find a rectangle perimeter from its dimensions.",
+            "primary_visual": {
+                "kind": "rectangle_measurement",
+                "ref": "rectangle",
+                "length": {"node": "field_ref", "field": "length"},
+                "width": {"node": "field_ref", "field": "width"},
+                "unit": "cm",
             },
+            "supporting_visuals": [],
+            "strategy": "boundary_trace",
+            "beats": [
+                {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rectangle"}],
+                 "intent": "show the measured rectangle", "custom_actions": []},
+                {"id": "trace", "kind": "focus", "targets": [{"visual_ref": "rectangle"}],
+                 "intent": "trace all four edges", "custom_actions": []},
+                {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+                 "intent": "map opposite edges to twice length plus width", "custom_actions": []},
+                {"id": "answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+                 "intent": "state the evaluated perimeter", "custom_actions": []},
+            ],
+            "variation_seed": "perimeter-demo",
         },
         "classifier_bullet": "Use for shading a fraction of one bar.",
         "fixtures": [
@@ -88,26 +97,31 @@ def test_propose_template_draft_validates_bedrock_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
-def test_propose_template_draft_rejects_legacy_animation_version(mock_call):
+def test_propose_template_draft_rejects_non_v3_teaching_plan(mock_call):
     proposal = _raw_proposal()
-    proposal["animation_document"]["animation_version"] = 1
+    proposal["teaching_plan_document"]["plan_version"] = 2
     mock_call.return_value = ("propose_template_draft", proposal)
-    with pytest.raises(ValueError, match="animation_version 2"):
+    with pytest.raises(ValidationError):
         propose_template_draft(_fingerprint(), [_observation()])
 
 
 @patch("app.meta.draft_generation.call_with_tool")
-def test_generation_prompt_requires_shared_spatial_layout(mock_call):
+def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal())
 
     propose_template_draft(_fingerprint(), [_observation()])
 
     _, kwargs = mock_call.call_args
-    prompt = kwargs["system_prompt"]
-    assert "sequence controls time, not spatial position" in prompt
-    assert "one shared row, column, overlay, align, or padding layout tree" in prompt
-    assert "answer-role expression_label must have its own ref and appear" in prompt
-    assert "Never appear a producing layout and one of its descendants" in prompt
+    prompt = kwargs["system_prompt"].lower()
+    assert "three to five teaching beats" in prompt
+    assert "prefer semantic strategy over custom actions" in prompt
+    assert "only inside their owning beat" in prompt
+    assert "answer-related visuals start neutral" in prompt
+    assert "introduced only during conclude" in prompt
+    assert "simple collections reveal together" in prompt
+    assert "perimeter explanations use boundary_trace" in prompt
+    assert "median ordered values use item-specific targets" in prompt
+    assert "positions, durations beyond requested bounded actions, colors, code, renderer objects, or manim concepts" in prompt
 
 
 @patch("app.meta.draft_generation.call_with_tool")
@@ -141,22 +155,31 @@ def test_propose_template_draft_rejects_fixture_for_unknown_observation(mock_cal
 @patch("app.meta.draft_generation.call_with_tool")
 def test_propose_template_draft_coerces_stringified_nested_field(mock_call):
     bad = _raw_proposal()
-    bad["answer_expression"] = json.dumps(bad["answer_expression"])
+    bad["teaching_plan_document"] = json.dumps(bad["teaching_plan_document"])
     mock_call.return_value = ("propose_template_draft", bad)
 
     proposal = propose_template_draft(_fingerprint(), [_observation()])
 
-    assert proposal.answer_expression.node == "fraction"
+    assert proposal.teaching_plan_document.strategy == "boundary_trace"
 
 
 @patch("app.meta.draft_generation.call_with_tool")
-def test_refinement_call_includes_prior_proposal_and_feedback(mock_call):
+def test_refinement_call_includes_prior_teaching_plan_and_structured_quality_feedback(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal())
     prior = DraftProposal.model_validate(_raw_proposal())
     propose_template_draft(
         _fingerprint(), [_observation()],
-        prior_proposal=prior, reviewer_feedback="the guard is too permissive",
+        prior_proposal=prior,
+        reviewer_feedback={
+            "code": "serial_simple_reveal",
+            "path": "timeline",
+            "hint": "reveal values together",
+        },
     )
     _, kwargs = mock_call.call_args
-    assert "the guard is too permissive" in kwargs["user_message"]
+    assert '"code":"serial_simple_reveal"' in kwargs["user_message"]
+    assert '"path":"timeline"' in kwargs["user_message"]
+    assert '"hint":"reveal values together"' in kwargs["user_message"]
     assert "prior proposal" in kwargs["user_message"]
+    assert '"teaching_plan_document"' in kwargs["user_message"]
+    assert "Traceback" not in kwargs["user_message"]
