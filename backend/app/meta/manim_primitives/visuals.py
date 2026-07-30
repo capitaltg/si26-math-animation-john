@@ -1,9 +1,13 @@
+from fractions import Fraction
+
 from manim import (
     Arrow,
     Brace,
     Dot,
+    LEFT,
     Line,
     NumberLine,
+    Rectangle,
     Sector,
     Square,
     Text,
@@ -127,3 +131,37 @@ def build_label(text: str, style: str = "primary") -> Text:
     label = Text(text, color=resolve_style(style)["color"])
     fit_width(label)
     return label
+
+
+def format_expression_value(value: Fraction) -> str:
+    if value.denominator == 1:
+        return str(value.numerator)
+    return f"{value.numerator}/{value.denominator}"
+
+
+def _dimension_text(value: Fraction, unit: str) -> str:
+    return " ".join(part for part in (format_expression_value(value), unit) if part)
+
+
+def build_rectangle(
+    length: Fraction, width: Fraction, unit: str = "", style: str = "primary"
+) -> VGroup:
+    if length <= 0 or width <= 0:
+        raise ValueError("rectangle dimensions must be positive")
+
+    ratio = max(0.25, min(4.0, float(length / width)))
+    display_height = min(3.0, 5.5 / ratio)
+    display_width = display_height * ratio
+    style_kwargs = resolve_style(style)
+    rectangle = Rectangle(width=display_width, height=display_height, **style_kwargs)
+
+    length_brace = Brace(rectangle, direction=DOWN, color=style_kwargs["color"])
+    length_label = Text(_dimension_text(length, unit), color=style_kwargs["color"])
+    length_label.next_to(length_brace, DOWN)
+    width_brace = Brace(rectangle, direction=LEFT, color=style_kwargs["color"])
+    width_label = Text(_dimension_text(width, unit), color=style_kwargs["color"])
+    width_label.next_to(width_brace, LEFT)
+
+    group = VGroup(rectangle, length_brace, length_label, width_brace, width_label)
+    fit_width(group)
+    return group

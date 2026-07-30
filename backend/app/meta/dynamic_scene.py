@@ -26,8 +26,10 @@ from app.meta.manim_primitives.visuals import (
     build_label,
     build_number_line,
     build_object_set,
+    build_rectangle,
     build_shape_partition,
     build_tally_marks,
+    format_expression_value,
 )
 
 _VISUAL_EXPRESSION_FIELDS = {
@@ -50,6 +52,10 @@ def _resolve(node, field_name: str, values: dict) -> int:
             "non_integer_value", f"{field_name} evaluated to {value}, which is not a whole number"
         )
     return int(value)
+
+
+def _resolve_value(node, field_name: str, values: dict):
+    return _evaluate(getattr(node, field_name), values)
 
 
 def render_animation_node(scene, node, values: dict, mobjects: dict, collect_animation: bool = False):
@@ -116,6 +122,16 @@ def render_animation_node(scene, node, values: dict, mobjects: dict, collect_ani
         result = build_tally_marks(_resolve(node, "count", values), style=node.style)
     elif kind == "label":
         result = build_label(node.text, style=node.style)
+    elif kind == "expression_label":
+        value = format_expression_value(_resolve_value(node, "expression", values))
+        result = build_label(f"{node.prefix}{value}{node.suffix}", style=node.style)
+    elif kind == "rectangle":
+        result = build_rectangle(
+            _resolve_value(node, "length", values),
+            _resolve_value(node, "width", values),
+            unit=node.unit,
+            style=node.style,
+        )
     elif kind == "appear":
         animation = build_appear(mobjects[node.target_ref])
         if collect_animation:
