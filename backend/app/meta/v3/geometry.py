@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 from typing import Protocol
 
 
@@ -31,9 +33,17 @@ class SemanticPart:
 class MeasuredVisual:
     ref: str
     bounds: Bounds
-    parts: dict[tuple[str, int | None], SemanticPart]
-    paths: dict[str, list[Point]]
+    parts: Mapping[tuple[str, int | None], SemanticPart]
+    paths: Mapping[str, tuple[Point, ...]]
     payload: object
+
+    def __post_init__(self):
+        object.__setattr__(self, "parts", MappingProxyType(dict(self.parts)))
+        object.__setattr__(
+            self,
+            "paths",
+            MappingProxyType({name: tuple(points) for name, points in self.paths.items()}),
+        )
 
     def anchor(self, *, part: str | None, index: int | None, name: str) -> Point:
         bounds = self.bounds if part is None else self.parts[(part, index)].bounds
