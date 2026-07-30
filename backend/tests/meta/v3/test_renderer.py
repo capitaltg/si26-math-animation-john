@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from manim import Text
@@ -23,7 +23,9 @@ class PlayCall:
     kind: str
     target_refs: tuple[str, ...] = ()
     target: tuple[str, str | None, int | None] | None = None
+    targets: tuple[tuple[str, str | None, int | None], ...] = ()
     role: str | None = None
+    run_time: float | None = None
 
 
 class RecordingScene:
@@ -37,7 +39,9 @@ class RecordingScene:
             kind=animation._semantic_kind,
             target_refs=animation._semantic_target_refs,
             target=animation._semantic_target,
+            targets=getattr(animation, "_semantic_targets", ()),
             role=animation._semantic_role,
+            run_time=_kwargs.get("run_time"),
         ))
 
     def wait(self, seconds):
@@ -91,6 +95,43 @@ def test_values_reveal_in_one_play_and_focus_changes_later(resolved_median_scene
     assert focus_call.target == ("values", "item", 3)
     assert focus_call.role == "focus"
     assert focus_call.index > scene.play_calls[0].index
+
+
+def test_set_role_transitions_every_resolved_target(resolved_median_scene):
+    focus = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.action.role == "focus")
+    another_item = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.targets[0].ref.index == 0)
+    resolved = replace(
+        resolved_median_scene,
+        timeline=[replace(focus, targets=[focus.targets[0], another_item.targets[0]])],
+        total_duration_seconds=focus.duration_seconds,
+    )
+
+    scene = RecordingScene()
+    rendered = render_resolved_scene(scene, resolved)
+
+    expected_targets = (("values", "item", 3), ("values", "item", 0))
+    assert scene.play_calls[0].targets == expected_targets
+    assert {rendered.roles[target] for target in expected_targets} == {"focus"}
+
+
+def test_coincident_non_reveal_actions_share_timeline_duration(resolved_median_scene):
+    focus = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.action.role == "focus")
+    constraint = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.targets[0].ref.index == 0)
+    concurrent_focus = replace(focus, at_seconds=1.0, duration_seconds=1.0)
+    concurrent_constraint = replace(constraint, at_seconds=1.0, duration_seconds=0.5)
+    follow_up = replace(focus, at_seconds=2.5, duration_seconds=0.25)
+    resolved = replace(
+        resolved_median_scene,
+        timeline=[concurrent_focus, concurrent_constraint, follow_up],
+        total_duration_seconds=4.0,
+    )
+
+    scene = RecordingScene()
+    render_resolved_scene(scene, resolved)
+
+    assert [call.run_time for call in scene.play_calls] == [1.0, 0.25]
+    assert scene.play_calls[0].kind == "parallel"
+    assert scene.wait_calls == pytest.approx([1.0, 0.5, 1.25])
 
 
 def test_manim_text_measurer_uses_the_renderer_font_table():

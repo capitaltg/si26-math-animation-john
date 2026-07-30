@@ -33,6 +33,7 @@ class RenderedScene:
     visuals: dict[str, object]
     targets: dict[tuple[str, str | None, int | None], object]
     relations: dict[str, object]
+    roles: dict[tuple[str, str | None, int | None], str]
 
 
 def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene:
@@ -49,14 +50,16 @@ def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene
             scene.wait(gap)
 
         together = [action for action in actions if action.action.kind == "reveal" and action.action.mode == "together"]
-        if together:
+        if len(actions) == len(together):
             _play_together_reveals(scene, together, rendered, motion)
-
-        _play_role_batches(scene, actions, rendered, palette)
-        for action in actions:
-            if action in together or action.action.kind == "set_role":
-                continue
-            _play_action(scene, action, rendered, motion, palette)
+        elif len(actions) == 1:
+            action = actions[0]
+            if action.action.kind == "set_role":
+                _play_role_batches(scene, actions, rendered, palette)
+            else:
+                _play_action(scene, action, rendered, motion, palette)
+        else:
+            _play_parallel_actions(scene, actions, rendered, motion, palette)
         cursor = max(cursor, *(action.at_seconds + action.duration_seconds for action in actions))
 
     final_hold = resolved_scene.total_duration_seconds - cursor
@@ -75,13 +78,17 @@ def _actions_by_start(timeline):
 def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
     visuals: dict[str, object] = {}
     targets: dict[tuple[str, str | None, int | None], object] = {}
+    roles: dict[tuple[str, str | None, int | None], str] = {}
     for placed in scene.visuals:
         root, children = _build_visual(placed, palette)
         visuals[placed.measured.ref] = root
         targets[(placed.measured.ref, None, None)] = root
         targets.update({(placed.measured.ref, part, index): child for (part, index), child in children.items()})
+        role = _initial_role(placed.measured.ref, placed.measured.payload)
+        roles[(placed.measured.ref, None, None)] = role
+        roles.update({(placed.measured.ref, part, index): role for part, index in children})
     relations = {relation.ref: _build_relation(relation, palette) for relation in scene.relations}
-    return RenderedScene(visuals=visuals, targets=targets, relations=relations)
+    return RenderedScene(visuals=visuals, targets=targets, relations=relations, roles=roles)
 
 
 _COMPOSITIONS: dict[str, Callable[[ResolvedScene, str], RenderedScene]] = {
@@ -238,31 +245,78 @@ def _play_role_batches(scene, actions, rendered: RenderedScene, palette: str) ->
     for action in role_actions:
         by_role[action.action.role].append(action)
     for role, batch in by_role.items():
-        animations = [build_role_transition(_target_mobject(rendered, action.targets[0].ref), resolve_semantic_style(palette, role)) for action in batch]
-        kind = "set_role" if role == "focus" and len(batch) == 1 else "role_transition"
-        target = _target_tuple(batch[0].targets[0].ref) if len(batch) == 1 else None
-        _play(scene, AnimationGroup(*animations), max(action.duration_seconds for action in batch), kind, target=target, role=role)
+        target_refs = [target.ref for action in batch for target in action.targets]
+        target_keys = tuple(_target_tuple(target_ref) for target_ref in target_refs)
+        animations = [
+            build_role_transition(_target_mobject(rendered, target_ref), resolve_semantic_style(palette, role))
+            for target_ref in target_refs
+        ]
+        rendered.roles.update({target_key: role for target_key in target_keys})
+        kind = "set_role" if role == "focus" and len(target_keys) == 1 else "role_transition"
+        target = target_keys[0] if len(target_keys) == 1 else None
+        _play(
+            scene,
+            AnimationGroup(*animations),
+            max(action.duration_seconds for action in batch),
+            kind,
+            target=target,
+            targets=target_keys,
+            role=role,
+        )
+
+
+def _play_parallel_actions(scene, actions, rendered: RenderedScene, motion, palette: str) -> None:
+    animations = []
+    for action in actions:
+        if action.action.kind == "set_role":
+            style = resolve_semantic_style(palette, action.action.role)
+            target_keys = tuple(_target_tuple(target.ref) for target in action.targets)
+            animations.extend(build_role_transition(_target_mobject(rendered, target.ref), style) for target in action.targets)
+            rendered.roles.update({target_key: action.action.role for target_key in target_keys})
+        elif action.action.kind == "reveal" and action.action.mode == "together":
+            animations.extend(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
+        else:
+            animations.append(_action_animation(action, rendered, motion, palette))
+    _play(
+        scene,
+        AnimationGroup(*animations),
+        max(action.duration_seconds for action in actions),
+        "parallel",
+    )
 
 
 def _play_action(scene, action: ResolvedAction, rendered: RenderedScene, motion, palette: str) -> None:
+    animation = _action_animation(action, rendered, motion, palette)
     kind = action.action.kind
     if kind == "reveal":
-        animations = [motion(_target_mobject(rendered, target.ref)) for target in action.targets]
-        _play(scene, AnimationGroup(*animations), action.duration_seconds, "stagger_reveal", target_refs=tuple(target.ref.visual_ref for target in action.targets))
-    elif kind == "trace":
+        _play(scene, animation, action.duration_seconds, "stagger_reveal", target_refs=tuple(target.ref.visual_ref for target in action.targets))
+    else:
+        _play(scene, animation, action.duration_seconds, kind, target=_action_target(action))
+
+
+def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, palette: str):
+    kind = action.action.kind
+    if kind == "reveal":
+        return AnimationGroup(*(motion(_target_mobject(rendered, target.ref)) for target in action.targets))
+    if kind == "trace":
         path = _path_mobject(action.path)
         _apply_style(path, resolve_semantic_style(palette, "focus"))
-        _play(scene, Create(path), action.duration_seconds, "trace")
-    elif kind == "show_relation":
-        _play(scene, motion(rendered.relations[action.action.relation_ref]), action.duration_seconds, "show_relation")
-    elif kind == "draw":
-        _play(scene, Create(_target_mobject(rendered, action.targets[0].ref)), action.duration_seconds, "draw", target=_target_tuple(action.targets[0].ref))
-    elif kind == "transform":
-        _play(scene, Transform(_target_mobject(rendered, action.targets[0].ref), _target_mobject(rendered, action.targets[1].ref)), action.duration_seconds, "transform")
-    elif kind == "move":
-        _play(scene, build_move_along_path(_target_mobject(rendered, action.targets[0].ref), _path_mobject(action.path)), action.duration_seconds, "move", target=_target_tuple(action.targets[0].ref))
-    else:
-        raise ValueError(f"unsupported resolved action {kind}")
+        return Create(path)
+    if kind == "show_relation":
+        return motion(rendered.relations[action.action.relation_ref])
+    if kind == "draw":
+        return Create(_target_mobject(rendered, action.targets[0].ref))
+    if kind == "transform":
+        return Transform(_target_mobject(rendered, action.targets[0].ref), _target_mobject(rendered, action.targets[1].ref))
+    if kind == "move":
+        return build_move_along_path(_target_mobject(rendered, action.targets[0].ref), _path_mobject(action.path))
+    raise ValueError(f"unsupported resolved action {kind}")
+
+
+def _action_target(action: ResolvedAction):
+    if action.action.kind in {"draw", "move"}:
+        return _target_tuple(action.targets[0].ref)
+    return None
 
 
 def _path_mobject(points):
@@ -279,9 +333,10 @@ def _target_tuple(ref):
     return ref.visual_ref, ref.part, ref.index
 
 
-def _play(scene, animation, run_time: float, kind: str, *, target_refs=(), target=None, role=None) -> None:
+def _play(scene, animation, run_time: float, kind: str, *, target_refs=(), target=None, targets=(), role=None) -> None:
     animation._semantic_kind = kind
     animation._semantic_target_refs = target_refs
     animation._semantic_target = target
+    animation._semantic_targets = targets
     animation._semantic_role = role
     scene.play(animation, run_time=run_time)
