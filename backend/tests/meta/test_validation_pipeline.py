@@ -60,7 +60,11 @@ def _valid_proposal(observation_id):
         ),
         guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
+            {"kind": "label", "ref": "n_label", "text": "n"},
+            {"kind": "appear", "target_ref": "n_label"},
+            {"kind": "wait", "seconds": 1},
+        ]}),
         classifier_bullet="use for X",
         fixtures=[
             ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
@@ -126,7 +130,11 @@ def test_persist_validation_uses_positive_fixture_not_boundary_fixture_for_previ
         ),
         guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
+            {"kind": "label", "ref": "n_label", "text": "n"},
+            {"kind": "appear", "target_ref": "n_label"},
+            {"kind": "wait", "seconds": 1},
+        ]}),
         classifier_bullet="use for X",
         fixtures=[
             ProposedFixture(kind="boundary", expected_outcome="accept", params={"n": 10}),
@@ -203,7 +211,11 @@ def test_persist_validation_fails_when_a_guard_predicate_lacks_a_negative_fixtur
             ],
         ),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
+            {"kind": "label", "ref": "n_label", "text": "n"},
+            {"kind": "appear", "target_ref": "n_label"},
+            {"kind": "wait", "seconds": 1},
+        ]}),
         classifier_bullet="use for X",
         fixtures=[
             ProposedFixture(kind="positive", expected_outcome="accept", observation_id=obs.id, params={"n": 5, "m": 5}),

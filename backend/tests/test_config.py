@@ -15,6 +15,7 @@ def test_meta_settings_defaults():
     assert settings.meta_templates_enabled is False
     assert settings.meta_codegen_enabled is False
     assert settings.fingerprint_observation_threshold == 5
+    assert settings.meta_required_fixture_count == 5
     assert settings.fingerprint_tagger_prompt_version == "v1"
     assert settings.fingerprint_tagger_max_attempts == 2
     assert settings.fingerprint_tagger_backoff_seconds == 1.0

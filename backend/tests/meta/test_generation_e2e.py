@@ -62,7 +62,14 @@ def _proposal_dict(observation_id):
             predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
         ),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        animation_document=AnimationDocument(root={
+            "kind": "sequence",
+            "steps": [
+                {"kind": "label", "ref": "n_label", "text": "n"},
+                {"kind": "appear", "target_ref": "n_label"},
+                {"kind": "wait", "seconds": 1},
+            ],
+        }),
         classifier_bullet="use for fraction-of-whole bars",
         fixtures=[
             ProposedFixture(

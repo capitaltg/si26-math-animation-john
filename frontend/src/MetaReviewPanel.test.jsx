@@ -212,6 +212,69 @@ it('retries loading drafts once a valid token is entered after an unauthenticate
   await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
 })
 
+it('explains why a failed-validation draft cannot be approved', async () => {
+  const failedDraftDetail = {
+    ...draftDetail,
+    status: 'failed_validation',
+    guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
+    validation_report: {
+      passed: false,
+      preview_error: 'no accepted positive fixture available for preview',
+      negative_predicate_coverage: [0],
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failedDraftDetail }
+    if (url === failedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+
+  await waitFor(() =>
+    expect(screen.getByText("This draft failed automatic validation and can't be approved yet.")).not.toBeNull(),
+  )
+  expect(screen.getByText('Preview error: no accepted positive fixture available for preview')).not.toBeNull()
+  expect(screen.getByText('1 of 2 guard predicates (#1) have no guard case proving they correctly reject bad input.')).not.toBeNull()
+})
+
+it('labels a passing boundary fixture as accepting, not as a rejection guard case', async () => {
+  const boundaryDraftDetail = {
+    ...draftDetail,
+    fixtures: [
+      {
+        id: 'fx-2', kind: 'boundary', expected_outcome: 'accept', generation_method: 'proposed',
+        params: { n: 0 }, expected_result: { answer: '0' },
+        structural_check_passed: true, structural_check_detail: 'ok', source_excerpt: '0 apples',
+      },
+    ],
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => boundaryDraftDetail }
+    if (url === boundaryDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+
+  await waitFor(() =>
+    expect(screen.getByText('Boundary example — edge case that should still compute correctly')).not.toBeNull(),
+  )
+  expect(screen.queryByText(/should be rejected/)).toBeNull()
+  // Boundary fixtures never count toward the requirement (only `kind: positive`
+  // does) and are shown read-only under "Guard cases" -- no answer field to fill in.
+  expect(screen.queryByLabelText('Fixture fx-2 expected result')).toBeNull()
+  expect(screen.queryByText('Save fixture')).toBeNull()
+})
+
 it('edits and saves a fixture', async () => {
   const fetchMock = installFetchMock()
   render(<MetaReviewPanel />)

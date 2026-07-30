@@ -19,6 +19,39 @@ function isQualifyingFixture(fixture) {
   )
 }
 
+// `kind` (positive/negative/boundary) says where the fixture came from;
+// `expected_outcome` (accept/reject) says what should happen when it runs.
+// A boundary fixture can still be expected to accept, so the label must
+// read `expected_outcome`, not assume anything non-positive is a rejection.
+function fixtureKindLabel(fixture) {
+  const rejects = fixture.expected_outcome === 'reject'
+  if (fixture.kind === 'positive') return 'Positive example — should compute correctly'
+  if (fixture.kind === 'boundary') {
+    return rejects
+      ? 'Boundary example — edge case that should be rejected'
+      : 'Boundary example — edge case that should still compute correctly'
+  }
+  return 'Negative example — should be rejected (guard case)'
+}
+
+function fixtureKindColor(fixture) {
+  if (fixture.expected_outcome === 'reject') return '#9a6700'
+  if (fixture.kind === 'positive') return '#1a7f37'
+  return '#0969da'
+}
+
+function fixtureStatusLabel(fixture) {
+  if (fixture.structural_check_passed === null) return 'Not checked yet'
+  if (fixture.structural_check_passed) return 'Structural check passed'
+  return `Structural check failed: ${fixture.structural_check_detail}`
+}
+
+function fixtureStatusColor(fixture) {
+  if (fixture.structural_check_passed === null) return '#666'
+  if (fixture.structural_check_passed) return '#1a7f37'
+  return '#c00'
+}
+
 export default function MetaReviewPanel() {
   const [drafts, setDrafts] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -257,14 +290,20 @@ export default function MetaReviewPanel() {
   }
 
   const predicateCount = selected?.guard_document?.predicates?.length ?? 0
-  const coverageCount = selected?.validation_report?.negative_predicate_coverage?.length ?? 0
+  const negativePredicateCoverage = selected?.validation_report?.negative_predicate_coverage ?? []
+  const coverageCount = negativePredicateCoverage.length
   const hasFullPredicateCoverage = Boolean(selected?.validation_report) && coverageCount === predicateCount
+  const missingPredicateIndexes = Array.from({ length: predicateCount }, (_, i) => i)
+    .filter((i) => !negativePredicateCoverage.includes(i))
   const qualifyingFixtureCount = selected ? selected.fixtures.filter(isQualifyingFixture).length : 0
   const requiredFixtureCount = selected?.required_fixture_count ?? 5
+  const positiveFixtures = selected ? selected.fixtures.filter((f) => f.kind === 'positive') : []
+  const guardFixtures = selected ? selected.fixtures.filter((f) => f.kind !== 'positive') : []
+  const validationPassed = selected?.validation_report?.passed === true
   const canApprove = Boolean(
     selected
     && selected.status === 'pending_review'
-    && selected.validation_report?.passed === true
+    && validationPassed
     && hasFullPredicateCoverage
     && qualifyingFixtureCount >= requiredFixtureCount
     && TEMPLATE_NAME_PATTERN.test(templateName)
@@ -319,20 +358,62 @@ export default function MetaReviewPanel() {
               style={{ maxWidth: '100%', border: '1px solid #eee' }}
             />
           )}
-          <h3>Fixtures</h3>
-          <ul>
-            {selected.fixtures.map((fixture) => (
-              <li key={fixture.id}>
-                [{fixture.kind}/{fixture.expected_outcome}] {JSON.stringify(fixture.params)}
-                {' — '}
-                {fixture.structural_check_passed === null
-                  ? 'not checked'
-                  : fixture.structural_check_passed
-                  ? 'passed'
-                  : `failed: ${fixture.structural_check_detail}`}
-                {fixture.source_excerpt && <div style={{ color: '#666' }}>{fixture.source_excerpt}</div>}
+          {!validationPassed && (
+            <div style={{ border: '1px solid #c00', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0', background: '#fff5f5' }}>
+              <strong style={{ color: '#c00' }}>
+                This draft failed automatic validation and can't be approved yet.
+              </strong>
+              {selected.validation_report?.compile_error && (
+                <p>Compile error: {selected.validation_report.compile_error}</p>
+              )}
+              {selected.validation_report?.preview_error && (
+                <p>Preview error: {selected.validation_report.preview_error}</p>
+              )}
+              {missingPredicateIndexes.length > 0 && (
+                <p>
+                  {missingPredicateIndexes.length} of {predicateCount} guard predicates
+                  (#{missingPredicateIndexes.join(', #')}) have no guard case proving they
+                  correctly reject bad input.
+                </p>
+              )}
+              <p>
+                Guard cases are system-generated and not editable here — use
+                "Reject and request refinement" below so the worker can regenerate
+                with fixes.
+              </p>
+            </div>
+          )}
+          <h3>Fixtures to verify ({qualifyingFixtureCount} / {requiredFixtureCount})</h3>
+          <p style={{ color: '#444' }}>
+            Each one below is a real example pulled from course content. Confirm or
+            correct its answer and save — once it passes its check, it counts toward
+            the {requiredFixtureCount} required before this template can publish.
+          </p>
+          <ul style={{ listStyle: 'none', padding: 0 }}>
+            {positiveFixtures.map((fixture, index) => (
+              <li
+                key={fixture.id}
+                style={{ border: '1px solid #ddd', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <strong>Fixture {index + 1}</strong>
+                  {isQualifyingFixture(fixture) && <span style={{ color: '#1a7f37' }}>✓ Verified</span>}
+                </div>
+                {fixture.source_excerpt ? (
+                  <blockquote style={{ color: '#666', margin: '0.5rem 0' }}>
+                    “{fixture.source_excerpt}”
+                  </blockquote>
+                ) : (
+                  <p style={{ color: '#c00' }}>
+                    ⚠ No source excerpt on this fixture — it isn't tied to a real
+                    observation, so it can never count toward the requirement no
+                    matter what's entered below.
+                  </p>
+                )}
+                <div style={{ color: fixtureStatusColor(fixture) }}>{fixtureStatusLabel(fixture)}</div>
                 <div>
                   <label htmlFor={`fixture-${fixture.id}-params`}>Fixture {fixture.id} params</label>
+                  <div style={{ fontSize: '0.85em', color: '#666' }}>Inputs fed into the template</div>
                   <textarea
                     id={`fixture-${fixture.id}-params`}
                     value={fixtureTexts[fixture.id]?.params ?? JSON.stringify(fixture.params)}
@@ -351,6 +432,9 @@ export default function MetaReviewPanel() {
                   <label htmlFor={`fixture-${fixture.id}-expected-result`}>
                     Fixture {fixture.id} expected result
                   </label>
+                  <div style={{ fontSize: '0.85em', color: '#666' }}>
+                    Answer the template should produce for these inputs
+                  </div>
                   <textarea
                     id={`fixture-${fixture.id}-expected-result`}
                     value={fixtureTexts[fixture.id]?.expectedResult
@@ -370,11 +454,45 @@ export default function MetaReviewPanel() {
               </li>
             ))}
           </ul>
+
+          <h3>Guard cases</h3>
+          <p style={{ color: '#444' }}>
+            These prove the template correctly rejects invalid input or handles edge
+            values. They're system-generated and read-only — no answer to confirm,
+            no action needed here.
+          </p>
+          {guardFixtures.length === 0 && <p style={{ color: '#666' }}>None for this draft.</p>}
+          <ul style={{ listStyle: 'none', padding: 0 }}>
+            {guardFixtures.map((fixture) => (
+              <li
+                key={fixture.id}
+                style={{ border: '1px solid #eee', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0' }}
+              >
+                <span
+                  style={{
+                    color: '#fff',
+                    background: fixtureKindColor(fixture),
+                    borderRadius: 12,
+                    padding: '0.1rem 0.6rem',
+                    fontSize: '0.8em',
+                  }}
+                >
+                  {fixtureKindLabel(fixture)}
+                </span>
+                <div style={{ color: fixtureStatusColor(fixture) }}>{fixtureStatusLabel(fixture)}</div>
+                {fixture.source_excerpt && (
+                  <blockquote style={{ color: '#666', margin: '0.5rem 0' }}>
+                    “{fixture.source_excerpt}”
+                  </blockquote>
+                )}
+              </li>
+            ))}
+          </ul>
           <h3>Approve</h3>
           <p>
             Verified fixtures: {qualifyingFixtureCount} / {requiredFixtureCount} required.
             {' '}
-            Predicate coverage: {coverageCount} / {predicateCount}.
+            Predicate coverage (guard cases confirmed to correctly reject bad input): {coverageCount} / {predicateCount}.
           </p>
           <div>
             <label htmlFor="template-name">Template name</label>

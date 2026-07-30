@@ -142,7 +142,7 @@ def approve_draft_service(
                     TemplateDraftFixture.structural_check_passed.is_(True),
                 )
             ).scalar_one()
-            if verified_fixtures < settings.fingerprint_observation_threshold:
+            if verified_fixtures < settings.meta_required_fixture_count:
                 raise ApprovalPreconditionError(
                     "Draft has too few verified real fixtures to publish"
                 )

@@ -2,7 +2,11 @@ import pytest
 
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument, StringFieldSpec
 from app.meta.draft_generation import ProposedFixture
-from app.meta.fixture_mutation import ensure_negative_fixtures, mutate_to_violate_bounds
+from app.meta.fixture_mutation import (
+    drop_ungrounded_positive_fixtures,
+    ensure_negative_fixtures,
+    mutate_to_violate_bounds,
+)
 
 
 def _params_document():
@@ -56,3 +60,26 @@ def test_ensure_negative_fixtures_is_a_noop_without_a_positive_fixture():
     fixtures = [ProposedFixture(kind="boundary", expected_outcome="accept", params={"numerator": 1, "denominator": 1})]
     result = ensure_negative_fixtures(_params_document(), fixtures)
     assert result == fixtures
+
+
+def test_drop_ungrounded_positive_fixtures_keeps_only_grounded_positives():
+    grounded = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"numerator": 3, "denominator": 4},
+    )
+    ungrounded = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id=None, params={"numerator": 5, "denominator": 6},
+    )
+    boundary = ProposedFixture(
+        kind="boundary", expected_outcome="accept",
+        observation_id=None, params={"numerator": 1, "denominator": 1},
+    )
+    negative = ProposedFixture(
+        kind="negative", expected_outcome="reject",
+        observation_id=None, params={"numerator": 0, "denominator": 4},
+    )
+    result = drop_ungrounded_positive_fixtures([grounded, ungrounded, boundary, negative])
+    # The ungrounded positive is gone; the grounded positive and the (legitimately
+    # observation-less) guard cases survive.
+    assert result == [grounded, boundary, negative]

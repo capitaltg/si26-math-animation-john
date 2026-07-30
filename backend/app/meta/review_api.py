@@ -156,7 +156,7 @@ def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
         validation_report=json.loads(draft.validation_report_json) if draft.validation_report_json else None,
         preview_url=preview_url,
         fixtures=[_fixture_out(session, fixture) for fixture in fixtures],
-        required_fixture_count=get_settings().fingerprint_observation_threshold,
+        required_fixture_count=get_settings().meta_required_fixture_count,
         reviewer_feedback=draft.reviewer_feedback,
     )
 
