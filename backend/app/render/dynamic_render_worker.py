@@ -3,15 +3,26 @@ import sys
 from pathlib import Path
 
 from app.meta.dsl.animation import AnimationDocument, compile_animation_document
+from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
+from app.meta.v3.manim_measurer import ManimTextMeasurer
+from app.meta.v3.renderer import render_resolved_scene
+from app.meta.v3.resolver import resolve_scene
 
-VALID_MODES = {"full", "thumbnail"}
+VALID_MODES = {"full", "thumbnail", "probe"}
 
 
 def main() -> None:
     anim_path, known_fields_path, values_path, output_path_str, mode, scratch_dir_str = sys.argv[1:7]
     if mode not in VALID_MODES:
         raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
+
+    if mode == "probe":
+        _render_probe(
+            Path(anim_path), Path(known_fields_path), Path(values_path),
+            Path(output_path_str), Path(scratch_dir_str),
+        )
+        return
 
     animation_document = AnimationDocument.model_validate_json(Path(anim_path).read_text())
     known_fields = frozenset(json.loads(Path(known_fields_path).read_text()))
@@ -52,6 +63,230 @@ def main() -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     matches[0].replace(output_path)
+
+
+def _render_probe(
+    program_path: Path,
+    known_fields_path: Path,
+    values_path: Path,
+    output_path: Path,
+    scratch_dir: Path,
+) -> None:
+    """Render a v3 program and write frame/geometry evidence for the parent process."""
+    del known_fields_path  # The typed program is already compiled against its field contract.
+    program = SceneProgramDocument.model_validate_json(program_path.read_text())
+    values = json.loads(values_path.read_text())
+    resolved = resolve_scene(program, values, ManimTextMeasurer())
+
+    from manim import Scene, config, tempconfig
+
+    class ProbeScene(Scene):
+        def __init__(self):
+            super().__init__()
+            self.elapsed = 0.0
+            self.frames = []
+            self.captured_beats = set()
+            self.rendered = None
+            self.answer_was_rendered = False
+            self.beat_end_times = {
+                beat_id: max(
+                    action.at_seconds + action.duration_seconds
+                    for action in resolved.timeline if action.beat_id == beat_id
+                )
+                for beat_id in {action.beat_id for action in resolved.timeline}
+            }
+
+        def play(self, *animations, **kwargs):
+            duration = kwargs.get("run_time", 0.0)
+            result = super().play(*animations, **kwargs)
+            self.elapsed += duration
+            self._update_visible_answer()
+            self._capture_completed_beats()
+            return result
+
+        def wait(self, duration=1, *args, **kwargs):
+            result = super().wait(duration, *args, **kwargs)
+            self.elapsed += duration
+            self._update_visible_answer()
+            self._capture_completed_beats()
+            return result
+
+        def construct(self):
+            self.rendered = render_resolved_scene(self, resolved)
+            self._capture_completed_beats(force=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self.camera.get_image().save(output_path)
+
+        def _capture_completed_beats(self, force=False):
+            for beat_id, end_seconds in sorted(self.beat_end_times.items(), key=lambda item: item[1]):
+                if beat_id in self.captured_beats or (not force and end_seconds > self.elapsed + 1e-6):
+                    continue
+                path = f"probe-{len(self.frames)}.png"
+                self.camera.get_image().save(scratch_dir / path)
+                self.frames.append({"beat_id": beat_id, "seconds": end_seconds, "path": path})
+                self.captured_beats.add(beat_id)
+
+        def _update_visible_answer(self):
+            self.answer_was_rendered = self.answer_was_rendered or any(
+                action.action.kind == "reveal"
+                and any(target.ref.visual_ref == "evaluated_answer" for target in action.targets)
+                and action.at_seconds + action.duration_seconds <= self.elapsed + 1e-6
+                for action in resolved.timeline
+            )
+
+    overrides = {
+        "media_dir": str(scratch_dir),
+        "disable_caching": True,
+        "quality": "low_quality",
+        "write_to_movie": False,
+    }
+    with tempconfig(overrides):
+        scene = ProbeScene()
+        scene.render()
+        manifest = _probe_manifest(scene, resolved, program, config.pixel_width, config.pixel_height)
+    output_path.with_suffix(".json").write_text(json.dumps(manifest))
+
+
+def _probe_manifest(scene, resolved, program, width, height) -> dict:
+    relation_specs = {relation.ref: relation for relation in program.relations}
+    visual_bounds = {
+        ref: _pixel_mobject_bounds(mobject, width, height)
+        for ref, mobject in scene.rendered.visuals.items()
+    }
+    anchors = {}
+    relations = {}
+    for relation in resolved.relations:
+        target_anchor = _target_label(relation_specs[relation.ref].target)
+        target_mobject = scene.rendered.targets[_target_key(relation_specs[relation.ref].target)]
+        target = _pixel_array_point(_mobject_anchor(target_mobject, relation_specs[relation.ref].target.anchor), width, height)
+        anchors[target_anchor] = target
+        mobject = scene.rendered.relations[relation.ref]
+        arrow = mobject.submobjects[0]
+        relations[relation.ref] = {
+            "target_anchor": target_anchor,
+            "target": target,
+            "tip": _pixel_array_point(arrow.get_end(), width, height),
+            "bounds": _pixel_mobject_bounds(mobject, width, height),
+        }
+
+    path_events = [
+        action.action.path_ref for action in resolved.timeline
+        if action.action.kind in {"trace", "move"}
+    ]
+    state_events = _state_events(resolved)
+    dimensions = {
+        relation.ref: {"passed": _point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02}
+        for relation in program.relations if "dimension" in relation.ref
+        for relation_data in [relations.get(relation.ref, {})]
+        if relation_data
+    }
+    answer = scene.rendered.visuals.get("evaluated_answer")
+    final_answer_visible = answer is not None and scene.answer_was_rendered
+    conclusion_starts = [action.at_seconds for action in resolved.timeline if action.beat_id == _last_beat_id(resolved)]
+    return {
+        "frame_size": [width, height],
+        "total_duration_seconds": resolved.total_duration_seconds,
+        "conclusion_hold_seconds": resolved.total_duration_seconds - min(conclusion_starts),
+        "simple_reveal_mode": _simple_reveal_mode(resolved),
+        "frames": scene.frames,
+        "visual_bounds": visual_bounds,
+        "anchors": anchors,
+        "relations": relations,
+        "path_events": path_events,
+        "declared_path_events": path_events,
+        "dimension_anchor_checks": dimensions,
+        "state_events": state_events,
+        "final_answer_visible": final_answer_visible,
+        "derivation_visible": bool(path_events) or any(event["role"] == "focus" for event in state_events),
+    }
+
+
+def _state_events(resolved) -> list[dict]:
+    events = []
+    for action in resolved.timeline:
+        if action.action.kind == "reveal":
+            for target in action.targets:
+                visual = resolved.visual(target.ref.visual_ref)
+                if target.ref.part is None:
+                    events.extend({
+                        "seconds": action.at_seconds + action.duration_seconds,
+                        "target": f"{target.ref.visual_ref}.{part}[{index}]",
+                        "role": "neutral",
+                    } for part, index in visual.measured.parts if part == "item")
+        elif action.action.kind == "set_role":
+            for target in action.targets:
+                events.append({
+                    "seconds": action.at_seconds + action.duration_seconds,
+                    "target": _target_label(target.ref),
+                    "role": action.action.role,
+                })
+    return sorted(events, key=lambda event: event["seconds"])
+
+
+def _simple_reveal_mode(resolved) -> str | None:
+    for action in resolved.timeline:
+        if action.action.kind == "reveal" and any(
+            resolved.visual(target.ref.visual_ref).measured.payload.get("values") is not None
+            for target in action.targets
+        ):
+            return action.action.mode
+    return None
+
+
+def _last_beat_id(resolved) -> str:
+    return max(resolved.timeline, key=lambda action: action.at_seconds + action.duration_seconds).beat_id
+
+
+def _target_label(target) -> str:
+    if target.part is None:
+        return target.visual_ref
+    suffix = f".{target.part}[{target.index}]"
+    return f"{target.visual_ref}{suffix}" + (f".{target.anchor}" if hasattr(target, "anchor") else "")
+
+
+def _target_key(target):
+    return target.visual_ref, target.part, target.index
+
+
+def _mobject_anchor(mobject, anchor):
+    return {
+        "center": mobject.get_center(),
+        "top": mobject.get_top(),
+        "bottom": mobject.get_bottom(),
+        "left": mobject.get_left(),
+        "right": mobject.get_right(),
+    }[anchor]
+
+
+def _pixel_mobject_bounds(mobject, width, height) -> list[float]:
+    return [
+        _pixel_x(mobject.get_left()[0], width), _pixel_y(mobject.get_top()[1], height),
+        _pixel_x(mobject.get_right()[0], width), _pixel_y(mobject.get_bottom()[1], height),
+    ]
+
+
+def _pixel_point(point, width, height) -> list[float]:
+    return [_pixel_x(point.x, width), _pixel_y(point.y, height)]
+
+
+def _pixel_array_point(point, width, height) -> list[float]:
+    return [_pixel_x(point[0], width), _pixel_y(point[1], height)]
+
+
+def _pixel_x(x, width) -> float:
+    from manim import config
+
+    return (x + config.frame_width / 2) * width / config.frame_width
+
+
+def _pixel_y(y, height) -> float:
+    from manim import config
+
+    return (config.frame_height / 2 - y) * height / config.frame_height
+
+
+def _point_distance(first, second, width, height) -> float:
+    return (((first[0] - second[0]) / width) ** 2 + ((first[1] - second[1]) / height) ** 2) ** 0.5
 
 
 if __name__ == "__main__":
