@@ -109,6 +109,8 @@ function jsonResponse(body, status = 200) {
 function installFetchMock({
   secondUpload = false,
   clipStatus = 'approved',
+  clipUrl = clipStatus === 'approved' ? '/clips/clip1' : null,
+  fallbackReason = null,
   patchStatus = 'ok',
   storyboardScenes = [pendingScene],
 } = {}) {
@@ -180,8 +182,8 @@ function installFetchMock({
           scene_id: 's1',
           candidate_id: 'c1',
           status: clipStatus,
-          clip_url: clipStatus === 'approved' ? '/clips/clip1' : null,
-          fallback_reason: null,
+          clip_url: clipUrl,
+          fallback_reason: fallbackReason,
         }],
       })
     }
@@ -376,6 +378,47 @@ it('shows an explicit message when one approved scene fails to render', async ()
   expect(screen.getByText('Render failed for c1')).not.toBeNull()
 })
 
+it('plays a successful render inline and keeps the download link', async () => {
+  installFetchMock()
+  await reachStoryboard()
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+
+  const player = await screen.findByLabelText('Rendered clip c1')
+  const downloadLink = screen.getByRole('link', { name: 'Download clip (c1)' })
+
+  expect(player.tagName).toBe('VIDEO')
+  expect(player.getAttribute('src')).toBe('/clips/clip1')
+  expect(player.getAttribute('controls')).not.toBeNull()
+  expect(player.getAttribute('preload')).toBe('metadata')
+  expect(downloadLink.getAttribute('href')).toBe('/clips/clip1')
+  expect(downloadLink.getAttribute('download')).not.toBeNull()
+})
+
+it('plays a fallback render inline while preserving its reason and download', async () => {
+  installFetchMock({
+    clipStatus: 'fallback',
+    clipUrl: '/clips/fallback-clip',
+    fallbackReason: 'Used a labeled text card',
+  })
+  await reachStoryboard()
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+
+  const player = await screen.findByLabelText('Rendered clip c1')
+  const downloadLink = screen.getByRole('link', { name: 'Download clip (c1)' })
+
+  expect(player.getAttribute('src')).toBe('/clips/fallback-clip')
+  expect(downloadLink.getAttribute('href')).toBe('/clips/fallback-clip')
+  expect(screen.getByText('Fallback: Used a labeled text card')).not.toBeNull()
+})
+
 it('saves edits and clears the dirty flag', async () => {
   installFetchMock()
   await reachStoryboard()
@@ -450,4 +493,48 @@ it('renders the dev review panel when ?meta-review is present', async () => {
 
   await screen.findByRole('heading', { name: 'Meta-template review (dev only)' })
   expect(screen.getByText('No drafts pending review.')).not.toBeNull()
+})
+
+function installTextCardOnlyFetchMock() {
+  const fetchMock = vi.fn(async (url) => {
+    if (url === '/upload') return jsonResponse({ candidates: [candidate] })
+    if (url === '/options') {
+      return jsonResponse({
+        options: [{
+          candidate_id: 'c1',
+          grade_level: 3,
+          ambiguous: false,
+          templates: [{ template: 'text_card', rationale: 'no structural template fits' }],
+        }],
+      })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+async function reachOptions() {
+  const { container } = render(<App />)
+  const fileInput = container.querySelector('input[type="file"]')
+  const form = container.querySelector('form')
+  Object.defineProperty(form, 'file', { configurable: true, value: fileInput })
+  fireEvent.change(fileInput, { target: { files: [new File(['deck'], 'deck.pptx')] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+  const checkbox = await screen.findByRole('checkbox')
+  fireEvent.click(checkbox)
+  fireEvent.click(screen.getByRole('button', { name: 'Get options.' }))
+  await screen.findByRole('heading', { name: 'Choose visualizations' })
+}
+
+it('tells the user a new template may be learned when only the text card fits', async () => {
+  installTextCardOnlyFetchMock()
+  await reachOptions()
+  expect(screen.getByText(/may propose a brand-new visualization template/)).not.toBeNull()
+})
+
+it('does not show the new-template hint when a structural template is offered', async () => {
+  installFetchMock()
+  await reachOptions()
+  expect(screen.queryByText(/may propose a brand-new visualization template/)).toBeNull()
 })

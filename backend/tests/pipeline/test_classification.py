@@ -290,6 +290,41 @@ def test_classify_includes_dynamic_options_when_flag_enabled_and_session_given(m
 
 
 @patch("app.pipeline.classification.call_with_tool")
+def test_classify_uses_a_provided_snapshot_without_loading_one(mock_call, monkeypatch):
+    from app.config import get_settings
+    from app.meta.dynamic_templates import DynamicSnapshotEntry, EnabledSnapshot
+    from app.pipeline.classification import classify_candidate
+
+    monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", True)
+    snapshot = EnabledSnapshot(
+        _entries={
+            "decimal_comparison_grid": DynamicSnapshotEntry(
+                version_id="v1", artifact_hash="sha256:x",
+                classifier_bullet="- decimal_comparison_grid: compares two decimals on a grid.",
+            )
+        }
+    )
+
+    def _fail_if_called(session):
+        raise AssertionError("load_enabled_snapshot should not be called when a snapshot is given")
+
+    monkeypatch.setattr("app.pipeline.classification.load_enabled_snapshot", _fail_if_called)
+    mock_call.return_value = (
+        "classify_problem",
+        {
+            "options": [{"template": "decimal_comparison_grid", "rationale": "compares two decimals"}],
+            "grade_level": 4,
+            "ambiguous": False,
+        },
+    )
+
+    result = classify_candidate("Compare 0.4 and 0.35", snapshot=snapshot)
+
+    dynamic_option = next(o for o in result.options if o.template == "decimal_comparison_grid")
+    assert dynamic_option.version_id == "v1"
+
+
+@patch("app.pipeline.classification.call_with_tool")
 def test_classify_drops_an_option_outside_the_snapshot(mock_call, monkeypatch):
     from app.config import get_settings
     from app.meta.dynamic_templates import EnabledSnapshot

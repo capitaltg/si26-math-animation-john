@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import FieldRefNode, FractionNode
+from app.meta.dsl.expression import FieldRefNode, FractionNode, LiteralNode
 from app.meta.dsl.guard import DivisibleByPredicate, GuardDocument, PositivePredicate, compile_guard
 from app.meta.dsl.params import (
     ArrayFieldSpec,
@@ -466,6 +466,65 @@ def test_grounding_derived_totals_formats_whole_number_decimal_total_with_traili
     # default_number_tokens would render the decimal "total" field as "7.0"
     # (str(7.0)), not the fraction formatter's "7" -- must agree with that.
     assert totals == [("7.0", ["3.0", "4.0"])]
+
+
+def test_grounding_derived_totals_accepts_decimal_and_fraction_spellings_for_literal_terms():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(name="a", label="A", description="", minimum=0.0, maximum=20.0),
+            DecimalFieldSpec(name="total", label="Total", description="", minimum=0.0, maximum=50.0),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), LiteralNode(value=2.5)],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=5.0, total=7.5)
+    totals = params.grounding_derived_totals()
+
+    assert totals == [
+        ("7.5", ["5.0", "2.5"]),
+        ("7.5", ["5.0", "5/2"]),
+    ]
+
+
+def test_grounding_derived_total_accepts_fraction_spelling_for_decimal_literal():
+    from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
+    from app.pipeline.grounding import check_params_grounded
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="a", label="A", description="", minimum=0, maximum=20),
+            DecimalFieldSpec(name="total", label="Total", description="", minimum=0.0, maximum=50.0),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            SumEqualsPredicate(
+                terms=[FieldRefNode(field="a"), LiteralNode(value=0.5)],
+                total=FieldRefNode(field="total"),
+            ),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"a", "total"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(a=1, total=1.5)
+
+    assert check_params_grounded(params, "Add 1 and 1/2.") == []
 
 
 def test_grounding_number_tokens_falls_back_to_default_stringification_without_fraction_predicates():

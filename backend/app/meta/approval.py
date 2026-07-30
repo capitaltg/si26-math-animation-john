@@ -132,7 +132,7 @@ def approve_draft_service(
 
             # 7. Enough real, human-confirmed positive fixtures.
             verified_fixtures = session.execute(
-                select(func.count())
+                select(func.count(func.distinct(TemplateDraftFixture.observation_id)))
                 .select_from(TemplateDraftFixture)
                 .where(
                     TemplateDraftFixture.draft_id == draft.id,
@@ -142,7 +142,7 @@ def approve_draft_service(
                     TemplateDraftFixture.structural_check_passed.is_(True),
                 )
             ).scalar_one()
-            if verified_fixtures < settings.fingerprint_observation_threshold:
+            if verified_fixtures < settings.meta_required_fixture_count:
                 raise ApprovalPreconditionError(
                     "Draft has too few verified real fixtures to publish"
                 )

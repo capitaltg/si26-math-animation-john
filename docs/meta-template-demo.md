@@ -47,12 +47,26 @@ META_APPROVAL_ENABLED=true
 META_DYNAMIC_CLASSIFIER_ENABLED=true
 META_REVIEWER_TOKEN=local-meta-demo
 FINGERPRINT_OBSERVATION_THRESHOLD=1
+META_REQUIRED_FIXTURE_COUNT=1
 ```
 
 `local-meta-demo` is a disposable reviewer token example. The observation
-threshold is lowered from its normal value of five to one solely to make the
-demo fit in one session. Restart the backend and worker after changing these
-values because both processes read `backend/.env`.
+threshold controls how many times a math pattern must be seen across
+lectures before the pipeline auto-drafts a template from it; it's lowered
+from its normal value of five to one solely to make the demo fit in one
+session. `META_REQUIRED_FIXTURE_COUNT` is a separate setting controlling how
+many human-verified real fixtures a reviewer must supply before a draft can
+be approved and published; it's lowered from its normal value of five to one
+for the same reason.
+
+**Keep `META_REQUIRED_FIXTURE_COUNT` no higher than `FINGERPRINT_OBSERVATION_THRESHOLD`.**
+Only a fixture generated from a real observation gets a source excerpt, and
+only fixtures with a source excerpt can ever count toward the requirement —
+so with the threshold at one, a draft only ever has one real observation
+behind it, and only one fixture can ever qualify no matter what a reviewer
+fills in. Setting the required count higher than the threshold makes the
+gate permanently unsatisfiable. Restart the backend and worker after
+changing either value because both processes read `backend/.env`.
 
 ### Confirm external dependencies
 
@@ -84,7 +98,10 @@ If process-level troubleshooting is needed, run
 ## Rehearsal reset
 
 Use a clean disposable meta database before each full rehearsal so a prior job
-or published version cannot suppress a new draft for the same fingerprint.
+or published version cannot suppress a new draft for the same fingerprint. A
+template published by an older build may have a non-displaying animation and
+would render a black frame if reused; always regenerate from a fresh database
+rather than reusing a previously published version across builds.
 Stop the application, preserve any local data that matters, replace
 `backend/var/meta.db` with a fresh demo database, and rerun:
 
@@ -120,6 +137,11 @@ Before proceeding, verify that `text_card` is the only compatible fallback.
 Choosing it manually instead of an offered structural template does not create
 a learning observation.
 
+When `text_card` is the only compatible option, the option list shows a hint —
+"No built-in visualization fits this problem yet … it may propose a brand-new
+visualization template" — which is the end-user's cue that this selection feeds
+the meta-template loop.
+
 Select `text_card`, click **Review storyboard.**, approve the scene, and render
 through the normal workflow. The slide 1 rectangle perimeter is 22.
 
@@ -137,7 +159,11 @@ Open `http://localhost:5173/?meta-review`, enter reviewer token
 `local-meta-demo`, and click **Load drafts**. Open the new pending draft and:
 
 1. Inspect the classifier description, preview, fixture results, and predicate
-   coverage.
+   coverage. The panel separates the one real example you must verify ("Fixtures
+   to verify") from the system-generated, read-only "Guard cases" — you only fill
+   in the former. Positive examples that are not tied to a real observation are
+   no longer generated, so every fixture shown under "Fixtures to verify" can
+   actually be approved.
 2. For the positive fixture tied to slide 1, enter the expected result
    `{"answer": 22}` and click **Save fixture**. Saving reruns validation and
    preview generation.
@@ -229,6 +255,11 @@ sequence. Do not imply that `rectangle_perimeter` should match either problem.
   network access in the worker shell as well as the backend shell.
 - **Preview or render fails:** Verify Manim, Cairo, Pango, ffmpeg, LaTeX, and
   `dvisvgm` are installed and on `PATH`.
+- **The draft reports a blank-frame preview error:** The generated animation
+  builds visuals but never displays them (no `appear`/`wait` actions), so it
+  renders an empty frame and cannot be published. This is caught at validation
+  by design. Use **Reject and request refinement** — the generator is instructed
+  to reveal every visual with an `appear` and hold it with a `wait`.
 - **The review API fails in the browser:** Restart Vite so it loads the `/meta`
   proxy, re-enter `local-meta-demo`, and click **Load drafts**.
 - **Slide 2 does not offer the published template:** Request options from a
@@ -237,9 +268,9 @@ sequence. Do not imply that `rectangle_perimeter` should match either problem.
 
 ## After the demo
 
-Stop the application with Ctrl-C. Remove the six meta-template values from
-`backend/.env`, or set the five feature and threshold controls back to their
+Stop the application with Ctrl-C. Remove the seven meta-template values from
+`backend/.env`, or set the six feature and threshold controls back to their
 normal disabled/default values; remove the disposable reviewer token. Preserve
 or delete the disposable database and generated artifacts according to local
 project needs. Never carry this demo configuration, its token, or its lowered
-observation threshold into production.
+observation threshold and fixture count into production.

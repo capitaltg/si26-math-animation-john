@@ -1,4 +1,5 @@
 from fractions import Fraction
+from itertools import product
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
@@ -270,7 +271,22 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     and node.field in decimal_field_names
                 ):
                     return str(values[node.field])
+                # A fixed decimal constant baked directly into the guard (not a
+                # field reference) needs the same plain-decimal stringification:
+                # a non-integral literal like 2.5 must format as "2.5", not the
+                # fraction formatter's "5/2". An integral literal (e.g. 3.0) is
+                # left on the fraction path, which already renders it as the
+                # bare "3" that whole-number source text uses.
+                if getattr(node, "node", None) == "literal" and not node.value.is_integer():
+                    return str(node.value)
                 return _format_fraction_component(_evaluate(node, values))
+
+            def component_variants(node) -> tuple[str, ...]:
+                primary = format_component(node)
+                if getattr(node, "node", None) != "literal" or node.value.is_integer():
+                    return (primary,)
+                fraction = _format_fraction_component(_evaluate(node, values))
+                return (primary,) if fraction == primary else (primary, fraction)
 
             derived: list[tuple[str, list[str]]] = []
             for predicate in compiled_guard.document.predicates:
@@ -286,12 +302,12 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                     continue
                 if not all(getattr(term, "node", None) in ("literal", "field_ref") for term in terms):
                     continue
-                component_tokens = [format_component(term) for term in terms]
                 total_token = format_component(total)
-                if operation == "sum":
-                    derived.append((total_token, component_tokens))
-                else:
-                    derived.append((total_token, component_tokens, operation))
+                for component_tokens in product(*(component_variants(term) for term in terms)):
+                    if operation == "sum":
+                        derived.append((total_token, list(component_tokens)))
+                    else:
+                        derived.append((total_token, list(component_tokens), operation))
             return derived
 
     return DynamicTemplateParams

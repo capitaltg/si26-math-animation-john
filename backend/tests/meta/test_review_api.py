@@ -87,7 +87,11 @@ def _proposal_dict(observation_id="obs-1"):
         ),
         guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
+            {"kind": "label", "ref": "n_label", "text": "n"},
+            {"kind": "appear", "target_ref": "n_label"},
+            {"kind": "wait", "seconds": 1},
+        ]}),
         classifier_bullet="use for X",
         fixtures=[
             ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
@@ -179,7 +183,11 @@ def _seed_approvable_draft(
                 guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
             ),
             answer_expression=FieldRefNode(field="n"),
-            animation_document=AnimationDocument(root={"kind": "label", "text": "n"}),
+            animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
+            {"kind": "label", "ref": "n_label", "text": "n"},
+            {"kind": "appear", "target_ref": "n_label"},
+            {"kind": "wait", "seconds": 1},
+        ]}),
             classifier_bullet="use for X",
             fixtures=fixtures,
         )
@@ -220,7 +228,7 @@ def test_list_drafts_filters_by_status(client):
 
 
 def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch):
-    monkeypatch.setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
+    monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
     get_settings.cache_clear()
     draft = _seed_pending_review_draft()
     resp = client.get(f"/meta/drafts/{draft.id}")
@@ -228,6 +236,7 @@ def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch)
     body = resp.json()
     assert body["classifier_bullet"] == "use for X"
     assert len(body["fixtures"]) == 2
+    assert body["fixtures"][0]["observation_id"] == "obs-1"
     assert body["preview_url"] == f"/meta/preview/{draft.preview_artifact_hash}"
     assert body["required_fixture_count"] == 1
 

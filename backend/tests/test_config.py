@@ -1,4 +1,7 @@
 # backend/tests/test_config.py
+import pytest
+from pydantic import ValidationError
+
 from app.config import get_settings
 
 
@@ -15,6 +18,7 @@ def test_meta_settings_defaults():
     assert settings.meta_templates_enabled is False
     assert settings.meta_codegen_enabled is False
     assert settings.fingerprint_observation_threshold == 5
+    assert settings.meta_required_fixture_count == 5
     assert settings.fingerprint_tagger_prompt_version == "v1"
     assert settings.fingerprint_tagger_max_attempts == 2
     assert settings.fingerprint_tagger_backoff_seconds == 1.0
@@ -31,3 +35,11 @@ def test_relative_meta_db_path_resolves_from_backend_root():
 
     settings = Settings(_env_file=None, meta_db_path=Path("custom/meta.db"))
     assert settings.meta_db_path == (BACKEND_ROOT / "custom/meta.db").resolve()
+
+
+@pytest.mark.parametrize("fixture_count", [0, -1])
+def test_meta_required_fixture_count_must_be_positive(fixture_count):
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, meta_required_fixture_count=fixture_count)

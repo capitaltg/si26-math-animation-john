@@ -1,3 +1,4 @@
+import io
 import json
 import shutil
 import subprocess
@@ -8,6 +9,30 @@ from pathlib import Path
 from app.meta.artifacts import store_artifact
 from app.meta.dsl.animation import CompiledAnimation
 from app.render.full_render import BACKEND_ROOT, RENDER_TIMEOUT_SECONDS
+
+# A thumbnail is rendered with save_last_frame, so it captures the animation's
+# final state. Manim's default camera background is solid black, and a mobject
+# only reaches a frame if some timed action (appear/transform/...) actually
+# added it to the scene. An animation document that merely *builds* layout/visual
+# nodes without ever appearing them therefore renders an all-black frame -- and,
+# because such a scene also has zero playback duration, its full MP4 render
+# produces no video file at all. Rejecting a blank preview here (so the draft
+# fails validation and can never be approved) is the single check that catches
+# both symptoms at the layer that matters: the actual rendered pixels.
+_MIN_NON_BACKGROUND_PIXELS = 40
+
+
+def _frame_is_blank(png_bytes: bytes) -> bool:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(png_bytes)) as image:
+        rgb = image.convert("RGB")
+        background = rgb.getpixel((0, 0))
+        non_background = sum(
+            count for count, color in (rgb.getcolors(maxcolors=rgb.width * rgb.height) or [])
+            if color != background
+        )
+    return non_background < _MIN_NON_BACKGROUND_PIXELS
 
 
 def render_and_store_preview(
@@ -47,6 +72,13 @@ def render_and_store_preview(
         if result.returncode != 0:
             raise RuntimeError(f"Preview render failed:\n{result.stdout}\n{result.stderr}")
 
-        return store_artifact(artifact_root, output_path.read_bytes())
+        preview_bytes = output_path.read_bytes()
+        if _frame_is_blank(preview_bytes):
+            raise RuntimeError(
+                "Preview render produced a blank frame: the animation never displays "
+                "any content. Every visual must be shown with an 'appear' action (and "
+                "held with a 'wait') for the template to render."
+            )
+        return store_artifact(artifact_root, preview_bytes)
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
