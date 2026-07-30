@@ -149,7 +149,13 @@ def build_rectangle(
     if length <= 0 or width <= 0:
         raise ValueError("rectangle dimensions must be positive")
 
-    ratio = max(0.25, min(4.0, float(length / width)))
+    # Compare exactly before converting so extreme valid Fractions cannot overflow.
+    if length * 4 < width:
+        ratio = 0.25
+    elif length > width * 4:
+        ratio = 4.0
+    else:
+        ratio = float(length / width)
     display_height = min(3.0, 5.5 / ratio)
     display_width = display_height * ratio
     style_kwargs = resolve_style(style)

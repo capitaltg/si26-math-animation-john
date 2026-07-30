@@ -290,6 +290,14 @@ def test_demo_flow_generates_reviews_publishes_and_reuses(mock_tag_call, mock_dr
         ref = resolve_dynamic_ref(session, "rectangle_perimeter", entry.version_id)
     _scene_cls, params_cls = get_dynamic_template(ref)
     params = params_cls.model_validate({"length": 10, "width": 4})
+    mobjects = {}
+    render_animation_node(
+        _StubScene(),
+        _scene_cls.compiled_animation.document.root,
+        params.model_dump(),
+        mobjects,
+    )
+    assert mobjects["answer"].original_text == "P = 28 cm"
 
     out = tmp_path / "slide2.mp4"
     render_scene_to_mp4(ref, params, out)

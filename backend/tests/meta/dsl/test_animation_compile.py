@@ -4,6 +4,7 @@ from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
     ArrowNode,
+    BraceNode,
     ColumnNode,
     ExpressionLabelNode,
     HighlightNode,
@@ -13,6 +14,7 @@ from app.meta.dsl.animation import (
     OverlayNode,
     ParallelNode,
     RowNode,
+    RectangleNode,
     SequenceNode,
     WaitNode,
     compile_animation_document,
@@ -453,6 +455,69 @@ def test_version_two_rejects_static_field_placeholder():
     with pytest.raises(DslValidationError) as exc:
         compile_animation_document(document, known_fields=frozenset({"length"}))
     assert exc.value.code == "unsupported_text_placeholder"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        BraceNode(target_ref="caption", text="{length} cm"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), prefix="{length}"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), suffix="{length}"),
+        RectangleNode(
+            length=LiteralNode(value=1),
+            width=LiteralNode(value=1),
+            unit="{length}",
+        ),
+    ],
+    ids=["brace_text", "expression_label_prefix", "expression_label_suffix", "rectangle_unit"],
+)
+def test_version_two_rejects_field_placeholders_in_all_rendered_static_text(node):
+    document = AnimationDocument(
+        animation_version=2,
+        root=ColumnNode(children=[LabelNode(ref="caption", text="Caption"), node]),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"length"}))
+
+    assert exc.value.code == "unsupported_text_placeholder"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        BraceNode(target_ref="caption", text="Set {2, 4}"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), prefix="Set {2, 4}"),
+        RectangleNode(
+            length=LiteralNode(value=1),
+            width=LiteralNode(value=1),
+            unit="{cm}",
+        ),
+    ],
+    ids=["brace_text", "expression_label_prefix", "rectangle_unit"],
+)
+def test_version_two_allows_literal_braces_that_do_not_name_known_fields(node):
+    document = AnimationDocument(
+        animation_version=2,
+        root=ColumnNode(children=[LabelNode(ref="caption", text="Caption"), node]),
+    )
+
+    compile_animation_document(document, known_fields=frozenset({"length"}))
+
+
+@pytest.mark.parametrize("unknown_dimension", ["length", "width"])
+def test_version_two_rectangle_rejects_unknown_dimension_expression(unknown_dimension):
+    dimensions = {
+        "length": LiteralNode(value=1),
+        "width": LiteralNode(value=1),
+    }
+    dimensions[unknown_dimension] = FieldRefNode(field="missing")
+    document = AnimationDocument(animation_version=2, root=RectangleNode(**dimensions))
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"length", "width"}))
+
+    assert exc.value.code == "unknown_field"
 
 
 def test_version_two_allows_literal_set_notation_without_field_names():

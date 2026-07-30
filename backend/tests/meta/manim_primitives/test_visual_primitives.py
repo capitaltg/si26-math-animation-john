@@ -92,6 +92,34 @@ def test_build_rectangle_preserves_ratio_and_labels_dimensions():
 
 
 @pytest.mark.parametrize(
+    ("length", "width", "expected_ratio", "expected_labels"),
+    [
+        (
+            Fraction(1),
+            Fraction(1, 10**400),
+            4.0,
+            {"1 cm", f"1/{10**400} cm"},
+        ),
+        (
+            Fraction(1, 10**400),
+            Fraction(1),
+            0.25,
+            {f"1/{10**400} cm", "1 cm"},
+        ),
+    ],
+)
+def test_build_rectangle_clamps_extreme_ratios_without_losing_exact_dimension_labels(
+    length, width, expected_ratio, expected_labels
+):
+    group = build_rectangle(length, width, unit="cm")
+    rectangle = next(mobject for mobject in group.submobjects if isinstance(mobject, Rectangle))
+    labels = {mobject.original_text for mobject in group.submobjects if isinstance(mobject, Text)}
+
+    assert rectangle.width / rectangle.height == pytest.approx(expected_ratio, rel=0.02)
+    assert labels == expected_labels
+
+
+@pytest.mark.parametrize(
     ("length", "width"),
     [(Fraction(0), Fraction(3)), (Fraction(8), Fraction(-1))],
 )

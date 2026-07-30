@@ -269,6 +269,23 @@ def test_stale_validation_runtime_version_raises_precondition(
         )
 
 
+@pytest.mark.parametrize("runtime_key", ["compiler_version", "renderer_version"])
+def test_previous_runtime_versions_are_stale_after_rendered_values_and_geometry_fix(
+    engine, session, runtime_key
+):
+    draft = _seed_draft(session, draft_id="draft-1")
+    report = json.loads(draft.validation_report_json)
+    report[runtime_key] = 1
+    draft.validation_report_json = json.dumps(report)
+    session.commit()
+
+    with pytest.raises(ApprovalPreconditionError, match="stale"):
+        approve_draft_service(
+            draft_id="draft-1", template_name="x", reviewer_label="dev",
+            math_semantics_confirmed=True,
+        )
+
+
 def test_incomplete_predicate_coverage_raises_precondition(engine, session):
     _seed_draft(session, draft_id="draft-1", coverage=[])
     with pytest.raises(ApprovalPreconditionError):

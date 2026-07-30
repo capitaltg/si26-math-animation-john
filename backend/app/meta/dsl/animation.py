@@ -207,6 +207,12 @@ _VISUAL_EXPRESSION_FIELDS = {
     "expression_label": ("expression",),
     "rectangle": ("length", "width"),
 }
+_STATIC_TEXT_FIELDS = {
+    "brace": ("text",),
+    "label": ("text",),
+    "expression_label": ("prefix", "suffix"),
+    "rectangle": ("unit",),
+}
 _REF_FIELDS = ("target_ref", "from_ref", "to_ref", "path_ref")
 _TIMED_ACTION_KINDS = {"appear", "highlight", "transform", "move_along_path", "camera_focus"}
 _BATCHABLE_TIMED_ACTION_KINDS = _TIMED_ACTION_KINDS - {"camera_focus"}
@@ -293,15 +299,14 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             compile_expression(getattr(node, field_name), known_fields)
 
         if document.animation_version == 2:
-            static_text = ()
-            if node.kind == "label":
-                static_text = (node.text,)
-            elif node.kind == "expression_label":
-                static_text = (node.prefix, node.suffix)
-                if node.role == "answer":
-                    answer_expressions.append(node.expression)
-                    if node.ref is not None:
-                        answer_expressions_by_ref[node.ref] = node.expression
+            static_text = tuple(
+                getattr(node, field_name)
+                for field_name in _STATIC_TEXT_FIELDS.get(node.kind, ())
+            )
+            if node.kind == "expression_label" and node.role == "answer":
+                answer_expressions.append(node.expression)
+                if node.ref is not None:
+                    answer_expressions_by_ref[node.ref] = node.expression
             if any(_contains_field_placeholder(text, known_fields) for text in static_text):
                 raise DslValidationError(
                     "unsupported_text_placeholder",

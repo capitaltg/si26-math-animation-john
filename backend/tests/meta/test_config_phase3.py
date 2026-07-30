@@ -27,6 +27,6 @@ def test_meta_draft_max_refinements_default():
     assert Settings().meta_draft_max_refinements == 5
 
 
-def test_version_constants_are_positive_ints():
-    assert isinstance(DSL_COMPILER_VERSION, int) and DSL_COMPILER_VERSION >= 1
-    assert isinstance(DYNAMIC_RENDERER_VERSION, int) and DYNAMIC_RENDERER_VERSION >= 1
+def test_version_constants_identify_rendered_values_and_geometry_fix_wave():
+    assert DSL_COMPILER_VERSION == 2
+    assert DYNAMIC_RENDERER_VERSION == 2
