@@ -1,13 +1,19 @@
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 from app.meta.dsl.expression import _evaluate
-from app.meta.dsl.scene_program import ProgramAction, SceneProgramDocument, StyleRecipeDocument
+from app.meta.dsl.scene_program import (
+    ProgramAction, ProgramVisual, Relation, SceneProgramDocument, StyleRecipeDocument,
+    TimedAction,
+)
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.errors import V3Failure, V3ValidationError
-from app.meta.v3.geometry import Bounds, PlacedVisual, Point, translate_bounds, translate_point
+from app.meta.v3.geometry import (
+    Bounds, PlacedVisual, Point, TextMeasurer, translate_bounds, translate_point,
+)
 from app.meta.v3.layout import place_vertical_lesson
-from app.meta.v3.visual_registry import default_visual_registry
+from app.meta.v3.visual_registry import VisualRegistry, default_visual_registry
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,12 @@ class ResolvedScene:
         return self.visual(visual_ref).anchor(part, index, name)
 
 
-def resolve_scene(program: SceneProgramDocument, values, measurer, registry=None) -> ResolvedScene:
+def resolve_scene(
+    program: SceneProgramDocument,
+    values: Mapping[str, object],
+    measurer: TextMeasurer,
+    registry: VisualRegistry | None = None,
+) -> ResolvedScene:
     registry = registry or default_visual_registry()
     measured = []
     for visual in program.visuals:
@@ -74,7 +85,9 @@ def resolve_scene(program: SceneProgramDocument, values, measurer, registry=None
     )
 
 
-def evaluate_program_visual(visual, values):
+def evaluate_program_visual(
+    visual: ProgramVisual, values: Mapping[str, object],
+) -> tuple[SimpleNamespace, dict[str, object]]:
     """Evaluate only the typed expression tree embedded in a program visual."""
     kind = visual.kind
     if kind == "ordered_values":
@@ -117,7 +130,11 @@ def evaluate_program_visual(visual, values):
     raise ValueError(f"unknown program visual {kind}")
 
 
-def resolve_relation(relation, visuals_by_ref, index=0):
+def resolve_relation(
+    relation: Relation,
+    visuals_by_ref: Mapping[str, PlacedVisual],
+    index: int = 0,
+) -> ResolvedRelation:
     path = f"relations[{index}].target"
     try:
         visual = visuals_by_ref[relation.target.visual_ref]
@@ -148,7 +165,11 @@ def resolve_relation(relation, visuals_by_ref, index=0):
     )
 
 
-def bind_timeline(entries, visuals_by_ref, relations):
+def bind_timeline(
+    entries: Sequence[TimedAction],
+    visuals_by_ref: Mapping[str, PlacedVisual],
+    relations: Sequence[ResolvedRelation],
+) -> list[ResolvedAction]:
     relations_by_ref = {relation.ref: relation for relation in relations}
     resolved = []
     for index, entry in enumerate(entries):
@@ -169,7 +190,7 @@ def bind_timeline(entries, visuals_by_ref, relations):
     return resolved
 
 
-def action_targets(action):
+def action_targets(action: ProgramAction) -> list[TargetRef]:
     if action.kind == "reveal":
         return action.targets
     if action.kind in {"set_role", "draw", "move"}:
@@ -179,7 +200,11 @@ def action_targets(action):
     return []
 
 
-def resolve_action_target(target, visuals_by_ref, path="timeline.action.target"):
+def resolve_action_target(
+    target: TargetRef,
+    visuals_by_ref: Mapping[str, PlacedVisual],
+    path: str = "timeline.action.target",
+) -> ResolvedTarget:
     try:
         visual = visuals_by_ref[target.visual_ref]
     except KeyError:
@@ -199,7 +224,11 @@ def resolve_action_target(target, visuals_by_ref, path="timeline.action.target")
     return ResolvedTarget(ref=target, bounds=translate_bounds(part_bounds, visual.offset))
 
 
-def resolve_action_path(action, visuals_by_ref, index=0):
+def resolve_action_path(
+    action: ProgramAction,
+    visuals_by_ref: Mapping[str, PlacedVisual],
+    index: int = 0,
+) -> list[Point] | None:
     if action.kind not in {"trace", "move"}:
         return None
     failure_path = f"timeline[{index}].action.path_ref"
@@ -226,7 +255,11 @@ def resolve_action_path(action, visuals_by_ref, index=0):
     return [translate_point(point, visual.offset) for point in points]
 
 
-def require_relation_if_declared(action, relations_by_ref, index):
+def require_relation_if_declared(
+    action: ProgramAction,
+    relations_by_ref: Mapping[str, ResolvedRelation],
+    index: int,
+) -> None:
     if action.kind == "show_relation" and action.relation_ref not in relations_by_ref:
         _fail(
             "unknown_relation", f"timeline[{index}].action.relation_ref",

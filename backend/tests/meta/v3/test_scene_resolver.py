@@ -8,7 +8,8 @@ from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import AnchorRef, CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
-from app.meta.v3.geometry import Point
+from app.meta.v3.geometry import Bounds, MeasuredVisual, Point, SemanticPart
+from app.meta.v3.layout import SAFE_FRAME, place_vertical_lesson
 from app.meta.v3.resolver import resolve_scene
 
 
@@ -19,6 +20,17 @@ class LiteralTextMeasurer:
 
 def _field(name):
     return {"node": "field_ref", "field": name}
+
+
+def _measured_visual(ref, height):
+    bounds = Bounds(-1, 1, -height / 2, height / 2)
+    return MeasuredVisual(
+        ref=ref,
+        bounds=bounds,
+        parts={("item", 0): SemanticPart("item", 0, bounds)},
+        paths={},
+        payload={},
+    )
 
 
 @pytest.fixture
@@ -152,3 +164,35 @@ def test_timeline_unknown_relation_has_structured_action_path(program, measurer)
 
     assert exc.value.failure.code == "unknown_relation"
     assert exc.value.failure.path == "timeline[0].action.relation_ref"
+
+
+def test_vertical_layout_centers_primary_and_reserves_conclusion_band():
+    primary, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 2),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    assert primary.bounds.center.y == pytest.approx(0.6)
+    assert primary.bounds.bottom >= -2.4
+    assert primary.bounds.top <= SAFE_FRAME.top
+    assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
+    assert conclusion.bounds.top <= -2.4
+    assert conclusion.bounds.top < primary.bounds.bottom
+
+
+def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
+    original_gap = 0.45
+    primary, supporting, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 3),
+        _measured_visual("supporting", 3),
+        _measured_visual("evaluated_answer", 1),
+    ])
+    scale = (primary.bounds.top - primary.bounds.bottom) / 3
+
+    assert scale < 1
+    assert primary.bounds.bottom - supporting.bounds.top == pytest.approx(original_gap * scale)
+    for visual in (primary, supporting, conclusion):
+        assert visual.bounds.left >= SAFE_FRAME.left
+        assert visual.bounds.right <= SAFE_FRAME.right
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom
+        assert visual.bounds.top <= SAFE_FRAME.top
