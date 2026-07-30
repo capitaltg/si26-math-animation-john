@@ -83,3 +83,16 @@ def test_drop_ungrounded_positive_fixtures_keeps_only_grounded_positives():
     # The ungrounded positive is gone; the grounded positive and the (legitimately
     # observation-less) guard cases survive.
     assert result == [grounded, boundary, negative]
+
+
+def test_drop_ungrounded_positive_fixtures_deduplicates_observations():
+    first = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"numerator": 3, "denominator": 4},
+    )
+    duplicate = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"numerator": 6, "denominator": 8},
+    )
+
+    assert drop_ungrounded_positive_fixtures([first, duplicate]) == [first]

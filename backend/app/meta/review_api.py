@@ -66,6 +66,7 @@ class DraftSummaryOut(BaseModel):
 
 class FixtureOut(BaseModel):
     id: str
+    observation_id: str | None
     kind: str
     expected_outcome: str
     generation_method: str
@@ -134,7 +135,8 @@ def _fixture_out(session, fixture: TemplateDraftFixture) -> FixtureOut:
         observation = session.get(FallbackObservation, fixture.observation_id)
         source_excerpt = observation.source_excerpt if observation else None
     return FixtureOut(
-        id=fixture.id, kind=fixture.kind, expected_outcome=fixture.expected_outcome,
+        id=fixture.id, observation_id=fixture.observation_id,
+        kind=fixture.kind, expected_outcome=fixture.expected_outcome,
         generation_method=fixture.generation_method, params=json.loads(fixture.params_json),
         expected_result=json.loads(fixture.expected_result_json) if fixture.expected_result_json else None,
         structural_check_passed=fixture.structural_check_passed,

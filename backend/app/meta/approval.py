@@ -132,7 +132,7 @@ def approve_draft_service(
 
             # 7. Enough real, human-confirmed positive fixtures.
             verified_fixtures = session.execute(
-                select(func.count())
+                select(func.count(func.distinct(TemplateDraftFixture.observation_id)))
                 .select_from(TemplateDraftFixture)
                 .where(
                     TemplateDraftFixture.draft_id == draft.id,

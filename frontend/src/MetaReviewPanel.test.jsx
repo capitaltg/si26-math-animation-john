@@ -33,6 +33,7 @@ const draftDetail = {
   fixtures: [
     {
       id: 'fx-1', kind: 'positive', expected_outcome: 'accept', generation_method: 'proposed',
+      observation_id: 'obs-1',
       params: { n: 5 }, expected_result: { answer: '5' },
       structural_check_passed: true, structural_check_detail: 'ok', source_excerpt: '5 apples',
     },
@@ -74,6 +75,7 @@ function installFetchMock({ fixtureResponse } = {}) {
 function _qualifyingFixture(id) {
   return {
     id, kind: 'positive', expected_outcome: 'accept', generation_method: 'proposed',
+    observation_id: `obs-${id}`,
     params: { n: 5 }, expected_result: { answer: '5' },
     structural_check_passed: true, structural_check_detail: 'ok', source_excerpt: '5 apples',
   }
@@ -378,6 +380,39 @@ it('enables Approve when the configured fixture threshold is met', async () => {
     screen.getByRole('heading', { name: 'Approve' }).nextElementSibling.textContent,
   ).toContain('Verified fixtures: 1 / 1 required.')
   expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(false)
+})
+
+it('counts duplicate fixtures from one observation only once', async () => {
+  const duplicateDraftDetail = {
+    ...approvableDraftDetail,
+    required_fixture_count: 2,
+    fixtures: [
+      _qualifyingFixture('fx-1'),
+      { ..._qualifyingFixture('fx-2'), observation_id: 'obs-fx-1' },
+    ],
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => duplicateDraftDetail }
+    if (url === duplicateDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByLabelText('Fixture fx-1 params')).not.toBeNull())
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  expect(
+    screen.getByRole('heading', { name: 'Approve' }).nextElementSibling.textContent,
+  ).toContain('Verified fixtures: 1 / 2 required.')
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
 })
 
 it('leaves Approve disabled when the confirmation checkbox is unchecked, even with enough fixtures', async () => {

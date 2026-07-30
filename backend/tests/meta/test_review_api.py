@@ -236,6 +236,7 @@ def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch)
     body = resp.json()
     assert body["classifier_bullet"] == "use for X"
     assert len(body["fixtures"]) == 2
+    assert body["fixtures"][0]["observation_id"] == "obs-1"
     assert body["preview_url"] == f"/meta/preview/{draft.preview_artifact_hash}"
     assert body["required_fixture_count"] == 1
 

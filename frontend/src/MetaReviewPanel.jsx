@@ -13,6 +13,7 @@ async function responseJson(resp) {
 function isQualifyingFixture(fixture) {
   return (
     fixture.kind === 'positive'
+    && Boolean(fixture.observation_id)
     && Boolean(fixture.source_excerpt)
     && fixture.expected_result != null
     && fixture.structural_check_passed === true
@@ -295,7 +296,13 @@ export default function MetaReviewPanel() {
   const hasFullPredicateCoverage = Boolean(selected?.validation_report) && coverageCount === predicateCount
   const missingPredicateIndexes = Array.from({ length: predicateCount }, (_, i) => i)
     .filter((i) => !negativePredicateCoverage.includes(i))
-  const qualifyingFixtureCount = selected ? selected.fixtures.filter(isQualifyingFixture).length : 0
+  const qualifyingFixtureCount = selected
+    ? new Set(
+      selected.fixtures
+        .filter(isQualifyingFixture)
+        .map((fixture) => fixture.observation_id),
+    ).size
+    : 0
   const requiredFixtureCount = selected?.required_fixture_count ?? 5
   const positiveFixtures = selected ? selected.fixtures.filter((f) => f.kind === 'positive') : []
   const guardFixtures = selected ? selected.fixtures.filter((f) => f.kind !== 'positive') : []
