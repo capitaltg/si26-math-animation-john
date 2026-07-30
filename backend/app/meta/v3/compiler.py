@@ -38,6 +38,10 @@ _PART_CARDINALITY = {
 
 _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
 
+_DRAWABLE_TARGETS = {"rectangle_measurement": {None}}
+_MOVABLE_TARGETS = {"rectangle_measurement": {None}}
+_TRANSFORM_COMPATIBILITY = {"rectangle_measurement": {"rectangle_measurement"}}
+
 
 def compile_teaching_plan(plan, answer_expression, known_fields, context):
     compile_expression(answer_expression, known_fields)
@@ -100,18 +104,37 @@ def validate_target_refs(plan):
             if action.kind == "reveal":
                 for target_index, target in enumerate(action.targets):
                     _validate_target(target, specs, f"{path}.targets[{target_index}]")
-            elif action.kind in {"emphasize", "dim", "restore", "draw", "move"}:
+            elif action.kind in {"emphasize", "dim", "restore"}:
                 _validate_target(action.target, specs, f"{path}.target")
+            elif action.kind == "draw":
+                spec = _validate_target(action.target, specs, f"{path}.target")
+                _validate_compatible_target(
+                    action.target, spec, _DRAWABLE_TARGETS, "incompatible_draw_target", path,
+                    "a drawable whole visual", "draw a declared rectangle outline",
+                )
+            elif action.kind == "move":
+                spec = _validate_target(action.target, specs, f"{path}.target")
+                _validate_compatible_target(
+                    action.target, spec, _MOVABLE_TARGETS, "incompatible_move_target", path,
+                    "a movable whole visual", "move a declared rectangle visual",
+                )
             elif action.kind == "transform":
                 source = _validate_target(action.source, specs, f"{path}.source")
                 target = _validate_target(action.target, specs, f"{path}.target")
-                if source.kind != target.kind:
+                compatible_kinds = _TRANSFORM_COMPATIBILITY.get(source.kind, set())
+                if (
+                    action.source.part is not None
+                    or action.target.part is not None
+                    or target.kind not in compatible_kinds
+                ):
                     _fail(
-                        "incompatible_transform", path, "source and target visual kinds to match",
-                        f"{source.kind}:{target.kind}", "transform between compatible semantic visuals",
+                        "incompatible_transform_target", path,
+                        "compatible whole source and target visuals",
+                        f"{source.kind}:{target.kind}", "transform between compatible declared visuals",
                     )
             elif action.kind == "callout":
-                _validate_target(action.target, specs, f"{path}.target")
+                spec = _validate_target(action.target, specs, f"{path}.target")
+                _validate_callout_anchor(action.target, spec, path)
 
             if action.kind in {"trace", "move"}:
                 path_ref = action.path_ref
@@ -200,6 +223,23 @@ def _validate_path_ref(path_ref, specs, path):
             "use a declared semantic path",
         )
     return spec
+
+
+def _validate_compatible_target(target, spec, compatible_targets, code, path, expected, hint):
+    compatible_parts = compatible_targets.get(spec.kind, set())
+    if target.part not in compatible_parts:
+        _fail(
+            code, f"{path}.target", expected, f"{spec.kind}.{target.part}", hint,
+        )
+
+
+def _validate_callout_anchor(target, spec, path):
+    if spec.kind == "ordered_values" and target.part == "item" and target.anchor != "bottom":
+        _fail(
+            "incompatible_callout_anchor", f"{path}.target.anchor",
+            "the bottom anchor of an ordered-value item", target.anchor,
+            "attach item callouts to the declared item bottom anchor",
+        )
 
 
 def _literal_integer(expression):

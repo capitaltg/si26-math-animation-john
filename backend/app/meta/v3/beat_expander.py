@@ -158,7 +158,9 @@ class BeatExpander:
             return [self._set_role(request.target, request.role, current_roles)]
         if kind == "dim":
             key = self._target_key(request.target)
-            previous_roles[key] = current_roles.get(key, initial_roles[request.target.visual_ref])
+            previous_roles.setdefault(
+                key, current_roles.get(key, initial_roles[request.target.visual_ref]),
+            )
             return [self._set_role(request.target, "neutral", current_roles)]
         if kind == "restore":
             key = self._target_key(request.target)

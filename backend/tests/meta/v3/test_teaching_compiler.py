@@ -3,7 +3,9 @@ from copy import deepcopy
 import pytest
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import DrawAction, MoveAction, SetRoleAction, TransformAction
+from app.meta.dsl.scene_program import (
+    DrawAction, MoveAction, RevealAction, SetRoleAction, TransformAction,
+)
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext, TargetRef
 from app.meta.v3.beat_expander import ExpandedBeat
@@ -189,7 +191,7 @@ def test_custom_actions_lower_to_typed_program_actions_and_restore_prior_role(
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "callout", "target": {
-            "visual_ref": "values", "part": "item", "index": 3, "anchor": "top",
+            "visual_ref": "values", "part": "item", "index": 3, "anchor": "bottom",
         }, "text": "middle value"},
     ]
     plan = TeachingPlanDocument.model_validate(raw)
@@ -204,7 +206,45 @@ def test_custom_actions_lower_to_typed_program_actions_and_restore_prior_role(
         ("set_role", "focus"), ("set_role", "neutral"), ("set_role", "focus"),
     ]
     assert actions[-1].kind == "show_relation"
-    assert program.relations[-1].target.anchor == "top"
+    assert program.relations[-1].target.anchor == "bottom"
+
+
+def test_nested_dim_restores_the_role_before_the_first_dim(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][2]["custom_actions"] = [
+        {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
+        {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
+        {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 3}},
+    ]
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    roles = [
+        action.role for entry in program.timeline if entry.beat_id == "focus_middle"
+        for action in [entry.action] if action.kind == "set_role" and action.target.index == 3
+    ]
+
+    assert roles == ["focus", "neutral", "neutral", "focus"]
+
+
+def test_custom_item_callout_requires_the_declared_bottom_anchor(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][2]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "top"},
+        "text": "middle value",
+    }]
+
+    with pytest.raises(V3ValidationError, match="incompatible_callout_anchor"):
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
 
 
 def test_compiler_rejects_unknown_visual_and_out_of_range_item_targets(
@@ -290,6 +330,51 @@ def test_bounded_custom_draw_transform_and_move_actions_are_preserved(
     assert any(isinstance(action, MoveAction) for action in actions)
 
 
+@pytest.mark.parametrize(
+    ("action_request", "error"),
+    [
+        ({"kind": "draw", "target": {"visual_ref": "values"}}, "incompatible_draw_target"),
+        ({"kind": "move", "target": {"visual_ref": "rectangle", "part": "edge", "index": 0},
+          "path_ref": "rectangle.perimeter"}, "incompatible_move_target"),
+    ],
+)
+def test_custom_draw_and_move_reject_incompatible_visual_targets(
+    action_request, error, median_plan, perimeter_plan, answer, compile_context,
+):
+    if action_request["kind"] == "draw":
+        raw = median_plan.model_dump()
+        known_fields, expression = frozenset({f"v{i}" for i in range(1, 8)}), answer
+    else:
+        raw = perimeter_plan.model_dump()
+        known_fields = frozenset({"length", "width"})
+        expression = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+    raw["beats"][1]["custom_actions"] = [action_request]
+
+    with pytest.raises(V3ValidationError, match=error):
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), expression, known_fields, compile_context,
+        )
+
+
+def test_custom_transform_rejects_semantic_part_targets(perimeter_plan, compile_context):
+    raw = perimeter_plan.model_dump()
+    raw["supporting_visuals"] = [{
+        "kind": "rectangle_measurement", "ref": "comparison",
+        "length": _field("length"), "width": _field("width"), "unit": "cm",
+    }]
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "transform", "source": {"visual_ref": "rectangle", "part": "edge", "index": 0},
+        "target": {"visual_ref": "comparison"},
+    }]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError, match="incompatible_transform_target"):
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+
 def test_scheduler_batches_dense_same_beat_actions_without_exceeding_budget():
     actions = [
         SetRoleAction(target=TargetRef(visual_ref="values"), role="focus")
@@ -302,6 +387,27 @@ def test_scheduler_batches_dense_same_beat_actions_without_exceeding_budget():
     starts = {entry.at_seconds for entry in timeline}
     assert len(starts) < len(timeline)
     assert all(entry.at_seconds + entry.duration_seconds <= total for entry in timeline)
+
+
+def test_scheduler_rejects_minimum_timeline_that_exceeds_twelve_seconds():
+    beats = [
+        ExpandedBeat(
+            beat_id=f"organize_{index}",
+            actions=[SetRoleAction(target=TargetRef(visual_ref="values"), role="structure")],
+            minimum_seconds=1.25,
+            weight=1.0,
+        )
+        for index in range(9)
+    ]
+    beats.append(ExpandedBeat(
+        beat_id="conclude",
+        actions=[RevealAction(targets=[TargetRef(visual_ref="evaluated_answer")], mode="together")],
+        minimum_seconds=1.5,
+        weight=1.5,
+    ))
+
+    with pytest.raises(V3ValidationError, match="timeline_over_budget"):
+        schedule_beats(beats)
 
 
 def test_timeline_entries_fit_the_declared_total_duration(median_plan, answer, compile_context):

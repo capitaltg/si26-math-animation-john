@@ -1,5 +1,6 @@
 from app.meta.dsl.scene_program import TimedAction
-from app.meta.dsl.v3_common import MAX_ACTION_SECONDS, MIN_ACTION_SECONDS
+from app.meta.dsl.v3_common import MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MIN_ACTION_SECONDS
+from app.meta.v3.errors import V3Failure, V3ValidationError
 
 
 def schedule_beats(expanded_beats):
@@ -11,6 +12,14 @@ def schedule_beats(expanded_beats):
     """
     minimum = sum(beat.minimum_seconds for beat in expanded_beats)
     conclusion_floor = 1.5
+    if minimum > MAX_SCENE_SECONDS:
+        raise V3ValidationError(V3Failure(
+            code="timeline_over_budget",
+            path="timeline",
+            expected=f"minimum timeline at or below {MAX_SCENE_SECONDS:g} seconds",
+            observed=f"{minimum:g} seconds",
+            hint="simplify beats so the conclusion keeps its minimum hold",
+        ))
     target = min(12.0, max(6.0, minimum + conclusion_floor))
     extra = target - minimum
     total_weight = sum(beat.weight for beat in expanded_beats)
