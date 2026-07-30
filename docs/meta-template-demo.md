@@ -99,9 +99,10 @@ If process-level troubleshooting is needed, run
 
 Use a clean disposable meta database before each full rehearsal so a prior job
 or published version cannot suppress a new draft for the same fingerprint. A
-template published by an older build may have a non-displaying animation and
-would render a black frame if reused; always regenerate from a fresh database
-rather than reusing a previously published version across builds.
+template published by an older build may not meet the current visible-value
+contract. Rehearsals using an older approved version require this documented
+disposable database reset or a refined and republished version; do not reuse it
+unchanged across builds.
 Stop the application, preserve any local data that matters, replace
 `backend/var/meta.db` with a fresh demo database, and rerun:
 
@@ -163,7 +164,9 @@ Open `http://localhost:5173/?meta-review`, enter reviewer token
    to verify") from the system-generated, read-only "Guard cases" — you only fill
    in the former. Positive examples that are not tied to a real observation are
    no longer generated, so every fixture shown under "Fixtures to verify" can
-   actually be approved.
+   actually be approved. The preview must show a proportional rectangle labeled
+   `8 cm` by `3 cm`, and its final answer must visibly resolve to `22 cm`.
+   Literal brace placeholders are a validation failure.
 2. For the positive fixture tied to slide 1, enter the expected result
    `{"answer": 22}` and click **Save fixture**. Saving reruns validation and
    preview generation.
@@ -186,7 +189,8 @@ structure with a correct answer of `28`; the published
 list.
 
 If it is offered, select it, build and approve the storyboard scene, then
-render the MP4 through the normal flow. If it is not offered, explain that
+render the MP4 through the normal flow. Confirm that the reused template visibly
+resolves the slide 2 answer to `28 cm`. If it is not offered, explain that
 classification is probabilistic, request options again from a fresh upload, or
 use the troubleshooting guidance below.
 
@@ -229,8 +233,10 @@ sequence. Do not imply that `rectangle_perimeter` should match either problem.
    `local-meta-demo`.
 5. Saving `{"answer": 22}` reruns fixture validation and preview generation.
 6. **Approve and publish** becomes available only after all approval gates pass.
-7. Slide 2 can offer `rectangle_perimeter`, and its rendered mathematics
-   resolves to `28`.
+7. The preview shows a proportional rectangle labeled `8 cm` by `3 cm`, with a
+   final visible answer of `22 cm` and no literal brace placeholders.
+8. Slide 2 can offer `rectangle_perimeter`, and its rendered mathematics
+   visibly resolves to `28 cm`.
 
 ## Troubleshooting
 
@@ -240,7 +246,9 @@ sequence. Do not imply that `rectangle_perimeter` should match either problem.
 - **The worker stays idle:** Confirm
   `FINGERPRINT_OBSERVATION_THRESHOLD=1`. A job or version for the same
   fingerprint may already exist in `backend/var/meta.db`; use the rehearsal
-  reset only for disposable local data.
+  reset only for disposable local data. An older approved version must be
+  replaced by that reset or by a refined and republished version before a
+  rehearsal.
 - **The worker exits immediately:** Confirm both
   `META_TEMPLATES_ENABLED=true` and `META_CODEGEN_ENABLED=true` are visible in
   `backend/.env`, then restart it.
@@ -260,6 +268,9 @@ sequence. Do not imply that `rectangle_perimeter` should match either problem.
   renders an empty frame and cannot be published. This is caught at validation
   by design. Use **Reject and request refinement** — the generator is instructed
   to reveal every visual with an `appear` and hold it with a `wait`.
+- **The preview shows brace placeholders or wrong dimensions:** Treat literal
+  placeholders as a validation failure. Reject and request refinement until the
+  preview visibly shows the proportional `8 cm` by `3 cm` rectangle and `22 cm`.
 - **The review API fails in the browser:** Restart Vite so it loads the `/meta`
   proxy, re-enter `local-meta-demo`, and click **Load drafts**.
 - **Slide 2 does not offer the published template:** Request options from a
