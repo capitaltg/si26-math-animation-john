@@ -9,6 +9,7 @@ from app.meta.dsl.animation import (
     LabelNode,
     NumberLineNode,
     ObjectSetNode,
+    OverlayNode,
     ParallelNode,
     RowNode,
     SequenceNode,
@@ -279,6 +280,66 @@ def test_nested_layouts_share_their_outer_layout_root():
     compiled = compile_animation_document(document, known_fields=frozenset())
 
     assert compiled.refs == {"title", "length", "width"}
+
+
+def test_appeared_layout_ref_shares_ancestry_with_its_descendant():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                ColumnNode(
+                    ref="panel",
+                    children=[LabelNode(ref="title", text="Perimeter")],
+                ),
+                AppearNode(target_ref="panel"),
+                AppearNode(target_ref="title"),
+            ]
+        ),
+    )
+
+    compiled = compile_animation_document(document, known_fields=frozenset())
+
+    assert compiled.refs == {"panel", "title"}
+
+
+def test_multiple_appeared_overlay_descendants_compile():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                OverlayNode(
+                    children=[
+                        LabelNode(ref="base", text="Rectangle"),
+                        LabelNode(ref="annotation", text="Length"),
+                    ]
+                ),
+                AppearNode(target_ref="base"),
+                AppearNode(target_ref="annotation"),
+            ]
+        ),
+    )
+
+    compiled = compile_animation_document(document, known_fields=frozenset())
+
+    assert compiled.refs == {"base", "annotation"}
+
+
+def test_dangling_appear_ref_precedes_shared_layout_validation():
+    document = AnimationDocument(
+        animation_version=1,
+        root=SequenceNode(
+            steps=[
+                LabelNode(ref="title", text="Perimeter"),
+                AppearNode(target_ref="title"),
+                AppearNode(target_ref="ghost"),
+            ]
+        ),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset())
+
+    assert exc.value.code == "dangling_ref"
 
 
 def test_appeared_visuals_in_separate_layout_trees_are_rejected():
