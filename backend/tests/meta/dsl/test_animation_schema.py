@@ -4,13 +4,15 @@ from pydantic import ValidationError
 from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
+    ExpressionLabelNode,
     LabelNode,
     NumberLineNode,
+    RectangleNode,
     RowNode,
     SequenceNode,
     WaitNode,
 )
-from app.meta.dsl.expression import LiteralNode
+from app.meta.dsl.expression import FieldRefNode, LiteralNode
 
 
 def test_valid_document_parses():
@@ -69,3 +71,27 @@ def test_style_token_is_closed_enum():
             marker_value=LiteralNode(value=4),
             style="neon",
         )
+
+
+def test_expression_label_schema_accepts_bounded_dynamic_text():
+    node = ExpressionLabelNode(
+        ref="answer",
+        expression=FieldRefNode(field="n"),
+        prefix="= ",
+        suffix=" cm",
+        role="answer",
+        style="success",
+    )
+    assert node.kind == "expression_label"
+    assert node.role == "answer"
+
+
+def test_rectangle_schema_accepts_expression_dimensions():
+    node = RectangleNode(
+        ref="diagram",
+        length=FieldRefNode(field="length"),
+        width=FieldRefNode(field="width"),
+        unit="cm",
+    )
+    assert node.kind == "rectangle"
+    assert node.unit == "cm"

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Annotated, Literal, Union
 
@@ -125,6 +126,23 @@ class LabelNode(_AnimationNodeBase):
     style: StyleToken = "primary"
 
 
+class ExpressionLabelNode(_AnimationNodeBase):
+    kind: Literal["expression_label"] = "expression_label"
+    expression: ExpressionNode
+    prefix: str = Field(default="", max_length=MAX_LABEL_TEXT_LENGTH)
+    suffix: str = Field(default="", max_length=MAX_LABEL_TEXT_LENGTH)
+    role: Literal["working", "answer"] = "working"
+    style: StyleToken = "primary"
+
+
+class RectangleNode(_AnimationNodeBase):
+    kind: Literal["rectangle"] = "rectangle"
+    length: ExpressionNode
+    width: ExpressionNode
+    unit: str = Field(default="", max_length=MAX_LABEL_TEXT_LENGTH)
+    style: StyleToken = "primary"
+
+
 class AppearNode(_AnimationNodeBase):
     kind: Literal["appear"] = "appear"
     target_ref: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
@@ -161,7 +179,7 @@ AnimationNode = Annotated[
     Union[
         RowNode, ColumnNode, OverlayNode, AlignNode, PaddingNode, SequenceNode, ParallelNode,
         NumberLineNode, GridNode, BarNode, ObjectSetNode, ShapePartitionNode, ArrowNode,
-        BraceNode, TallyMarksNode, LabelNode,
+        BraceNode, TallyMarksNode, LabelNode, ExpressionLabelNode, RectangleNode,
         AppearNode, HighlightNode, TransformNode, MoveAlongPathNode, CameraFocusNode, WaitNode,
     ],
     Field(discriminator="kind"),
@@ -173,7 +191,7 @@ for _cls in (RowNode, ColumnNode, OverlayNode, AlignNode, PaddingNode, SequenceN
 
 class AnimationDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    animation_version: Literal[1] = 1
+    animation_version: Literal[1, 2] = 1
     root: AnimationNode
 
 
@@ -186,6 +204,8 @@ _VISUAL_EXPRESSION_FIELDS = {
     "object_set": ("count",),
     "shape_partition": ("parts", "shaded"),
     "tally_marks": ("count",),
+    "expression_label": ("expression",),
+    "rectangle": ("length", "width"),
 }
 _REF_FIELDS = ("target_ref", "from_ref", "to_ref", "path_ref")
 _TIMED_ACTION_KINDS = {"appear", "highlight", "transform", "move_along_path", "camera_focus"}
@@ -197,7 +217,7 @@ _LAYOUT_KINDS = {"row", "column", "overlay", "align", "padding"}
 _PRODUCING_KINDS = {
     "row", "column", "overlay", "align", "padding",
     "number_line", "grid", "bar", "object_set", "shape_partition",
-    "arrow", "brace", "tally_marks", "label",
+    "arrow", "brace", "tally_marks", "label", "expression_label", "rectangle",
 }
 
 
@@ -206,6 +226,7 @@ class CompiledAnimation:
     document: AnimationDocument
     refs: frozenset[str]
     total_duration_seconds: float
+    answer_expressions: tuple[ExpressionNode, ...] = ()
 
 
 def _children_of(node) -> list:
@@ -216,6 +237,13 @@ def _children_of(node) -> list:
     return []
 
 
+def _contains_field_placeholder(text: str, known_fields: frozenset[str]) -> bool:
+    for fragment in re.findall(r"\{([^{}]+)\}", text):
+        if any(re.search(rf"\b{re.escape(field)}\b", fragment) for field in known_fields):
+            return True
+    return False
+
+
 def compile_animation_document(document: AnimationDocument, known_fields: frozenset[str]) -> CompiledAnimation:
     declared_refs: set[str] = set()
     producing_refs: set[str] = set()
@@ -224,6 +252,7 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     layout_ancestors_by_ref: dict[str, frozenset[int]] = {}
     node_count = 0
     duration = 0.0
+    answer_expressions: list[ExpressionNode] = []
 
     def walk(node, depth: int, layout_ancestors: tuple[int, ...] = ()) -> None:
         nonlocal node_count, duration
@@ -236,6 +265,8 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             raise DslValidationError("too_many_nodes", f"max {MAX_ANIMATION_NODES} exceeded")
         if depth > MAX_ANIMATION_DEPTH:
             raise DslValidationError("animation_too_deep", f"max depth {MAX_ANIMATION_DEPTH} exceeded")
+        if document.animation_version == 1 and node.kind in {"expression_label", "rectangle"}:
+            raise DslValidationError("unsupported_node_for_version", node.kind)
 
         if node.ref is not None:
             if node.ref in declared_refs:
@@ -254,6 +285,20 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
 
         for field_name in _VISUAL_EXPRESSION_FIELDS.get(node.kind, ()):
             compile_expression(getattr(node, field_name), known_fields)
+
+        if document.animation_version == 2:
+            static_text = ()
+            if node.kind == "label":
+                static_text = (node.text,)
+            elif node.kind == "expression_label":
+                static_text = (node.prefix, node.suffix)
+                if node.role == "answer":
+                    answer_expressions.append(node.expression)
+            if any(_contains_field_placeholder(text, known_fields) for text in static_text):
+                raise DslValidationError(
+                    "unsupported_text_placeholder",
+                    "static text cannot interpolate fields; use expression_label",
+                )
 
         if node.kind == "wait":
             duration += node.seconds
@@ -315,4 +360,9 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             "total_duration_exceeded", f"{duration}s exceeds {MAX_TOTAL_DURATION_SECONDS}s"
         )
 
-    return CompiledAnimation(document=document, refs=frozenset(declared_refs), total_duration_seconds=duration)
+    return CompiledAnimation(
+        document=document,
+        refs=frozenset(declared_refs),
+        total_duration_seconds=duration,
+        answer_expressions=tuple(answer_expressions),
+    )
