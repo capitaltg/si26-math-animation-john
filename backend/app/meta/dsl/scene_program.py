@@ -1,6 +1,6 @@
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.teaching_plan import (
@@ -166,3 +166,15 @@ class SceneProgramDocument(BaseModel):
     total_duration_seconds: float = Field(ge=MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS)
     variation_seed: GeneratedText = Field(min_length=1, max_length=64)
     style_recipe: StyleRecipeDocument
+
+    @model_validator(mode="after")
+    def timeline_actions_fit_scene_duration(self):
+        for index, timed_action in enumerate(self.timeline):
+            end_seconds = timed_action.at_seconds + timed_action.duration_seconds
+            if end_seconds > self.total_duration_seconds:
+                raise ValueError(
+                    "timeline action exceeds total scene duration "
+                    f"at index {index}: ends at {end_seconds:g}s, "
+                    f"scene ends at {self.total_duration_seconds:g}s"
+                )
+        return self

@@ -59,6 +59,22 @@ def test_program_enforces_shared_timing_bounds(field, value):
         SceneProgramDocument.model_validate(invalid)
 
 
+@pytest.mark.parametrize("at_seconds,duration_seconds,total_duration_seconds", [
+    (11.9, 2.0, 12.0),
+    (5.5, 0.6, 6.0),
+])
+def test_program_rejects_timeline_actions_beyond_scene_end(
+    at_seconds, duration_seconds, total_duration_seconds,
+):
+    invalid = _program()
+    invalid["timeline"][0]["at_seconds"] = at_seconds
+    invalid["timeline"][0]["duration_seconds"] = duration_seconds
+    invalid["total_duration_seconds"] = total_duration_seconds
+
+    with pytest.raises(ValidationError, match="timeline action exceeds total scene duration"):
+        SceneProgramDocument.model_validate(invalid)
+
+
 @pytest.mark.parametrize("bad_key,bad_value", [
     ("python", "scene.play(FadeIn(answer))"),
     ("url", "https://example.test"),
