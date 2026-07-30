@@ -256,14 +256,21 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
     producing_refs: set[str] = set()
     referenced_refs: set[str] = set()
     appeared_refs: set[str] = set()
+    appeared_ref_order: list[str] = []
     layout_ancestors_by_ref: dict[str, frozenset[int]] = {}
+    producing_ref_ancestors_by_ref: dict[str, frozenset[str]] = {}
     node_count = 0
     duration = 0.0
     answer_expressions: list[ExpressionNode] = []
     answer_expressions_by_ref: dict[str, ExpressionNode] = {}
     visible_answer_expressions: list[ExpressionNode] = []
 
-    def walk(node, depth: int, layout_ancestors: tuple[int, ...] = ()) -> None:
+    def walk(
+        node,
+        depth: int,
+        layout_ancestors: tuple[int, ...] = (),
+        producing_ref_ancestors: tuple[str, ...] = (),
+    ) -> None:
         nonlocal node_count, duration
         node_count += 1
         node_id = node_count
@@ -284,6 +291,7 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
             if node.kind in _PRODUCING_KINDS:
                 producing_refs.add(node.ref)
                 layout_ancestors_by_ref[node.ref] = frozenset(current_layout_ancestors)
+                producing_ref_ancestors_by_ref[node.ref] = frozenset(producing_ref_ancestors)
 
         for field_name in _REF_FIELDS:
             if hasattr(node, field_name):
@@ -291,6 +299,7 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
 
         if node.kind == "appear":
             appeared_refs.add(node.target_ref)
+            appeared_ref_order.append(node.target_ref)
             visible_answer = answer_expressions_by_ref.get(node.target_ref)
             if visible_answer is not None:
                 visible_answer_expressions.append(visible_answer)
@@ -338,8 +347,16 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
                         "invalid_parallel_step",
                         f"step kind '{step.kind}' does not return a batchable Animation",
                     )
+        child_producing_ref_ancestors = producing_ref_ancestors
+        if node.ref is not None and node.kind in _PRODUCING_KINDS:
+            child_producing_ref_ancestors = (*producing_ref_ancestors, node.ref)
         for child in children:
-            walk(child, depth + 1, current_layout_ancestors)
+            walk(
+                child,
+                depth + 1,
+                current_layout_ancestors,
+                child_producing_ref_ancestors,
+            )
 
     walk(document.root, 0)
 
@@ -367,6 +384,22 @@ def compile_animation_document(document: AnimationDocument, known_fields: frozen
                 "missing_shared_layout",
                 f"appeared visuals require a common row/column/layout ancestor: {refs}",
             )
+
+    if document.animation_version == 2:
+        if len(appeared_ref_order) != len(appeared_refs):
+            raise DslValidationError(
+                "overlapping_appear",
+                "version 2 visuals may only appear once",
+            )
+        for ref in appeared_refs:
+            if any(
+                ancestor in appeared_refs
+                for ancestor in producing_ref_ancestors_by_ref.get(ref, ())
+            ):
+                raise DslValidationError(
+                    "overlapping_appear",
+                    "version 2 cannot appear a producing layout and its descendant",
+                )
 
     if duration > MAX_TOTAL_DURATION_SECONDS:
         raise DslValidationError(

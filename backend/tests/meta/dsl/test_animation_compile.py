@@ -305,6 +305,33 @@ def test_appeared_layout_ref_shares_ancestry_with_its_descendant():
     assert compiled.refs == {"panel", "title"}
 
 
+def test_version_two_rejects_overlapping_parent_and_child_appears():
+    document = AnimationDocument(
+        animation_version=2,
+        root=SequenceNode(
+            steps=[
+                ColumnNode(
+                    ref="panel",
+                    children=[
+                        ExpressionLabelNode(
+                            ref="answer",
+                            expression=FieldRefNode(field="n"),
+                            role="answer",
+                        )
+                    ],
+                ),
+                AppearNode(target_ref="panel"),
+                AppearNode(target_ref="answer"),
+            ]
+        ),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"n"}))
+
+    assert exc.value.code == "overlapping_appear"
+
+
 def test_multiple_appeared_overlay_descendants_compile():
     document = AnimationDocument(
         animation_version=1,
