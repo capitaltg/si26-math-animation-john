@@ -6,12 +6,18 @@ import pytest
 
 from app.meta.v3.errors import V3ValidationError
 from app.meta.v3.geometry import Point
+from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.visual_registry import default_visual_registry
 
 
 class LiteralTextMeasurer:
     def measure(self, text: str, font_role: str):
         return len(text) * 10, 20
+
+
+class SceneTextMeasurer:
+    def measure(self, text: str, font_role: str):
+        return len(text) * 0.3, 0.6
 
 
 @pytest.mark.parametrize(
@@ -38,6 +44,23 @@ def test_default_registry_measures_literal_visuals_with_finite_root_and_child_an
     assert isinstance(visual.anchor(part=None, index=None, name="center"), Point)
     if child_part is not None:
         assert isinstance(visual.anchor(part=child_part[0], index=child_part[1], name="center"), Point)
+
+
+def test_default_registry_keeps_seven_value_median_inside_safe_frame():
+    visual = default_visual_registry().measure(
+        SimpleNamespace(kind="ordered_values", ref="values"),
+        {"values": ["3", "5", "6", "8", "9", "12", "15"]},
+        SceneTextMeasurer(),
+        strategy="pair_elimination",
+    )
+
+    assert all(isfinite(value) for value in (
+        visual.bounds.left, visual.bounds.right, visual.bounds.bottom, visual.bounds.top,
+    ))
+    assert visual.bounds.left >= SAFE_FRAME.left
+    assert visual.bounds.right <= SAFE_FRAME.right
+    assert visual.bounds.bottom >= SAFE_FRAME.bottom
+    assert visual.bounds.top <= SAFE_FRAME.top
 
 
 def test_registry_rejects_unsupported_strategy_kind_pair_with_structured_failure():
