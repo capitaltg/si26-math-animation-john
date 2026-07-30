@@ -4,7 +4,9 @@ from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
     ArrowNode,
+    BraceNode,
     ColumnNode,
+    ExpressionLabelNode,
     HighlightNode,
     LabelNode,
     NumberLineNode,
@@ -12,6 +14,7 @@ from app.meta.dsl.animation import (
     OverlayNode,
     ParallelNode,
     RowNode,
+    RectangleNode,
     SequenceNode,
     WaitNode,
     compile_animation_document,
@@ -302,6 +305,33 @@ def test_appeared_layout_ref_shares_ancestry_with_its_descendant():
     assert compiled.refs == {"panel", "title"}
 
 
+def test_version_two_rejects_overlapping_parent_and_child_appears():
+    document = AnimationDocument(
+        animation_version=2,
+        root=SequenceNode(
+            steps=[
+                ColumnNode(
+                    ref="panel",
+                    children=[
+                        ExpressionLabelNode(
+                            ref="answer",
+                            expression=FieldRefNode(field="n"),
+                            role="answer",
+                        )
+                    ],
+                ),
+                AppearNode(target_ref="panel"),
+                AppearNode(target_ref="answer"),
+            ]
+        ),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"n"}))
+
+    assert exc.value.code == "overlapping_appear"
+
+
 def test_multiple_appeared_overlay_descendants_compile():
     document = AnimationDocument(
         animation_version=1,
@@ -394,3 +424,132 @@ def test_total_duration_limit_enforced():
     with pytest.raises(DslValidationError) as exc:
         compile_animation_document(document, known_fields=frozenset())
     assert exc.value.code == "total_duration_exceeded"
+
+
+def test_version_one_static_document_remains_loadable():
+    document = AnimationDocument(
+        animation_version=1,
+        root=LabelNode(ref="caption", text="{legacy_value}"),
+    )
+    compiled = compile_animation_document(document, known_fields=frozenset({"legacy_value"}))
+    assert compiled.refs == {"caption"}
+    assert compiled.answer_expressions == ()
+
+
+def test_version_one_rejects_version_two_visual_nodes():
+    document = AnimationDocument(
+        animation_version=1,
+        root=ExpressionLabelNode(
+            expression=FieldRefNode(field="n"),
+            role="answer",
+        ),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"n"}))
+    assert exc.value.code == "unsupported_node_for_version"
+
+
+def test_version_two_compiles_expression_fields_and_records_answer_expression():
+    answer = FieldRefNode(field="n")
+    document = AnimationDocument(
+        animation_version=2,
+        root=ColumnNode(
+            children=[
+                ExpressionLabelNode(expression=FieldRefNode(field="n"), prefix="Value: "),
+                ExpressionLabelNode(expression=answer, prefix="Answer: ", role="answer"),
+            ]
+        ),
+    )
+    compiled = compile_animation_document(document, known_fields=frozenset({"n"}))
+    assert compiled.answer_expressions == (answer,)
+
+
+def test_version_two_expression_label_rejects_unknown_field():
+    document = AnimationDocument(
+        animation_version=2,
+        root=ExpressionLabelNode(expression=FieldRefNode(field="missing")),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"n"}))
+    assert exc.value.code == "unknown_field"
+
+
+def test_version_two_rejects_static_field_placeholder():
+    document = AnimationDocument(
+        animation_version=2,
+        root=LabelNode(text="{length} cm"),
+    )
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"length"}))
+    assert exc.value.code == "unsupported_text_placeholder"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        BraceNode(target_ref="caption", text="{length} cm"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), prefix="{length}"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), suffix="{length}"),
+        RectangleNode(
+            length=LiteralNode(value=1),
+            width=LiteralNode(value=1),
+            unit="{length}",
+        ),
+    ],
+    ids=["brace_text", "expression_label_prefix", "expression_label_suffix", "rectangle_unit"],
+)
+def test_version_two_rejects_field_placeholders_in_all_rendered_static_text(node):
+    document = AnimationDocument(
+        animation_version=2,
+        root=ColumnNode(children=[LabelNode(ref="caption", text="Caption"), node]),
+    )
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"length"}))
+
+    assert exc.value.code == "unsupported_text_placeholder"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        BraceNode(target_ref="caption", text="Set {2, 4}"),
+        ExpressionLabelNode(expression=LiteralNode(value=1), prefix="Set {2, 4}"),
+        RectangleNode(
+            length=LiteralNode(value=1),
+            width=LiteralNode(value=1),
+            unit="{cm}",
+        ),
+    ],
+    ids=["brace_text", "expression_label_prefix", "rectangle_unit"],
+)
+def test_version_two_allows_literal_braces_that_do_not_name_known_fields(node):
+    document = AnimationDocument(
+        animation_version=2,
+        root=ColumnNode(children=[LabelNode(ref="caption", text="Caption"), node]),
+    )
+
+    compile_animation_document(document, known_fields=frozenset({"length"}))
+
+
+@pytest.mark.parametrize("unknown_dimension", ["length", "width"])
+def test_version_two_rectangle_rejects_unknown_dimension_expression(unknown_dimension):
+    dimensions = {
+        "length": LiteralNode(value=1),
+        "width": LiteralNode(value=1),
+    }
+    dimensions[unknown_dimension] = FieldRefNode(field="missing")
+    document = AnimationDocument(animation_version=2, root=RectangleNode(**dimensions))
+
+    with pytest.raises(DslValidationError) as exc:
+        compile_animation_document(document, known_fields=frozenset({"length", "width"}))
+
+    assert exc.value.code == "unknown_field"
+
+
+def test_version_two_allows_literal_set_notation_without_field_names():
+    document = AnimationDocument(
+        animation_version=2,
+        root=LabelNode(text="Set {2, 4, 6}"),
+    )
+    compile_animation_document(document, known_fields=frozenset({"length"}))

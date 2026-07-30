@@ -87,8 +87,14 @@ def _proposal_dict(observation_id="obs-1"):
         ),
         guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
         answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
-            {"kind": "label", "ref": "n_label", "text": "n"},
+        animation_document=AnimationDocument(animation_version=2, root={"kind": "sequence", "steps": [
+            {
+                "kind": "expression_label",
+                "ref": "n_label",
+                "expression": {"node": "field_ref", "field": "n"},
+                "prefix": "Answer: ",
+                "role": "answer",
+            },
             {"kind": "appear", "target_ref": "n_label"},
             {"kind": "wait", "seconds": 1},
         ]}),
@@ -310,6 +316,29 @@ def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
                 {"node": "literal", "value": 1},
                 {"node": "field_ref", "field": "n"},
             ],
+        })
+        stored_draft.animation_document_json = json.dumps({
+            "animation_version": 2,
+            "root": {
+                "kind": "sequence",
+                "steps": [
+                    {
+                        "kind": "expression_label",
+                        "ref": "n_label",
+                        "expression": {
+                            "node": "divide",
+                            "operands": [
+                                {"node": "literal", "value": 1},
+                                {"node": "field_ref", "field": "n"},
+                            ],
+                        },
+                        "prefix": "Answer: ",
+                        "role": "answer",
+                    },
+                    {"kind": "appear", "target_ref": "n_label"},
+                    {"kind": "wait", "seconds": 1},
+                ],
+            },
         })
 
     fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]

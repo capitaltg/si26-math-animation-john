@@ -48,6 +48,13 @@ _DRAFT_SYSTEM_PROMPT = (
     "animation node kind outside the schema. Never emit prose, code, "
     "imports, or file paths. A fixture's observation_id must be one of the "
     "candidate ids given to you, or null.\n\n"
+    "The animation document MUST use animation_version 2. Static label text "
+    "never interpolates braces or evaluates expressions; use expression_label "
+    "for dynamic values. The animation MUST visibly contain an answer-role "
+    "expression_label whose expression exactly matches answer_expression. The "
+    "answer-role expression_label must have its own ref and appear target. For "
+    "length and width problems, use the rectangle node with expression-backed "
+    "dimensions instead of counting visuals.\n\n"
     "The animation document MUST actually display its content over time, or it "
     "renders a blank frame and cannot be published. Layout and visual nodes "
     "(row, column, label, grid, tally_marks, object_set, ...) only BUILD a "
@@ -57,6 +64,9 @@ _DRAFT_SYSTEM_PROMPT = (
     "'sequence' whose steps interleave building a visual, an 'appear' of it, "
     "and a 'wait'. Include at least one 'appear' and at least one 'wait'; an "
     "animation with no appear/wait nodes is invalid.\n\n"
+    "Target each ref with 'appear' at most once. Never appear a producing "
+    "layout and one of its descendants; choose the parent layout or the "
+    "individual descendants, not both, or the descendant will flicker.\n\n"
     "A sequence controls time, not spatial position. Manim places independently "
     "built visuals at the frame center, so appearing several independent sequence "
     "children makes them overlap. When displaying more than one persistent visual, "
@@ -135,6 +145,8 @@ def propose_template_draft(
         tools=[{"name": "propose_template_draft", "schema": DraftProposal.model_json_schema()}],
     )
     proposal = DraftProposal.model_validate(_coerce_stringified_json_fields(raw))
+    if proposal.animation_document.animation_version != 2:
+        raise ValueError("generated animation_document must use animation_version 2")
     observation_ids = {observation.id for observation in observations}
     for fixture in proposal.fixtures:
         if fixture.observation_id is not None and fixture.observation_id not in observation_ids:

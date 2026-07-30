@@ -5,10 +5,12 @@ from app.meta.dsl.animation import (
     AnimationDocument,
     AppearNode,
     ArrowNode,
+    ExpressionLabelNode,
     LabelNode,
     NumberLineNode,
     ObjectSetNode,
     ParallelNode,
+    RectangleNode,
     RowNode,
     SequenceNode,
     WaitNode,
@@ -105,6 +107,49 @@ def test_resolve_rejects_non_integer_fraction():
     with pytest.raises(DslValidationError) as exc:
         render_animation_node(scene, node, {}, {})
     assert exc.value.code == "non_integer_value"
+
+
+def test_render_expression_label_displays_evaluated_integer():
+    node = ExpressionLabelNode(
+        ref="answer",
+        expression=FieldRefNode(field="n"),
+        prefix="Answer: ",
+        suffix=" cm",
+        role="answer",
+    )
+    mobjects = {}
+    render_animation_node(_StubScene(), node, {"n": 22}, mobjects)
+    assert isinstance(mobjects["answer"], Text)
+    assert mobjects["answer"].original_text == "Answer: 22 cm"
+
+
+def test_render_expression_label_displays_fraction_without_float_rounding():
+    node = ExpressionLabelNode(
+        ref="answer",
+        expression=FractionNode(operands=[LiteralNode(value=3), LiteralNode(value=4)]),
+        role="answer",
+    )
+    mobjects = {}
+    render_animation_node(_StubScene(), node, {}, mobjects)
+    assert mobjects["answer"].original_text == "3/4"
+
+
+def test_render_rectangle_uses_evaluated_dimensions():
+    node = RectangleNode(
+        ref="diagram",
+        length=FieldRefNode(field="length"),
+        width=FieldRefNode(field="width"),
+        unit="cm",
+    )
+    mobjects = {}
+    render_animation_node(_StubScene(), node, {"length": 8, "width": 3}, mobjects)
+    texts = [
+        child.original_text
+        for child in mobjects["diagram"].submobjects
+        if isinstance(child, Text)
+    ]
+    assert "8 cm" in texts
+    assert "3 cm" in texts
 
 
 def test_scene_requires_compiled_animation_and_values():

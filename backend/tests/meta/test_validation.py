@@ -3,7 +3,15 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.meta.dsl.animation import AnimationDocument
+from app.meta.dsl.animation import (
+    AnimationDocument,
+    AppearNode,
+    ColumnNode,
+    ExpressionLabelNode,
+    LabelNode,
+    SequenceNode,
+    WaitNode,
+)
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import FieldRefNode, LiteralNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate, RangePredicate
@@ -25,6 +33,16 @@ def _documents():
     return params_document, guard_document, answer_expression, animation_document
 
 
+def _version_two_documents(animation_root):
+    params_document, guard_document, answer_expression, _ = _documents()
+    return (
+        params_document,
+        guard_document,
+        answer_expression,
+        AnimationDocument(animation_version=2, root=animation_root),
+    )
+
+
 def test_compile_draft_documents_succeeds_for_consistent_documents():
     compiled = compile_draft_documents(*_documents())
     assert compiled.known_fields == frozenset({"n"})
@@ -38,6 +56,93 @@ def test_compile_draft_documents_raises_on_unknown_field_in_answer_expression():
         compile_draft_documents(
             params_document, guard_document, FieldRefNode(field="ghost"), animation_document
         )
+
+
+def test_version_two_draft_rejects_missing_visible_answer():
+    with pytest.raises(DslValidationError) as exc:
+        compile_draft_documents(
+            *_version_two_documents(LabelNode(text="Solve the problem"))
+        )
+    assert exc.value.code == "answer_not_displayed"
+
+
+def test_version_two_draft_rejects_mismatched_visible_answer():
+    with pytest.raises(DslValidationError) as exc:
+        compile_draft_documents(
+            *_version_two_documents(
+                ExpressionLabelNode(
+                    expression=LiteralNode(value=999),
+                    role="answer",
+                )
+            )
+        )
+    assert exc.value.code == "answer_not_displayed"
+
+
+def test_version_two_draft_rejects_matching_answer_that_never_appears():
+    with pytest.raises(DslValidationError) as exc:
+        compile_draft_documents(
+            *_version_two_documents(
+                SequenceNode(
+                    steps=[
+                        ExpressionLabelNode(
+                            ref="answer",
+                            expression=FieldRefNode(field="n"),
+                            role="answer",
+                        ),
+                        LabelNode(ref="prompt", text="Solve the problem"),
+                        AppearNode(target_ref="prompt"),
+                        WaitNode(seconds=1),
+                    ]
+                )
+            )
+        )
+    assert exc.value.code == "answer_not_displayed"
+
+
+def test_version_two_draft_rejects_answer_appeared_before_it_is_built():
+    with pytest.raises(DslValidationError) as exc:
+        compile_draft_documents(
+            *_version_two_documents(
+                SequenceNode(
+                    steps=[
+                        AppearNode(target_ref="answer"),
+                        ExpressionLabelNode(
+                            ref="answer",
+                            expression=FieldRefNode(field="n"),
+                            role="answer",
+                        ),
+                        WaitNode(seconds=1),
+                    ]
+                )
+            )
+        )
+    assert exc.value.code == "answer_not_displayed"
+
+
+def test_version_two_draft_accepts_matching_visible_answer():
+    compiled = compile_draft_documents(
+        *_version_two_documents(
+            SequenceNode(
+                steps=[
+                    ExpressionLabelNode(
+                        ref="answer",
+                        expression=FieldRefNode(field="n"),
+                        prefix="Answer: ",
+                        role="answer",
+                    ),
+                    AppearNode(target_ref="answer"),
+                    WaitNode(seconds=1),
+                ]
+            )
+        )
+    )
+    assert compiled.compiled_animation.answer_expressions == (
+        FieldRefNode(field="n"),
+    )
+    assert compiled.compiled_animation.visible_answer_expressions == (
+        FieldRefNode(field="n"),
+    )
 
 
 @dataclass

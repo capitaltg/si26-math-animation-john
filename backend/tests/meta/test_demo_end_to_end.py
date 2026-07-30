@@ -16,11 +16,14 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from manim import Text
 
 from app.config import get_settings
 from app.meta import db, models
+from app.meta.dsl.animation import AnimationDocument, compile_animation_document
 from app.meta.db import meta_session
 from app.meta.dsl.expression import ExpressionNode, compile_expression
+from app.meta.dynamic_scene import render_animation_node
 from app.meta.dynamic_templates import (
     get_dynamic_template,
     load_enabled_snapshot,
@@ -85,6 +88,14 @@ _ANSWER_EXPRESSION = {
 }
 
 
+class _StubScene:
+    def play(self, *animations):
+        pass
+
+    def wait(self, seconds):
+        pass
+
+
 def _good_perimeter_proposal(observation_id):
     """A well-formed perimeter draft: its animation actually displays content
     (every visual is `appear`ed and held with a `wait`), its guard predicates are
@@ -109,27 +120,82 @@ def _good_perimeter_proposal(observation_id):
         },
         "answer_expression": _ANSWER_EXPRESSION,
         "animation_document": {
-            "animation_version": 1,
+            "animation_version": 2,
             "root": {
                 "kind": "sequence",
                 "steps": [
-                    {"kind": "column", "children": [
-                        {"kind": "column", "ref": "scene1", "children": [
-                            {"kind": "label", "ref": "title", "text": "Find the perimeter", "style": "primary"},
-                            {"kind": "grid", "ref": "rect",
-                             "rows": {"node": "field_ref", "field": "width"},
-                             "cols": {"node": "field_ref", "field": "length"}, "style": "primary"},
-                            {"kind": "label", "ref": "formula", "text": "P = 2 x (l + w)", "style": "muted"},
-                        ]},
-                        {"kind": "column", "ref": "scene2", "children": [
-                            {"kind": "object_set", "ref": "answer_set", "count": _ANSWER_EXPRESSION, "style": "success"},
-                            {"kind": "label", "ref": "answer", "text": "Perimeter (cm)", "style": "success"},
-                        ]},
-                    ]},
-                    {"kind": "appear", "target_ref": "scene1"},
-                    {"kind": "wait", "seconds": 1},
-                    {"kind": "appear", "target_ref": "scene2"},
-                    {"kind": "wait", "seconds": 1},
+                    {
+                        "kind": "column",
+                        "children": [
+                            {
+                                "kind": "label",
+                                "ref": "title",
+                                "text": "Perimeter of a Rectangle",
+                                "style": "accent",
+                            },
+                            {
+                                "kind": "rectangle",
+                                "ref": "diagram",
+                                "length": {"node": "field_ref", "field": "length"},
+                                "width": {"node": "field_ref", "field": "width"},
+                                "unit": "cm",
+                                "style": "primary",
+                            },
+                            {
+                                "kind": "row",
+                                "ref": "dimensions",
+                                "children": [
+                                    {
+                                        "kind": "expression_label",
+                                        "ref": "length_value",
+                                        "expression": {
+                                            "node": "field_ref",
+                                            "field": "length",
+                                        },
+                                        "prefix": "Length: ",
+                                        "suffix": " cm",
+                                        "role": "working",
+                                        "style": "primary",
+                                    },
+                                    {
+                                        "kind": "expression_label",
+                                        "ref": "width_value",
+                                        "expression": {
+                                            "node": "field_ref",
+                                            "field": "width",
+                                        },
+                                        "prefix": "Width: ",
+                                        "suffix": " cm",
+                                        "role": "working",
+                                        "style": "secondary",
+                                    },
+                                ],
+                                "gap": 1.0,
+                            },
+                            {
+                                "kind": "label",
+                                "ref": "formula",
+                                "text": "P = 2 × (length + width)",
+                                "style": "muted",
+                            },
+                            {
+                                "kind": "expression_label",
+                                "ref": "answer",
+                                "expression": _ANSWER_EXPRESSION,
+                                "prefix": "P = ",
+                                "suffix": " cm",
+                                "role": "answer",
+                                "style": "success",
+                            },
+                        ],
+                        "gap": 0.35,
+                    },
+                    {"kind": "appear", "target_ref": "title"},
+                    {"kind": "appear", "target_ref": "diagram"},
+                    {"kind": "appear", "target_ref": "dimensions"},
+                    {"kind": "appear", "target_ref": "formula"},
+                    {"kind": "appear", "target_ref": "answer"},
+                    {"kind": "wait", "seconds": 2},
                 ],
             },
         },
@@ -169,6 +235,27 @@ def test_demo_flow_generates_reviews_publishes_and_reuses(mock_tag_call, mock_dr
     draft = run_generation_job(owner="worker-1")
     assert draft.status == models.DRAFT_PENDING_REVIEW  # black-frame drafts fail here
 
+    animation = AnimationDocument.model_validate_json(draft.animation_document_json)
+    compiled_animation = compile_animation_document(
+        animation, frozenset({"length", "width"})
+    )
+    mobjects = {}
+    render_animation_node(
+        _StubScene(),
+        compiled_animation.document.root,
+        {"length": 8, "width": 3},
+        mobjects,
+    )
+    assert mobjects["length_value"].original_text == "Length: 8 cm"
+    assert mobjects["width_value"].original_text == "Width: 3 cm"
+    assert mobjects["answer"].original_text == "P = 22 cm"
+    rectangle_text = {
+        child.original_text
+        for child in mobjects["diagram"].submobjects
+        if isinstance(child, Text)
+    }
+    assert rectangle_text == {"8 cm", "3 cm"}
+
     # 4. Review: validation passed and the preview is a real (non-blank) PNG.
     detail = client.get(f"/meta/drafts/{draft.id}").json()
     assert detail["validation_report"]["passed"] is True
@@ -203,6 +290,14 @@ def test_demo_flow_generates_reviews_publishes_and_reuses(mock_tag_call, mock_dr
         ref = resolve_dynamic_ref(session, "rectangle_perimeter", entry.version_id)
     _scene_cls, params_cls = get_dynamic_template(ref)
     params = params_cls.model_validate({"length": 10, "width": 4})
+    mobjects = {}
+    render_animation_node(
+        _StubScene(),
+        _scene_cls.compiled_animation.document.root,
+        params.model_dump(),
+        mobjects,
+    )
+    assert mobjects["answer"].original_text == "P = 28 cm"
 
     out = tmp_path / "slide2.mp4"
     render_scene_to_mp4(ref, params, out)

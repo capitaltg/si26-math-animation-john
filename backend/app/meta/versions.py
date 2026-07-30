@@ -3,5 +3,5 @@
 # Included in every draft's artifact hash (spec §4) so a compiler/renderer
 # change invalidates previously-computed hashes rather than silently reusing
 # stale validation results.
-DSL_COMPILER_VERSION = 1
-DYNAMIC_RENDERER_VERSION = 1
+DSL_COMPILER_VERSION = 2
+DYNAMIC_RENDERER_VERSION = 2

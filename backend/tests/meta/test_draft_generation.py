@@ -50,8 +50,19 @@ def _raw_proposal(observation_id="obs-1"):
             ],
         },
         "animation_document": {
-            "animation_version": 1,
-            "root": {"kind": "label", "text": "3/4"},
+            "animation_version": 2,
+            "root": {
+                "kind": "expression_label",
+                "expression": {
+                    "node": "fraction",
+                    "operands": [
+                        {"node": "field_ref", "field": "numerator"},
+                        {"node": "field_ref", "field": "denominator"},
+                    ],
+                },
+                "prefix": "Answer: ",
+                "role": "answer",
+            },
         },
         "classifier_bullet": "Use for shading a fraction of one bar.",
         "fixtures": [
@@ -77,6 +88,15 @@ def test_propose_template_draft_validates_bedrock_response(mock_call):
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_propose_template_draft_rejects_legacy_animation_version(mock_call):
+    proposal = _raw_proposal()
+    proposal["animation_document"]["animation_version"] = 1
+    mock_call.return_value = ("propose_template_draft", proposal)
+    with pytest.raises(ValueError, match="animation_version 2"):
+        propose_template_draft(_fingerprint(), [_observation()])
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_generation_prompt_requires_shared_spatial_layout(mock_call):
     mock_call.return_value = ("propose_template_draft", _raw_proposal())
 
@@ -86,6 +106,8 @@ def test_generation_prompt_requires_shared_spatial_layout(mock_call):
     prompt = kwargs["system_prompt"]
     assert "sequence controls time, not spatial position" in prompt
     assert "one shared row, column, overlay, align, or padding layout tree" in prompt
+    assert "answer-role expression_label must have its own ref and appear" in prompt
+    assert "Never appear a producing layout and one of its descendants" in prompt
 
 
 @patch("app.meta.draft_generation.call_with_tool")
