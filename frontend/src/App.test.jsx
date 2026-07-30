@@ -109,6 +109,8 @@ function jsonResponse(body, status = 200) {
 function installFetchMock({
   secondUpload = false,
   clipStatus = 'approved',
+  clipUrl = clipStatus === 'approved' ? '/clips/clip1' : null,
+  fallbackReason = null,
   patchStatus = 'ok',
   storyboardScenes = [pendingScene],
 } = {}) {
@@ -180,8 +182,8 @@ function installFetchMock({
           scene_id: 's1',
           candidate_id: 'c1',
           status: clipStatus,
-          clip_url: clipStatus === 'approved' ? '/clips/clip1' : null,
-          fallback_reason: null,
+          clip_url: clipUrl,
+          fallback_reason: fallbackReason,
         }],
       })
     }
@@ -394,6 +396,27 @@ it('plays a successful render inline and keeps the download link', async () => {
   expect(player.getAttribute('preload')).toBe('metadata')
   expect(downloadLink.getAttribute('href')).toBe('/clips/clip1')
   expect(downloadLink.getAttribute('download')).not.toBeNull()
+})
+
+it('plays a fallback render inline while preserving its reason and download', async () => {
+  installFetchMock({
+    clipStatus: 'fallback',
+    clipUrl: '/clips/fallback-clip',
+    fallbackReason: 'Used a labeled text card',
+  })
+  await reachStoryboard()
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+
+  const player = await screen.findByLabelText('Rendered clip c1')
+  const downloadLink = screen.getByRole('link', { name: 'Download clip (c1)' })
+
+  expect(player.getAttribute('src')).toBe('/clips/fallback-clip')
+  expect(downloadLink.getAttribute('href')).toBe('/clips/fallback-clip')
+  expect(screen.getByText('Fallback: Used a labeled text card')).not.toBeNull()
 })
 
 it('saves edits and clears the dirty flag', async () => {
