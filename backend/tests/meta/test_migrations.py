@@ -147,8 +147,38 @@ def test_0002_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
     get_settings.cache_clear()
     cfg = _alembic_config(url)
     try:
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "0002_retag_history")
         with pytest.raises(RuntimeError, match="append-only retag history"):
             command.downgrade(cfg, "0001_initial")
+    finally:
+        get_settings.cache_clear()
+
+
+def test_head_uses_dedicated_v3_draft_document_columns(tmp_path: Path, monkeypatch):
+    db_file = tmp_path / "v3" / "meta.db"
+    url = f"sqlite:///{db_file}"
+    monkeypatch.setenv("META_DB_PATH", str(db_file))
+    get_settings.cache_clear()
+    cfg = _alembic_config(url)
+    try:
+        command.upgrade(cfg, "head")
+        engine = create_engine(url, future=True)
+        columns = {column["name"] for column in inspect(engine).get_columns("template_drafts")}
+        assert {"teaching_plan_json", "scene_program_json", "quality_report_json"} <= columns
+        assert "animation_document_json" not in columns
+    finally:
+        get_settings.cache_clear()
+
+
+def test_0006_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
+    db_file = tmp_path / "v3-downgrade" / "meta.db"
+    url = f"sqlite:///{db_file}"
+    monkeypatch.setenv("META_DB_PATH", str(db_file))
+    get_settings.cache_clear()
+    cfg = _alembic_config(url)
+    try:
+        command.upgrade(cfg, "head")
+        with pytest.raises(RuntimeError, match="0006_meta_template_v3 is intentionally irreversible"):
+            command.downgrade(cfg, "0005_approval_gate")
     finally:
         get_settings.cache_clear()

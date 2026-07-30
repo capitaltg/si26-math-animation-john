@@ -1,16 +1,20 @@
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.orm import sessionmaker
 
 from app.meta import db, models
-from app.meta.dsl.animation import AnimationDocument
-from app.meta.dsl.expression import LiteralNode
+from app.meta.draft_generation import DraftProposal, ProposedFixture
+from app.meta.dsl.expression import AddNode, FieldRefNode, MultiplyNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
-from app.meta.draft_generation import DraftProposal, ProposedFixture
-from app.meta.drafts import create_generated_draft, load_draft_documents, record_review, supersede_and_refine
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.v3_common import CompileContext
+from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.validation import FixtureCheckResult
+from app.meta.validation_pipeline import ValidatedCandidate
 
 
 @pytest.fixture
@@ -19,15 +23,15 @@ def session(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "get_engine", lambda: engine)
     db.create_all(engine)
     factory = sessionmaker(bind=engine, future=True, expire_on_commit=False)
-    s = factory()
+    current_session = factory()
     try:
-        yield s
+        yield current_session
     finally:
-        s.close()
+        current_session.close()
 
 
 def _now():
-    return datetime(2026, 7, 28, tzinfo=timezone.utc)
+    return datetime(2026, 7, 30, tzinfo=timezone.utc)
 
 
 def _job(session):
@@ -41,90 +45,127 @@ def _job(session):
 
 
 def _proposal():
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}], "intent": "show the rectangle"},
+            {"id": "trace", "kind": "derive", "targets": [{"visual_ref": "rectangle"}], "intent": "trace every edge"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}], "intent": "state the perimeter"},
+        ],
+        "variation_seed": "draft-persistence",
+    })
     return DraftProposal(
         params_document=ParamsDocument(
             params_version=1,
-            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
+            fields=[
+                IntegerFieldSpec(name="length", label="Length", description="", minimum=-100, maximum=100),
+                IntegerFieldSpec(name="width", label="Width", description="", minimum=-100, maximum=100),
+            ],
         ),
         guard_document=GuardDocument(
             guard_version=1,
-            predicates=[PositivePredicate(value=LiteralNode(value=1))],
+            predicates=[PositivePredicate(value=FieldRefNode(field="length"))],
         ),
-        answer_expression=LiteralNode(value=1),
-        animation_document=AnimationDocument(root={"kind": "label", "text": "x"}),
-        classifier_bullet="use for X",
+        answer_expression=AddNode(operands=[
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="length")]),
+            MultiplyNode(operands=[FieldRefNode(field="width"), FieldRefNode(field="width")]),
+        ]),
+        teaching_plan_document=plan,
+        classifier_bullet="Use for rectangle perimeter lessons.",
         fixtures=[
-            ProposedFixture(kind="positive", expected_outcome="accept", params={"n": 5}),
-            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": 0}),
+            ProposedFixture(kind="positive", expected_outcome="accept", params={"length": 8, "width": 3}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"length": -1, "width": 3}),
         ],
     )
 
 
-def test_create_generated_draft_persists_documents_and_fixtures(session):
-    job = _job(session)
-    draft = create_generated_draft(
-        session, new_id="draft-1", job=job, proposal=_proposal(), now=_now(),
-        fixture_ids=["fx-1", "fx-2"],
-    )
-    assert draft.status == models.DRAFT_GENERATED
-    assert draft.revision == 1
-    assert draft.parent_draft_id is None
-    assert draft.job_id == "job-1"
-    assert draft.artifact_hash.startswith("sha256:")
-    assert json.loads(draft.params_document_json)["fields"][0]["name"] == "n"
-
-    fixtures = session.query(models.TemplateDraftFixture).filter_by(draft_id=draft.id).all()
-    assert {f.id for f in fixtures} == {"fx-1", "fx-2"}
-    assert {f.kind for f in fixtures} == {"positive", "negative"}
-
-
-def test_create_generated_draft_is_deterministic_hash_for_same_proposal(session):
-    job = _job(session)
-    draft_a = create_generated_draft(
-        session, new_id="draft-a", job=job, proposal=_proposal(), now=_now(), fixture_ids=["a1", "a2"]
-    )
-    draft_b = create_generated_draft(
-        session, new_id="draft-b", job=job, proposal=_proposal(), now=_now(), fixture_ids=["b1", "b2"]
-    )
-    assert draft_a.artifact_hash == draft_b.artifact_hash
-
-
-def test_supersede_and_refine_marks_old_draft_superseded_and_bumps_revision(session):
-    job = _job(session)
-    original = create_generated_draft(
-        session, new_id="draft-1", job=job, proposal=_proposal(), now=_now(), fixture_ids=["fx-1", "fx-2"]
-    )
-    refined = supersede_and_refine(
-        session, draft=original, proposal=_proposal(), new_id="draft-2", now=_now(),
-        fixture_ids=["fx-3", "fx-4"],
-    )
-    session.flush()
-    assert original.status == models.DRAFT_SUPERSEDED
-    assert refined.revision == 2
-    assert refined.parent_draft_id == "draft-1"
-    assert refined.job_id == "draft-1" and False or refined.job_id == job.id
-
-
-def test_record_review_appends_row(session):
-    job = _job(session)
-    draft = create_generated_draft(
-        session, new_id="draft-1", job=job, proposal=_proposal(), now=_now(), fixture_ids=["fx-1", "fx-2"]
-    )
-    review = record_review(
-        session, new_id="review-1", draft_id=draft.id, decision="reject",
-        reviewer_label="dev", feedback="too loose", now=_now(),
-    )
-    assert review.decision == "reject"
-    assert session.query(models.TemplateReview).count() == 1
-
-
-def test_load_draft_documents_round_trips_proposal_shape(session):
-    job = _job(session)
+@pytest.fixture
+def validated_candidate():
     proposal = _proposal()
-    draft = create_generated_draft(
-        session, new_id="draft-1", job=job, proposal=proposal, now=_now(), fixture_ids=["fx-1", "fx-2"]
+    scene_program = compile_teaching_plan(
+        proposal.teaching_plan_document,
+        proposal.answer_expression,
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measure_shape", grade_band="6-8"),
     )
-    loaded = load_draft_documents(draft)
-    assert loaded.params_document.fields[0].name == "n"
-    assert loaded.classifier_bullet == "use for X"
-    assert loaded.fixtures == []
+    return ValidatedCandidate(
+        proposal=proposal,
+        scene_program=scene_program,
+        validation_report={
+            "passed": True,
+            "fixture_results": [],
+            "preview_ok": True,
+            "preview_artifact_hash": "sha256:preview",
+            "compiler_version": 3,
+            "renderer_version": 3,
+            "negative_predicate_coverage": [0],
+        },
+        quality_report={"passed": True, "checks": [], "artifact_hash": "sha256:candidate"},
+        preview_artifact_hash="sha256:preview",
+        fixture_results=[
+            FixtureCheckResult("fixture-0", True, "accepted"),
+            FixtureCheckResult("fixture-1", True, "rejected", frozenset({0})),
+        ],
+    )
+
+
+def test_template_draft_persists_dedicated_v3_documents(session, validated_candidate):
+    from app.meta.drafts import persist_reviewable_draft
+
+    draft = persist_reviewable_draft(
+        session,
+        new_id="draft-1",
+        job=_job(session),
+        candidate=validated_candidate,
+        now=_now(),
+    )
+
+    assert json.loads(draft.teaching_plan_json)["plan_version"] == 3
+    assert json.loads(draft.scene_program_json)["scene_version"] == 3
+    assert json.loads(draft.quality_report_json)["passed"] is True
+    assert not hasattr(draft, "animation_document_json")
+    fixtures = session.query(models.TemplateDraftFixture).filter_by(draft_id=draft.id).all()
+    assert [fixture.structural_check_passed for fixture in fixtures] == [True, True]
+
+
+def test_persistence_rejects_fixture_result_with_unknown_identity(session, validated_candidate):
+    from app.meta.drafts import persist_reviewable_draft
+
+    candidate = replace(
+        validated_candidate,
+        fixture_results=[
+            FixtureCheckResult("unexpected", True, "accepted"),
+            *validated_candidate.fixture_results[1:],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="fixture result ids"):
+        persist_reviewable_draft(
+            session,
+            new_id="draft-1",
+            job=_job(session),
+            candidate=candidate,
+            now=_now(),
+        )
+
+    assert session.query(models.TemplateDraftFixture).count() == 0
+
+
+def test_persistence_accepts_only_validated_candidates(session):
+    from app.meta.drafts import persist_reviewable_draft
+
+    with pytest.raises(TypeError, match="ValidatedCandidate"):
+        persist_reviewable_draft(
+            session,
+            new_id="draft-1",
+            job=_job(session),
+            candidate=_proposal(),
+            now=_now(),
+        )

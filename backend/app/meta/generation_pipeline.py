@@ -6,14 +6,38 @@ from uuid import uuid4
 from app.config import get_settings
 from app.meta.db import meta_session
 from app.meta.draft_generation import DraftProposal, propose_template_draft
-from app.meta.drafts import create_generated_draft
+from app.meta.drafts import persist_reviewable_draft
+from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
 from app.meta.fixture_mutation import drop_ungrounded_positive_fixtures, ensure_negative_fixtures
-from app.meta.jobs import claim_next_job, complete_job, fail_job
+from app.meta.jobs import claim_next_job, complete_job, fail_job, mark_needs_manual
 from app.meta.models import FallbackObservation, TemplateDraft
-from app.meta.validation_pipeline import persist_validation
+from app.meta.validation_pipeline import validate_candidate
+from app.meta.v3.errors import V3Failure, V3ValidationError
 
 logger = logging.getLogger(__name__)
+
+_MAX_CANDIDATE_GENERATION_ATTEMPTS = 3
+_PUBLIC_EXHAUSTION_CODE = "automatic_generation_needs_manual_authoring"
+
+
+class CandidateGenerationExhausted(RuntimeError):
+    """Automatic generation exhausted validation retries without a persistable draft."""
+
+    public_code = _PUBLIC_EXHAUSTION_CODE
+
+    def __init__(self, last_failure: V3Failure):
+        super().__init__("meta-template generation exhausted automatic validation retries")
+        self.last_failure = last_failure
+
+    def structured_report(self) -> dict[str, str]:
+        return {
+            "code": self.last_failure.code,
+            "path": self.last_failure.path,
+            "expected": self.last_failure.expected,
+            "observed": self.last_failure.observed,
+            "hint": self.last_failure.hint,
+        }
 
 
 def _load_observations(session, observation_ids: list[str]) -> list[FallbackObservation]:
@@ -32,34 +56,59 @@ def generate_and_validate_revision(
     fingerprint: Fingerprint,
     observations: list[FallbackObservation],
     prior_proposal: DraftProposal | None = None,
-    reviewer_feedback: str | None = None,
+    reviewer_feedback: str | dict[str, str] | None = None,
     revision: int = 1,
     parent_draft_id: str | None = None,
 ) -> TemplateDraft:
-    proposal = propose_template_draft(
-        fingerprint, observations, prior_proposal=prior_proposal, reviewer_feedback=reviewer_feedback,
-    )
-    # Drop positives the reviewer could never approve BEFORE deriving negatives,
-    # so a surviving (observation-grounded) positive is used as the mutation base.
-    proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
-    proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
+    """Generate, validate entirely in memory, then persist one passing candidate."""
+    feedback = reviewer_feedback
+    prior = prior_proposal
+    observations_by_id = {observation.id: observation for observation in observations}
+    last_failure: V3Failure | None = None
 
-    now = datetime.now(timezone.utc)
-    with meta_session() as session:
-        draft = create_generated_draft(
-            session, new_id=uuid4().hex, job=job, proposal=proposal, now=now,
-            revision=revision, parent_draft_id=parent_draft_id,
+    for _ in range(_MAX_CANDIDATE_GENERATION_ATTEMPTS):
+        proposal = propose_template_draft(
+            fingerprint,
+            observations,
+            prior_proposal=prior,
+            reviewer_feedback=feedback,
         )
-        observations_by_id = {obs.id: obs for obs in observations}
-        persist_validation(session, draft, observations_by_id, now, get_settings().meta_artifact_root)
-        # persist_validation mutates `draft` in-memory only (no flush of its own).
-        # session.refresh() reloads attributes straight from the DB and does not
-        # autoflush pending changes on the object being refreshed, so without an
-        # explicit flush() here it silently discards the validation outcome and
-        # reverts draft.status back to its last-flushed value ("generated").
-        session.flush()
-        session.refresh(draft)
-        return draft
+        proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
+        proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
+        compile_context = CompileContext(
+            concept_family=f"{fingerprint.operation_family}_{fingerprint.representation_family}",
+            grade_band=fingerprint.grade_band,
+        )
+        try:
+            candidate = validate_candidate(
+                proposal,
+                observations_by_id=observations_by_id,
+                artifact_root=get_settings().meta_artifact_root,
+                compile_context=compile_context,
+            )
+        except V3ValidationError as exc:
+            last_failure = exc.failure
+            prior = proposal
+            feedback = {
+                "code": exc.failure.code,
+                "path": exc.failure.path,
+                "hint": exc.failure.hint,
+            }
+            continue
+
+        with meta_session() as session:
+            return persist_reviewable_draft(
+                session,
+                new_id=uuid4().hex,
+                job=job,
+                candidate=candidate,
+                now=datetime.now(timezone.utc),
+                revision=revision,
+                parent_draft_id=parent_draft_id,
+            )
+
+    assert last_failure is not None
+    raise CandidateGenerationExhausted(last_failure)
 
 
 def run_generation_job(*, owner: str) -> TemplateDraft | None:
@@ -78,12 +127,27 @@ def run_generation_job(*, owner: str) -> TemplateDraft | None:
 
     try:
         draft = generate_and_validate_revision(job=job, fingerprint=fingerprint, observations=observations)
+    except CandidateGenerationExhausted as exc:
+        structured_report = exc.structured_report()
+        logger.warning(
+            "Draft generation exhausted automatic validation retries for job %s: %s",
+            job_id,
+            json.dumps(structured_report, sort_keys=True),
+        )
+        with meta_session() as session:
+            if mark_needs_manual(session, job_id=job_id, now=datetime.now(timezone.utc)):
+                session.get(type(job), job_id).error_summary = exc.public_code
+        return None
     except Exception as exc:
         with meta_session() as session:
             fail_job(
-                session, job_id=job_id, owner=owner, error_summary=str(exc),
+                session,
+                job_id=job_id,
+                owner=owner,
+                error_summary=str(exc),
                 backoff_base_seconds=settings.job_backoff_base_seconds,
-                max_attempts=settings.job_max_attempts, now=datetime.now(timezone.utc),
+                max_attempts=settings.job_max_attempts,
+                now=datetime.now(timezone.utc),
             )
         logger.warning("Draft generation failed for job %s", job_id, exc_info=True)
         return None

@@ -8,7 +8,6 @@ from app.meta.fingerprint import Fingerprint
 from app.meta.generation_pipeline import generate_and_validate_revision
 from app.meta.jobs import mark_needs_manual
 from app.meta.models import (
-    DRAFT_FAILED_VALIDATION,
     DRAFT_PENDING_REVIEW,
     DRAFT_REJECTED,
     FallbackObservation,
@@ -25,7 +24,7 @@ class DraftRefinementFailedError(Exception):
     pass
 
 
-_REFINABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
+_REFINABLE_STATUSES = {DRAFT_PENDING_REVIEW}
 
 
 def reject_and_refine(

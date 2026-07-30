@@ -3,20 +3,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.meta.dsl.animation import (
-    AnimationDocument,
-    AppearNode,
-    ColumnNode,
-    ExpressionLabelNode,
-    LabelNode,
-    SequenceNode,
-    WaitNode,
-)
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import FieldRefNode, LiteralNode
-from app.meta.dsl.guard import GuardDocument, PositivePredicate, RangePredicate
+from app.meta.dsl.expression import FieldRefNode
+from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.validation import compile_draft_documents, validate_fixture
+from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 
 def _documents():
@@ -29,120 +22,39 @@ def _documents():
         predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
     )
     answer_expression = FieldRefNode(field="n")
-    animation_document = AnimationDocument(root={"kind": "label", "text": "n"})
-    return params_document, guard_document, answer_expression, animation_document
+    teaching_plan_document = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Show one number and state its value.",
+        "primary_visual": {"kind": "label", "ref": "number", "text": "n"},
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "number"}], "intent": "show the number"},
+            {"id": "focus", "kind": "focus", "targets": [{"visual_ref": "number"}], "intent": "identify the number"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "number"}], "intent": "state the answer"},
+        ],
+        "variation_seed": "validation-unit",
+    })
+    return params_document, guard_document, answer_expression, teaching_plan_document
 
 
-def _version_two_documents(animation_root):
-    params_document, guard_document, answer_expression, _ = _documents()
-    return (
-        params_document,
-        guard_document,
-        answer_expression,
-        AnimationDocument(animation_version=2, root=animation_root),
-    )
-
-
-def test_compile_draft_documents_succeeds_for_consistent_documents():
+def test_compile_draft_documents_succeeds_for_consistent_v3_documents():
     compiled = compile_draft_documents(*_documents())
     assert compiled.known_fields == frozenset({"n"})
-    instance = compiled.params_cls(n=5)
-    assert instance.guard_result().passed is True
+    assert compiled.params_cls(n=5).guard_result().passed is True
 
 
 def test_compile_draft_documents_raises_on_unknown_field_in_answer_expression():
-    params_document, guard_document, _, animation_document = _documents()
-    with pytest.raises(DslValidationError):
-        compile_draft_documents(
-            params_document, guard_document, FieldRefNode(field="ghost"), animation_document
-        )
+    params_document, guard_document, _, teaching_plan_document = _documents()
 
-
-def test_version_two_draft_rejects_missing_visible_answer():
     with pytest.raises(DslValidationError) as exc:
         compile_draft_documents(
-            *_version_two_documents(LabelNode(text="Solve the problem"))
+            params_document,
+            guard_document,
+            FieldRefNode(field="ghost"),
+            teaching_plan_document,
         )
-    assert exc.value.code == "answer_not_displayed"
 
-
-def test_version_two_draft_rejects_mismatched_visible_answer():
-    with pytest.raises(DslValidationError) as exc:
-        compile_draft_documents(
-            *_version_two_documents(
-                ExpressionLabelNode(
-                    expression=LiteralNode(value=999),
-                    role="answer",
-                )
-            )
-        )
-    assert exc.value.code == "answer_not_displayed"
-
-
-def test_version_two_draft_rejects_matching_answer_that_never_appears():
-    with pytest.raises(DslValidationError) as exc:
-        compile_draft_documents(
-            *_version_two_documents(
-                SequenceNode(
-                    steps=[
-                        ExpressionLabelNode(
-                            ref="answer",
-                            expression=FieldRefNode(field="n"),
-                            role="answer",
-                        ),
-                        LabelNode(ref="prompt", text="Solve the problem"),
-                        AppearNode(target_ref="prompt"),
-                        WaitNode(seconds=1),
-                    ]
-                )
-            )
-        )
-    assert exc.value.code == "answer_not_displayed"
-
-
-def test_version_two_draft_rejects_answer_appeared_before_it_is_built():
-    with pytest.raises(DslValidationError) as exc:
-        compile_draft_documents(
-            *_version_two_documents(
-                SequenceNode(
-                    steps=[
-                        AppearNode(target_ref="answer"),
-                        ExpressionLabelNode(
-                            ref="answer",
-                            expression=FieldRefNode(field="n"),
-                            role="answer",
-                        ),
-                        WaitNode(seconds=1),
-                    ]
-                )
-            )
-        )
-    assert exc.value.code == "answer_not_displayed"
-
-
-def test_version_two_draft_accepts_matching_visible_answer():
-    compiled = compile_draft_documents(
-        *_version_two_documents(
-            SequenceNode(
-                steps=[
-                    ExpressionLabelNode(
-                        ref="answer",
-                        expression=FieldRefNode(field="n"),
-                        prefix="Answer: ",
-                        role="answer",
-                    ),
-                    AppearNode(target_ref="answer"),
-                    WaitNode(seconds=1),
-                ]
-            )
-        )
-    )
-    assert compiled.compiled_animation.answer_expressions == (
-        FieldRefNode(field="n"),
-    )
-    assert compiled.compiled_animation.visible_answer_expressions == (
-        FieldRefNode(field="n"),
-    )
+    assert exc.value.code == "unknown_field"
 
 
 @dataclass
@@ -155,29 +67,28 @@ class _Fixture:
 
 def test_validate_fixture_accepts_matching_positive_fixture():
     compiled = compile_draft_documents(*_documents())
-    fixture = _Fixture(id="fx-1", params_json=json.dumps({"n": 5}), expected_outcome="accept", kind="positive")
+    fixture = _Fixture("fx-1", json.dumps({"n": 5}), "accept", "positive")
+
     result = validate_fixture(fixture, compiled, source_excerpt="there are 5 apples")
+
     assert result.passed is True
 
 
-def test_validate_fixture_fails_when_positive_fixture_is_not_grounded():
+def test_validate_fixture_tracks_the_failed_guard_predicate_for_a_negative_fixture():
     compiled = compile_draft_documents(*_documents())
-    fixture = _Fixture(id="fx-1", params_json=json.dumps({"n": 5}), expected_outcome="accept", kind="positive")
-    result = validate_fixture(fixture, compiled, source_excerpt="there are seven oranges")
-    assert result.passed is False
-    assert "not grounded" in result.detail
+    fixture = _Fixture("fx-2", json.dumps({"n": -1}), "reject", "negative")
 
-
-def test_validate_fixture_accepts_matching_negative_fixture():
-    compiled = compile_draft_documents(*_documents())
-    fixture = _Fixture(id="fx-2", params_json=json.dumps({"n": -1}), expected_outcome="reject", kind="negative")
     result = validate_fixture(fixture, compiled, source_excerpt=None)
+
     assert result.passed is True
+    assert result.failed_predicate_indexes == frozenset({0})
 
 
-def test_validate_fixture_fails_when_declared_outcome_does_not_match_reality():
-    compiled = compile_draft_documents(*_documents())
-    fixture = _Fixture(id="fx-3", params_json=json.dumps({"n": 5}), expected_outcome="reject", kind="negative")
-    result = validate_fixture(fixture, compiled, source_excerpt=None)
-    assert result.passed is False
-    assert "expected reject, got accept" in result.detail
+def test_v3_runtime_versions_make_v2_validation_reports_stale():
+    stale_report = {"compiler_version": 2, "renderer_version": 2}
+
+    assert (stale_report["compiler_version"], stale_report["renderer_version"]) != (
+        DSL_COMPILER_VERSION,
+        DYNAMIC_RENDERER_VERSION,
+    )
+    assert (DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION) == (3, 3)

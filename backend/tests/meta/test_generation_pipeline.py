@@ -1,18 +1,21 @@
 import json
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 
 from app.config import get_settings
 from app.meta import db, jobs, models
 from app.meta.draft_generation import DraftProposal, ProposedFixture
-from app.meta.dsl.animation import AnimationDocument
-from app.meta.dsl.expression import FieldRefNode
+from app.meta.dsl.expression import AddNode, FieldRefNode, MultiplyNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
-from app.meta.generation_pipeline import run_generation_job
+from app.meta.validation import FixtureCheckResult
+from app.meta.validation_pipeline import ValidatedCandidate
+from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.errors import V3Failure, V3ValidationError
 
 
 @pytest.fixture
@@ -29,120 +32,177 @@ def engine(tmp_path, monkeypatch):
 
 
 def _now():
-    return datetime(2026, 7, 28, tzinfo=timezone.utc)
+    return datetime(2026, 7, 30, tzinfo=timezone.utc)
 
 
-def _sample_fingerprint_json():
-    # The brief's test sketch used the literal placeholder "{}" here, but
-    # run_generation_job parses job.fingerprint_json into a real Fingerprint
-    # (all 7 fields required, extra="forbid") before the propose step even
-    # runs, so "{}" fails ValidationError unconditionally -- independent of
-    # what's being mocked. Use a valid Fingerprint payload instead so the
-    # test actually exercises the claim -> propose -> validate path the
-    # brief describes.
+def _fingerprint():
     return Fingerprint(
         fingerprint_version=1,
-        operation_family="compare",
-        representation_family="grid",
+        operation_family="measure",
+        representation_family="shape",
         number_domain="whole",
-        operand_arity=1,
-        step_count=1,
-        grade_band="K-2",
-    ).model_dump_json()
+        operand_arity=2,
+        step_count=2,
+        grade_band="6-8",
+    )
 
 
 def _seed_job_and_observation():
     with db.meta_session() as session:
-        obs = models.FallbackObservation(
-            id="obs-1", candidate_id="cand-1", source_excerpt="there are 5 apples",
-            grade_level=2, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        observation = models.FallbackObservation(
+            id="obs-1", candidate_id="candidate-1",
+            source_excerpt="The rectangle is 8 cm long and 3 cm wide.",
+            grade_level=6, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
         )
-        session.add(obs)
+        session.add(observation)
         session.flush()
         jobs.evaluate_and_enqueue(
-            session, fingerprint_key="k1", fingerprint_version=1,
-            fingerprint_json=_sample_fingerprint_json(),
-            trigger_observation_ids=[obs.id], threshold=0, new_id="job-1", now=_now(),
+            session,
+            fingerprint_key="k1",
+            fingerprint_version=1,
+            fingerprint_json=_fingerprint().model_dump_json(),
+            trigger_observation_ids=[observation.id],
+            threshold=0,
+            new_id="job-1",
+            now=_now(),
         )
 
 
-def _valid_proposal_dict(observation_id="obs-1"):
-    proposal = DraftProposal(
+def _proposal():
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}], "intent": "show the rectangle"},
+            {"id": "trace", "kind": "derive", "targets": [{"visual_ref": "rectangle"}], "intent": "trace every edge"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}], "intent": "state the perimeter"},
+        ],
+        "variation_seed": "generation-pipeline",
+    })
+    return DraftProposal(
         params_document=ParamsDocument(
             params_version=1,
-            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
-        ),
-        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
-        answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(animation_version=2, root={
-            "kind": "sequence",
-            "steps": [
-                {
-                    "kind": "expression_label",
-                    "ref": "n_label",
-                    "expression": {"node": "field_ref", "field": "n"},
-                    "prefix": "Answer: ",
-                    "role": "answer",
-                },
-                {"kind": "appear", "target_ref": "n_label"},
-                {"kind": "wait", "seconds": 1},
+            fields=[
+                IntegerFieldSpec(name="length", label="Length", description="", minimum=-100, maximum=100),
+                IntegerFieldSpec(name="width", label="Width", description="", minimum=-100, maximum=100),
             ],
-        }),
-        classifier_bullet="use for X",
+        ),
+        guard_document=GuardDocument(
+            guard_version=1,
+            predicates=[PositivePredicate(value=FieldRefNode(field="length"))],
+        ),
+        answer_expression=AddNode(operands=[
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="length")]),
+            MultiplyNode(operands=[FieldRefNode(field="width"), FieldRefNode(field="width")]),
+        ]),
+        teaching_plan_document=plan,
+        classifier_bullet="Use for rectangle perimeter lessons.",
         fixtures=[
-            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
-            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
+            ProposedFixture(kind="positive", expected_outcome="accept", observation_id="obs-1", params={"length": 8, "width": 3}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"length": -1, "width": 3}),
         ],
     )
-    return json.loads(proposal.model_dump_json())
 
 
-@patch("app.meta.draft_generation.call_with_tool")
-def test_run_generation_job_produces_pending_review_draft(mock_call, engine):
+def _candidate(proposal):
+    scene_program = compile_teaching_plan(
+        proposal.teaching_plan_document,
+        proposal.answer_expression,
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measure_shape", grade_band="6-8"),
+    )
+    return ValidatedCandidate(
+        proposal=proposal,
+        scene_program=scene_program,
+        validation_report={
+            "passed": True,
+            "fixture_results": [],
+            "preview_ok": True,
+            "preview_artifact_hash": "sha256:preview",
+            "compiler_version": 3,
+            "renderer_version": 3,
+            "negative_predicate_coverage": [0],
+        },
+        quality_report={"passed": True, "checks": [], "artifact_hash": "sha256:candidate"},
+        preview_artifact_hash="sha256:preview",
+        fixture_results=[
+            FixtureCheckResult("fixture-0", True, "accepted"),
+            FixtureCheckResult("fixture-1", True, "rejected", frozenset({0})),
+        ],
+    )
+
+
+def test_generate_and_validate_revision_retries_structured_candidate_failure(monkeypatch, engine):
+    from app.meta.generation_pipeline import generate_and_validate_revision
+
+    proposal = _proposal()
+    attempts = []
+
+    monkeypatch.setattr("app.meta.generation_pipeline.propose_template_draft", lambda *args, **kwargs: proposal)
+
+    def validate(*args, **kwargs):
+        attempts.append(kwargs["compile_context"])
+        if len(attempts) == 1:
+            raise V3ValidationError(V3Failure(
+                code="serial_simple_reveal",
+                path="timeline",
+                expected="together",
+                observed="stagger",
+                hint="reveal values together",
+            ))
+        return _candidate(proposal)
+
+    monkeypatch.setattr("app.meta.generation_pipeline.validate_candidate", validate)
     _seed_job_and_observation()
-    mock_call.return_value = ("propose_template_draft", _valid_proposal_dict())
+    with db.meta_session() as session:
+        job = session.get(models.GenerationJob, "job-1")
+        job.status = models.JOB_RUNNING
+        observations = [session.get(models.FallbackObservation, "obs-1")]
 
-    draft = run_generation_job(owner="worker-1")
+    draft = generate_and_validate_revision(job=job, fingerprint=_fingerprint(), observations=observations)
 
-    assert draft is not None
     assert draft.status == models.DRAFT_PENDING_REVIEW
-    with db.meta_session() as session:
-        job = session.get(models.GenerationJob, "job-1")
-        assert job.status == models.JOB_SUCCEEDED
+    assert len(attempts) == 2
+    assert attempts[-1] == CompileContext(concept_family="measure_shape", grade_band="6-8")
 
 
-@patch("app.meta.draft_generation.call_with_tool")
-def test_run_generation_job_fails_job_when_proposal_raises(mock_call, engine):
+def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monkeypatch, engine):
+    from app.meta.generation_pipeline import run_generation_job
+
     _seed_job_and_observation()
-    mock_call.side_effect = RuntimeError("bedrock unavailable")
+    failure = V3Failure(
+        code="serial_simple_reveal",
+        path="timeline",
+        expected="together",
+        observed="stagger",
+        hint="reveal values together",
+    )
+    from app.meta.generation_pipeline import CandidateGenerationExhausted
 
-    draft = run_generation_job(owner="worker-1")
+    monkeypatch.setattr(
+        "app.meta.generation_pipeline.generate_and_validate_revision",
+        lambda **kwargs: (_ for _ in ()).throw(CandidateGenerationExhausted(failure)),
+    )
 
-    assert draft is None
+    assert run_generation_job(owner="worker-1") is None
+
     with db.meta_session() as session:
         job = session.get(models.GenerationJob, "job-1")
-        assert job.status == models.JOB_FAILED
-        assert "bedrock unavailable" in job.error_summary
+        reviewer_visible = json.dumps({"job": {"error_summary": job.error_summary}})
+        assert job.status == models.JOB_NEEDS_MANUAL
+        assert job.error_summary == "automatic_generation_needs_manual_authoring"
+        assert "meta-template generation exhausted automatic validation retries" not in reviewer_visible
+        assert "traceback" not in reviewer_visible.lower()
+        assert session.query(models.TemplateDraft).count() == 0
 
 
 def test_run_generation_job_returns_none_when_nothing_queued(engine):
-    assert run_generation_job(owner="worker-1") is None
-
-
-@pytest.mark.parametrize(
-    ("feature_enabled", "codegen_enabled"),
-    [(False, True), (True, False)],
-)
-@patch("app.meta.draft_generation.call_with_tool")
-def test_run_generation_job_leaves_job_queued_when_generation_is_disabled(
-    mock_call, engine, monkeypatch, feature_enabled, codegen_enabled
-):
-    _seed_job_and_observation()
-    monkeypatch.setenv("META_TEMPLATES_ENABLED", str(int(feature_enabled)))
-    monkeypatch.setenv("META_CODEGEN_ENABLED", str(int(codegen_enabled)))
-    get_settings.cache_clear()
+    from app.meta.generation_pipeline import run_generation_job
 
     assert run_generation_job(owner="worker-1") is None
-    mock_call.assert_not_called()
-    with db.meta_session() as session:
-        assert session.get(models.GenerationJob, "job-1").status == models.JOB_QUEUED
