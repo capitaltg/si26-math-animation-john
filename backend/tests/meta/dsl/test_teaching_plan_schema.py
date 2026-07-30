@@ -89,6 +89,10 @@ def _plan_with_generated_text(field_name, value):
     "position=(1, 2, 0)",
     "color=#ff8800",
     "easing=custom_curve",
+    "Circle()",
+    "x = 1",
+    "BLUE",
+    "point=(x, y)",
 ])
 def test_every_generated_text_field_rejects_renderer_controls(field_name, bad_text):
     with pytest.raises(ValidationError):

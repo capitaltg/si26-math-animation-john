@@ -20,18 +20,23 @@ _GENERATED_TEXT_RULES = (
     (re.compile(r"\b(?:from\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s+import|import\s+[A-Za-z_])"), "imports"),
     (re.compile(
         r"\b(?:scene|self)\s*\.\s*(?:play|add|remove|wait|construct)\s*\(|"
-        r"\b(?:FadeIn|FadeOut|Create|Transform|MoveToTarget|Write|GrowFromCenter)\s*\("
+        r"\b(?:FadeIn|FadeOut|Create|Transform|MoveToTarget|Write|GrowFromCenter)\s*\(|"
+        r"\b[A-Z][A-Za-z0-9_]*\s*\("
     ), "Python or Manim calls"),
     (re.compile(r"(?<!\w)(?:\.\.?[\\/]|[\\/])[^\s]+"), "paths"),
     (re.compile(
-        r"\b(?:position|coordinate(?:s)?|point|vector)\s*[:=]\s*[\(\[]\s*[-+]?\d"
+        r"\b(?:position|coordinate(?:s)?|point|vector)\s*[:=]\s*[\(\[]\s*[^()[\]]+[,;][^()[\]]+[\)\]]"
         r"|(?<!\w)[\(\[]\s*[-+]?\d+(?:\.\d+)?(?:\s*,\s*[-+]?\d+(?:\.\d+)?){1,3}\s*[\)\]]"
     ), "raw coordinates"),
-    (re.compile(r"#[0-9a-f]{3,8}\b|\b(?:color|fill_color|stroke_color)\s*[:=]", re.IGNORECASE), "raw colors"),
+    (re.compile(
+        r"#[0-9a-f]{3,8}\b|\b(?:color|fill_color|stroke_color)\s*[:=]|"
+        r"(?<![A-Za-z])(?:BLUE|RED|GREEN|YELLOW|ORANGE|PURPLE|PINK|WHITE|BLACK|GRAY|GREY|TEAL|MAROON)(?![A-Za-z])"
+    ), "raw colors"),
     (re.compile(
         r"\b(?:easing|ease|rate_func|interpolation|interpolate)\s*[:=]"
         r"|\b(?:easeIn|easeOut|easeInOut|linear|smooth)\s*\("
     ), "easing directives"),
+    (re.compile(r"(?<!\w)[A-Za-z_]\w*\s*=(?!=)"), "Python assignments"),
     (re.compile(r"\b(?:eval|exec|compile|__import__)\s*\("), "executable Python"),
 )
 
