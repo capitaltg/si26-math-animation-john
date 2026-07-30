@@ -219,3 +219,22 @@ def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
     assert conclusion.bounds.center.y == pytest.approx(-3.0)
     assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
     assert conclusion.bounds.top <= -2.4
+
+
+def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
+    placed = place_vertical_lesson([
+        _measured_visual("primary", 0.2, width=0.2),
+        _measured_visual("support_0", 0.2, width=0.2),
+        _measured_visual("support_1", 0.2, width=1),
+        _measured_visual("support_2", 0.2, width=0.2),
+        _measured_visual("support_3", 0.2, width=7),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    scale = (placed[0].bounds.right - placed[0].bounds.left) / 0.2
+    assert scale == pytest.approx(0.74576, abs=1e-5)
+    for visual in placed:
+        assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
+        assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
+        assert visual.bounds.top <= SAFE_FRAME.top + 1e-9

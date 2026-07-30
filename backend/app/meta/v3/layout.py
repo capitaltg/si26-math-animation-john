@@ -39,9 +39,10 @@ def scale_measured_visual(item: MeasuredVisual, scale: float) -> MeasuredVisual:
 def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[PlacedVisual]:
     instructional = [item for item in measured_visuals if item.ref != "evaluated_answer"]
     conclusion = [item for item in measured_visuals if item.ref == "evaluated_answer"]
+    supporting_sides = _supporting_sides(instructional[1:])
     scale = min(
         1.0,
-        _fit_instructional_scale(instructional, INSTRUCTIONAL_FRAME),
+        _fit_instructional_scale(instructional, INSTRUCTIONAL_FRAME, supporting_sides),
         _fit_scale(conclusion, CONCLUSION_BAND),
     )
     if scale < MIN_TEXT_SCALE:
@@ -55,7 +56,7 @@ def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[Pl
     placed_by_ref = {
         item.measured.ref: item
         for item in [
-            *_place_instructional(instructional, INSTRUCTIONAL_FRAME, scale),
+            *_place_instructional(instructional, supporting_sides, INSTRUCTIONAL_FRAME, scale),
             *_place_centered_stack(conclusion, CONCLUSION_BAND, scale),
         ]
     }
@@ -73,7 +74,11 @@ def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
     return sum(item.bounds.top - item.bounds.bottom for item in items) + gap * (len(items) - 1)
 
 
-def _fit_instructional_scale(items: Sequence[MeasuredVisual], frame: Bounds) -> float:
+def _fit_instructional_scale(
+    items: Sequence[MeasuredVisual],
+    frame: Bounds,
+    supporting_sides: tuple[Sequence[MeasuredVisual], Sequence[MeasuredVisual]],
+) -> float:
     if not items:
         return 1.0
     primary, *supporting = items
@@ -81,7 +86,7 @@ def _fit_instructional_scale(items: Sequence[MeasuredVisual], frame: Bounds) -> 
     vertical_scale = _fit_extent(tallest, frame.top - frame.bottom)
     if not supporting:
         return vertical_scale
-    left, right = _supporting_sides(supporting)
+    left, right = supporting_sides
     half_width = (frame.right - frame.left) / 2
     horizontal_scale = min(
         _fit_extent(_horizontal_extent(primary, left), half_width),
@@ -118,12 +123,16 @@ def _supporting_sides(
 
 
 def _place_instructional(
-    items: Sequence[MeasuredVisual], frame: Bounds, scale: float,
+    items: Sequence[MeasuredVisual],
+    supporting_sides: tuple[Sequence[MeasuredVisual], Sequence[MeasuredVisual]],
+    frame: Bounds,
+    scale: float,
 ) -> list[PlacedVisual]:
     if not items:
         return []
-    primary, *supporting = [scale_measured_visual(item, scale) for item in items]
-    left, right = _supporting_sides(supporting)
+    primary = scale_measured_visual(items[0], scale)
+    left = [scale_measured_visual(item, scale) for item in supporting_sides[0]]
+    right = [scale_measured_visual(item, scale) for item in supporting_sides[1]]
     center_y = frame.center.y
     placed = [PlacedVisual(
         primary,
