@@ -39,7 +39,7 @@ _DRAFT_SYSTEM_PROMPT = (
     "You propose a declarative K-8 math teaching template by calling the "
     "propose_template_draft tool. Output only bounded JSON: a params field "
     "schema, guard predicates over a closed expression DSL, one answer "
-    "expression computing the correct numeric result from params, a "
+    "expression computing the correct numeric result from params, "
     "a semantic teaching plan, one "
     "classifier contract bullet describing when this template applies, and "
     "example fixtures (positive/negative/boundary) with the params values "
@@ -53,8 +53,8 @@ _DRAFT_SYSTEM_PROMPT = (
     "start neutral, and the final evaluated answer is introduced only during "
     "conclude. Simple collections reveal together. Perimeter explanations use "
     "boundary_trace. Median ordered values use item-specific targets. Never "
-    "include positions, durations beyond requested bounded actions, colors, code, "
-    "renderer objects, or Manim concepts.\n\n"
+    "include URLs, raw controls, positions, durations beyond requested bounded "
+    "actions, colors, code, renderer objects, or Manim concepts.\n\n"
     "Provide at least one 'positive' fixture whose observation_id references a "
     "given candidate id and whose params are the exact values stated in that "
     "candidate's excerpt -- this is the fixture a human verifies before "
@@ -70,6 +70,8 @@ _DRAFT_SYSTEM_PROMPT = (
 _STRUCTURED_PROPOSAL_FIELDS = (
     "params_document", "guard_document", "answer_expression", "teaching_plan_document", "fixtures",
 )
+
+_STABLE_REPAIR_FEEDBACK_FIELDS = ("code", "path", "hint")
 
 
 def _coerce_stringified_json_fields(raw: dict) -> dict:
@@ -107,7 +109,13 @@ def _observation_context(observations: list[FallbackObservation]) -> str:
 def _reviewer_feedback_context(reviewer_feedback: str | dict[str, object]) -> str:
     if isinstance(reviewer_feedback, str):
         return reviewer_feedback
-    return json.dumps(reviewer_feedback, separators=(",", ":"), sort_keys=True)
+    normalized = {}
+    for field in _STABLE_REPAIR_FEEDBACK_FIELDS:
+        value = reviewer_feedback.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("structured reviewer feedback requires code, path, and hint")
+        normalized[field] = value.strip()
+    return json.dumps(normalized, separators=(",", ":"), sort_keys=True)
 
 
 def propose_template_draft(
@@ -121,7 +129,7 @@ def propose_template_draft(
         f"fingerprint={fingerprint.model_dump_json()}\n\n"
         f"observations:\n{_observation_context(observations)}"
     )
-    if prior_proposal is not None and reviewer_feedback:
+    if prior_proposal is not None and reviewer_feedback is not None:
         user_message += (
             f"\n\nprior proposal:\n{prior_proposal.model_dump_json()}"
             f"\n\nreviewer feedback to address:\n{_reviewer_feedback_context(reviewer_feedback)}"

@@ -122,6 +122,8 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     assert "perimeter explanations use boundary_trace" in prompt
     assert "median ordered values use item-specific targets" in prompt
     assert "positions, durations beyond requested bounded actions, colors, code, renderer objects, or manim concepts" in prompt
+    assert "urls" in prompt
+    assert "raw controls" in prompt
 
 
 @patch("app.meta.draft_generation.call_with_tool")
@@ -174,6 +176,7 @@ def test_refinement_call_includes_prior_teaching_plan_and_structured_quality_fee
             "code": "serial_simple_reveal",
             "path": "timeline",
             "hint": "reveal values together",
+            "traceback": "Traceback (most recent call last): secret internals",
         },
     )
     _, kwargs = mock_call.call_args
@@ -183,3 +186,20 @@ def test_refinement_call_includes_prior_teaching_plan_and_structured_quality_fee
     assert "prior proposal" in kwargs["user_message"]
     assert '"teaching_plan_document"' in kwargs["user_message"]
     assert "Traceback" not in kwargs["user_message"]
+    assert '"traceback"' not in kwargs["user_message"]
+    assert "secret internals" not in kwargs["user_message"]
+
+
+@patch("app.meta.draft_generation.call_with_tool")
+def test_refinement_rejects_incomplete_structured_quality_feedback(mock_call):
+    prior = DraftProposal.model_validate(_raw_proposal())
+
+    with pytest.raises(ValueError, match="code, path, and hint"):
+        propose_template_draft(
+            _fingerprint(),
+            [_observation()],
+            prior_proposal=prior,
+            reviewer_feedback={"code": "serial_simple_reveal", "path": "timeline"},
+        )
+
+    mock_call.assert_not_called()
