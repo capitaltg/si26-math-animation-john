@@ -87,137 +87,16 @@ npm run build      # emits frontend/dist/
 
 ## Meta-template demo (dev only)
 
-The meta-template system learns from concrete solvable problems that fall back
-to `text_card` because no structural template fits. It generates a declarative
-draft in a separate worker, validates and previews that draft, requires a human
-review, and publishes an immutable dynamic template version for later matching
-problems.
+The meta-template system can learn a bounded, reviewable animation template
+from a concrete problem that falls back to `text_card`, then reuse the
+published template for structurally similar problems.
 
-This workflow is intended for a local developer demo. Keep all meta-template
-flags disabled in production until the operational rollout work is complete.
+For setup, the bundled fixture deck, the live presentation sequence, expected
+checkpoints, reset steps, and troubleshooting, follow the canonical
+[meta-template demo runbook](docs/meta-template-demo.md).
 
-### 1. Prepare the backend
-
-Make sure the virtualenv includes the current project dependencies, then create
-or upgrade the durable SQLite schema:
-
-```bash
-cd backend
-../.venv/bin/pip install -e ".[dev]"
-../.venv/bin/alembic upgrade head
-cd ..
-```
-
-Add these values to `backend/.env`. Use a disposable local reviewer token:
-
-```dotenv
-META_TEMPLATES_ENABLED=true
-META_CODEGEN_ENABLED=true
-META_APPROVAL_ENABLED=true
-META_DYNAMIC_CLASSIFIER_ENABLED=true
-META_REVIEWER_TOKEN=local-meta-demo
-FINGERPRINT_OBSERVATION_THRESHOLD=1
-```
-
-The threshold is lowered from five observations to one only to keep the demo
-short. The backend and worker both read this file; restart them after changing
-it.
-
-### 2. Start development
-
-From the repository root, start FastAPI, Vite, and the meta-template worker
-together:
-
-```bash
-./scripts/run-dev.sh
-```
-
-The worker checks the durable queue every two seconds. Ctrl-C stops the
-frontend, backend, and worker together.
-
-To troubleshoot one process in isolation, start them in separate terminals:
-
-```bash
-./scripts/run-backend.sh
-```
-
-```bash
-./scripts/run-frontend.sh
-```
-
-```bash
-./scripts/run-meta-worker.sh
-```
-
-### 3. Trigger template generation
-
-Open `http://localhost:5173` and upload a small PPTX containing a concrete
-problem outside the built-in structural contracts, for example:
-
-> A rectangle is 8 cm long and 3 cm wide. What is its perimeter?
-
-Select the detected problem, click **Get options**, choose `text_card`, and
-build the storyboard. For the fallback to become a learning observation,
-`text_card` must be the only compatible option—not a manual choice in place of
-an offered structural template.
-
-The worker should log a generated draft ID after Bedrock proposes the bounded
-DSL documents and Manim completes deterministic validation and preview
-rendering.
-
-### 4. Review and publish
-
-Open `http://localhost:5173/?meta-review`, enter the reviewer token
-(`local-meta-demo` in the example), and click **Load drafts**.
-
-For the generated draft:
-
-1. Inspect its classifier description, preview, fixture results, and predicate
-   coverage.
-2. For the positive fixture tied to the real problem, enter its correct
-   expected answer (for the example above, `{"answer": 22}`) and click
-   **Save fixture**. Saving re-runs validation and preview generation.
-3. If validation still fails, use **Reject and request refinement** with
-   specific feedback, then review the new revision.
-4. Enter a unique lowercase template name such as `rectangle_perimeter`.
-5. Check the mathematical-semantics confirmation and click
-   **Approve and publish**.
-
-Approval remains disabled until validation passes, every guard predicate has a
-negative witness, the configured number of real fixtures is confirmed, the
-template name is valid, and the reviewer explicitly confirms the mathematics.
-
-### 5. Exercise the published template
-
-Return to the main interface and upload a structurally similar problem, such
-as:
-
-> A rectangle is 10 cm long and 4 cm wide. What is its perimeter?
-
-Click **Get options**. The approved dynamic template is now part of the
-classifier's point-in-time template list. Select it if offered, build and
-approve the storyboard scene, then render the MP4 through the normal flow.
-
-Bedrock classification is probabilistic. Keeping the second problem close in
-structure and wording to the first makes a live demonstration more reliable.
-
-### Troubleshooting
-
-- **No worker draft appears:** confirm the worker and backend were restarted
-  after enabling the flags. Also confirm `text_card` was the only compatible
-  option; a manual text-card selection is intentionally not learned.
-- **The worker stays idle:** the observation may not have reached the threshold,
-  or a job/version for that fingerprint may already exist in `backend/var/meta.db`.
-- **The draft says `failed_validation`:** open it in the review panel, inspect
-  the fixture details, and reject with targeted refinement feedback. Failed
-  drafts are deliberately visible.
-- **Bedrock errors:** verify the AWS credential chain, region, and model access
-  used by the backend shell are also available to the worker shell.
-- **Preview/render errors:** verify Manim, Cairo, Pango, ffmpeg, LaTeX, and
-  `dvisvgm` are installed and present on `PATH`.
-- **Review API errors in the browser:** restart Vite so it loads the `/meta`
-  proxy configuration, then re-enter the reviewer token and click
-  **Load drafts**.
+Keep all meta-template flags disabled in production until the operational
+rollout work is complete.
 
 ## Testing
 

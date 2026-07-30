@@ -18,6 +18,20 @@ function responseError(data, fallbackMessage) {
   return typeof data?.detail === 'string' ? data.detail : fallbackMessage
 }
 
+// A candidate whose only offered visualization is the generic text card has no
+// built-in template that fits it. Picking the text card here is exactly the
+// signal the meta-template loop learns from: the backend records the problem as
+// an "unsupported shape" observation, and once enough similar problems are seen
+// it may propose a brand-new visualization template for this kind of problem.
+// (Mirrors classify_text_card_reason == UNSUPPORTED_SHAPE: text_card picked with
+// no structural option available.)
+function isUnsupportedShape(item) {
+  return (
+    item.templates.length > 0
+    && item.templates.every((option) => option.template === 'text_card')
+  )
+}
+
 function MainApp() {
   const [candidates, setCandidates] = useState(null)
   const [selected, setSelected] = useState({})
@@ -354,6 +368,24 @@ function MainApp() {
                 style={{ margin: '1rem 0' }}
               >
                 <legend>{candidate?.one_line_summary || item.candidate_id}</legend>
+                {isUnsupportedShape(item) && (
+                  <p
+                    style={{
+                      background: '#eef6ff',
+                      border: '1px solid #b6d8ff',
+                      borderRadius: 4,
+                      padding: '0.5rem 0.75rem',
+                      margin: '0 0 0.5rem',
+                      fontSize: '0.9em',
+                      color: '#0b4a8f',
+                    }}
+                  >
+                    ✨ No built-in visualization fits this problem yet, so it falls
+                    back to a plain text card. Choosing it teaches the system: after
+                    enough similar problems, it may propose a brand-new visualization
+                    template for this kind of problem.
+                  </p>
+                )}
                 {item.templates.map((option) => (
                   <label key={option.template} style={{ display: 'block', margin: '0.4rem 0' }}>
                     <input

@@ -8,7 +8,7 @@ from app.meta.db import meta_session
 from app.meta.draft_generation import DraftProposal, propose_template_draft
 from app.meta.drafts import create_generated_draft
 from app.meta.fingerprint import Fingerprint
-from app.meta.fixture_mutation import ensure_negative_fixtures
+from app.meta.fixture_mutation import drop_ungrounded_positive_fixtures, ensure_negative_fixtures
 from app.meta.jobs import claim_next_job, complete_job, fail_job
 from app.meta.models import FallbackObservation, TemplateDraft
 from app.meta.validation_pipeline import persist_validation
@@ -39,6 +39,9 @@ def generate_and_validate_revision(
     proposal = propose_template_draft(
         fingerprint, observations, prior_proposal=prior_proposal, reviewer_feedback=reviewer_feedback,
     )
+    # Drop positives the reviewer could never approve BEFORE deriving negatives,
+    # so a surviving (observation-grounded) positive is used as the mutation base.
+    proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
     proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
 
     now = datetime.now(timezone.utc)

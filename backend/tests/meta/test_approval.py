@@ -1,6 +1,7 @@
 import json
 import threading
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -38,6 +39,11 @@ from app.meta.approval import (
 def engine(tmp_path, monkeypatch):
     eng = db.make_engine(tmp_path / "meta.db")
     monkeypatch.setattr(db, "get_engine", lambda: eng)
+    monkeypatch.setattr(
+        approval,
+        "get_settings",
+        lambda: SimpleNamespace(meta_required_fixture_count=5),
+    )
     db.create_all(eng)
     return eng
 
@@ -275,6 +281,24 @@ def test_incomplete_predicate_coverage_raises_precondition(engine, session):
 def test_insufficient_real_fixtures_raises_precondition(engine, session):
     _seed_draft(session, draft_id="draft-1", positive_count=4)
     with pytest.raises(ApprovalPreconditionError):
+        approve_draft_service(
+            draft_id="draft-1", template_name="x", reviewer_label="dev",
+            math_semantics_confirmed=True,
+        )
+
+
+def test_duplicate_observation_fixtures_count_once(engine, session):
+    draft = _seed_draft(session, draft_id="draft-1", positive_count=5)
+    fixtures = (
+        session.query(models.TemplateDraftFixture)
+        .filter_by(draft_id=draft.id, kind="positive")
+        .all()
+    )
+    for fixture in fixtures:
+        fixture.observation_id = "obs-draft-1-0"
+    session.commit()
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
         approve_draft_service(
             draft_id="draft-1", template_name="x", reviewer_label="dev",
             math_semantics_confirmed=True,

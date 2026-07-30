@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     meta_codegen_enabled: bool = False
     meta_db_path: Path = BACKEND_ROOT / "var" / "meta.db"
     fingerprint_observation_threshold: int = 5
+    meta_required_fixture_count: int = Field(default=5, ge=1)
     fingerprint_tagger_prompt_version: str = "v1"
     fingerprint_tagger_max_attempts: int = 2
     fingerprint_tagger_backoff_seconds: float = 1.0
