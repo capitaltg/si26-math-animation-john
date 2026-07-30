@@ -22,6 +22,19 @@ class Bounds:
         return Point((self.left + self.right) / 2, (self.bottom + self.top) / 2)
 
 
+def translate_point(point: Point, offset: Point) -> Point:
+    return Point(point.x + offset.x, point.y + offset.y)
+
+
+def translate_bounds(bounds: Bounds, offset: Point) -> Bounds:
+    return Bounds(
+        bounds.left + offset.x,
+        bounds.right + offset.x,
+        bounds.bottom + offset.y,
+        bounds.top + offset.y,
+    )
+
+
 @dataclass(frozen=True)
 class SemanticPart:
     part: str
@@ -54,6 +67,22 @@ class MeasuredVisual:
             "left": Point(bounds.left, bounds.center.y),
             "right": Point(bounds.right, bounds.center.y),
         }[name]
+
+
+@dataclass(frozen=True)
+class PlacedVisual:
+    measured: MeasuredVisual
+    offset: Point
+
+    @property
+    def bounds(self) -> Bounds:
+        return translate_bounds(self.measured.bounds, self.offset)
+
+    def anchor(self, part, index, name):
+        return translate_point(
+            self.measured.anchor(part=part, index=index, name=name),
+            self.offset,
+        )
 
 
 class TextMeasurer(Protocol):
