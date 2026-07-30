@@ -376,6 +376,26 @@ it('shows an explicit message when one approved scene fails to render', async ()
   expect(screen.getByText('Render failed for c1')).not.toBeNull()
 })
 
+it('plays a successful render inline and keeps the download link', async () => {
+  installFetchMock()
+  await reachStoryboard()
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+
+  const player = await screen.findByLabelText('Rendered clip c1')
+  const downloadLink = screen.getByRole('link', { name: 'Download clip (c1)' })
+
+  expect(player.tagName).toBe('VIDEO')
+  expect(player.getAttribute('src')).toBe('/clips/clip1')
+  expect(player.getAttribute('controls')).not.toBeNull()
+  expect(player.getAttribute('preload')).toBe('metadata')
+  expect(downloadLink.getAttribute('href')).toBe('/clips/clip1')
+  expect(downloadLink.getAttribute('download')).not.toBeNull()
+})
+
 it('saves edits and clears the dirty flag', async () => {
   installFetchMock()
   await reachStoryboard()

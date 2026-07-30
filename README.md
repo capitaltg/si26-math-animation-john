@@ -1,6 +1,6 @@
 # Math Animation Generator
 
-Upload a PPTX of K–8 math example problems, pick the problems you want, choose a visualization for each from ranked compatible options, and download short Manim-rendered MP4 clips. A FastAPI backend discovers candidate problems, classifies each selected problem into compatible visual templates (number line, array grid, fraction bar, balance scale, or text card), validates the teacher's choice, and renders it — falling back to an honest, labeled text card when extraction or rendering cannot satisfy the chosen template. A React + Vite frontend drives the upload → select problems → choose visualizations → render flow.
+Upload a PPTX of K–8 math example problems, pick the problems you want, choose a visualization for each from ranked compatible options, and play or download short Manim-rendered MP4 clips. A FastAPI backend discovers candidate problems, classifies each selected problem into compatible visual templates (number line, array grid, fraction bar, balance scale, or text card), validates the teacher's choice, and renders it — falling back to an honest, labeled text card when extraction or rendering cannot satisfy the chosen template. A React + Vite frontend drives the upload → select problems → choose visualizations → render flow.
 
 The LLM never computes arithmetic: it proposes structurally compatible templates, infers a grade, and extracts template parameters. Every running total and equality is recomputed and validated in Python.
 
@@ -76,7 +76,7 @@ npm run dev
 
 Frontend serves on `http://localhost:5173`. Its dev server proxies `/upload`, `/options`, `/render`, and `/clips` to the backend on `:8000`, so the browser talks to a single origin and the session cookie flows without cross-origin friction.
 
-**Start the backend first**, then the frontend. Open `http://localhost:5173`, upload a small PPTX with a math problem, select one or more candidates, click **Get options.**, choose a visualization for each problem, and click **Render.** — a downloadable clip (or a labeled fallback reason) appears.
+**Start the backend first**, then the frontend. Open `http://localhost:5173`, upload a small PPTX with a math problem, select one or more candidates, click **Get options.**, choose a visualization for each problem, and click **Render.** — a playable, downloadable clip (or a labeled fallback reason) appears.
 
 Production build:
 
