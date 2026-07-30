@@ -6,9 +6,11 @@ from app.meta.manim_primitives.motions import (
     build_camera_focus,
     build_highlight,
     build_move_along_path,
+    build_role_transition,
     build_transform,
     build_wait,
 )
+from app.meta.manim_primitives.style import resolve_semantic_style
 
 
 def test_build_appear_returns_fade_in():
@@ -35,6 +37,11 @@ def test_build_move_along_path_returns_move_along_path():
     mobject, path = Dot(), Line([0, 0, 0], [1, 0, 0])
     animation = build_move_along_path(mobject, path)
     assert isinstance(animation, MoveAlongPath)
+
+
+def test_build_role_transition_returns_a_bounded_transform():
+    animation = build_role_transition(Dot(), resolve_semantic_style("ocean", "focus"))
+    assert isinstance(animation, Transform)
 
 
 def test_build_wait_calls_scene_wait():
