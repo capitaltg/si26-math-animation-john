@@ -5,30 +5,30 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.v3_common import (
     MAX_PLAN_BEATS, MAX_SIMPLE_STAGGER_SECONDS, MIN_PLAN_BEATS,
-    AnchorRef, StyleRole, TargetRef,
+    AnchorRef, GeneratedText, StyleRole, TargetRef,
 )
 
 
 class OrderedValuesVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["ordered_values"] = "ordered_values"
-    ref: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     values: list[ExpressionNode] = Field(min_length=3, max_length=15)
 
 
 class RectangleMeasurementVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["rectangle_measurement"] = "rectangle_measurement"
-    ref: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     length: ExpressionNode
     width: ExpressionNode
-    unit: str = Field(default="", max_length=20)
+    unit: GeneratedText = Field(default="", max_length=20)
 
 
 class NumberLineVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["number_line"] = "number_line"
-    ref: str
+    ref: GeneratedText
     minimum: ExpressionNode
     maximum: ExpressionNode
     markers: list[ExpressionNode] = Field(default_factory=list, max_length=16)
@@ -37,7 +37,7 @@ class NumberLineVisual(BaseModel):
 class GridVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["grid"] = "grid"
-    ref: str
+    ref: GeneratedText
     rows: ExpressionNode
     columns: ExpressionNode
 
@@ -45,7 +45,7 @@ class GridVisual(BaseModel):
 class PartitionVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["partition"] = "partition"
-    ref: str
+    ref: GeneratedText
     whole: ExpressionNode
     parts: ExpressionNode
 
@@ -53,7 +53,7 @@ class PartitionVisual(BaseModel):
 class BarVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["bar"] = "bar"
-    ref: str
+    ref: GeneratedText
     value: ExpressionNode
     maximum: ExpressionNode
 
@@ -61,15 +61,15 @@ class BarVisual(BaseModel):
 class ObjectSetVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["object_set"] = "object_set"
-    ref: str
+    ref: GeneratedText
     count: ExpressionNode
 
 
 class LabelVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["label"] = "label"
-    ref: str
-    text: str = Field(min_length=1, max_length=80)
+    ref: GeneratedText
+    text: GeneratedText = Field(min_length=1, max_length=80)
 
 
 SemanticVisualSpec = Annotated[
@@ -111,14 +111,14 @@ class RestoreRequest(BaseModel):
 class TraceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["trace"] = "trace"
-    path_ref: str = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
+    path_ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
 
 
 class CalloutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["callout"] = "callout"
     target: AnchorRef
-    text: str = Field(min_length=1, max_length=80)
+    text: GeneratedText = Field(min_length=1, max_length=80)
 
 
 class DrawRequest(BaseModel):
@@ -138,7 +138,7 @@ class MoveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["move"] = "move"
     target: TargetRef
-    path_ref: str = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
+    path_ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
 
 
 RequestedAction = Annotated[
@@ -152,17 +152,17 @@ RequestedAction = Annotated[
 
 class TeachingBeat(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    id: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     kind: Literal["orient", "reveal", "organize", "focus", "derive", "conclude"]
     targets: list[TargetRef] = Field(min_length=1, max_length=8)
-    intent: str = Field(min_length=1, max_length=240)
+    intent: GeneratedText = Field(min_length=1, max_length=240)
     custom_actions: list[RequestedAction] = Field(default_factory=list, max_length=8)
 
 
 class TeachingPlanDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_version: Literal[3] = 3
-    learning_objective: str = Field(min_length=1, max_length=300)
+    learning_objective: GeneratedText = Field(min_length=1, max_length=300)
     primary_visual: SemanticVisualSpec
     supporting_visuals: list[SemanticVisualSpec] = Field(default_factory=list, max_length=4)
     strategy: Literal[
@@ -170,7 +170,7 @@ class TeachingPlanDocument(BaseModel):
         "partition", "regroup", "magnitude_comparison", "representation_transform",
     ]
     beats: list[TeachingBeat] = Field(min_length=MIN_PLAN_BEATS, max_length=MAX_PLAN_BEATS)
-    variation_seed: str = Field(min_length=1, max_length=64)
+    variation_seed: GeneratedText = Field(min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def require_focus_and_conclusion_order(self):

@@ -49,3 +49,55 @@ def test_generated_plan_forbids_renderer_controls(bad_key, bad_value):
     raw["primary_visual"][bad_key] = bad_value
     with pytest.raises(ValidationError):
         TeachingPlanDocument.model_validate(raw)
+
+
+def _plan_with_generated_text(field_name, value):
+    raw = _median_plan()
+    if field_name == "learning_objective":
+        raw[field_name] = value
+    elif field_name == "intent":
+        raw["beats"][0][field_name] = value
+    elif field_name == "variation_seed":
+        raw[field_name] = value
+    elif field_name == "label_text":
+        raw["primary_visual"] = {"kind": "label", "ref": "caption", "text": value}
+    elif field_name == "unit":
+        raw["primary_visual"] = {
+            "kind": "rectangle_measurement",
+            "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"},
+            "unit": value,
+        }
+    elif field_name == "callout_text":
+        raw["beats"][0]["custom_actions"] = [{
+            "kind": "callout",
+            "target": {"visual_ref": "values", "anchor": "top"},
+            "text": value,
+        }]
+    return raw
+
+
+@pytest.mark.parametrize("field_name", [
+    "learning_objective", "intent", "variation_seed", "label_text", "unit", "callout_text",
+])
+@pytest.mark.parametrize("bad_text", [
+    "scene.play(FadeIn(answer))",
+    "from manim import FadeIn",
+    "../../etc/passwd",
+    "https://example.test/scene",
+    "position=(1, 2, 0)",
+    "color=#ff8800",
+    "easing=custom_curve",
+])
+def test_every_generated_text_field_rejects_renderer_controls(field_name, bad_text):
+    with pytest.raises(ValidationError):
+        TeachingPlanDocument.model_validate(_plan_with_generated_text(field_name, bad_text))
+
+
+def test_generated_text_accepts_legitimate_natural_language():
+    raw = _median_plan()
+    raw["learning_objective"] = "Explain why the middle value is the median."
+    raw["beats"][0]["intent"] = "Show the ordered values together before pairing them."
+    plan = TeachingPlanDocument.model_validate(raw)
+    assert plan.learning_objective.startswith("Explain")
