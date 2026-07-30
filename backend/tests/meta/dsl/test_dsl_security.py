@@ -2,6 +2,7 @@ import ast
 import inspect
 
 import pytest
+from pydantic import BaseModel
 from pydantic import ValidationError
 
 from app.meta import dynamic_scene as dynamic_scene_module
@@ -9,6 +10,8 @@ from app.meta.dsl import animation as animation_module
 from app.meta.dsl import expression as expression_module
 from app.meta.dsl import guard as guard_module
 from app.meta.dsl import params as params_module
+from app.meta.dsl import scene_program as scene_program_module
+from app.meta.dsl import teaching_plan as teaching_plan_module
 from app.meta.manim_primitives import layout as layout_module
 from app.meta.manim_primitives import motions as motions_module
 from app.meta.manim_primitives import style as style_module
@@ -30,6 +33,8 @@ DANGEROUS_STRINGS = ["__import__('os')", "os.system('rm -rf /')", "eval('1+1')",
         expression_module,
         guard_module,
         params_module,
+        teaching_plan_module,
+        scene_program_module,
         dynamic_scene_module,
         style_module,
         layout_module,
@@ -45,6 +50,16 @@ def test_no_eval_exec_or_dynamic_import_in_dsl_modules(module):
             assert node.func.id not in ("eval", "exec", "compile", "__import__")
         if isinstance(node, ast.ImportFrom) and node.module == "importlib":
             pytest.fail(f"{module.__name__} imports importlib")
+
+
+@pytest.mark.parametrize("module", [teaching_plan_module, scene_program_module])
+def test_v3_contract_models_forbid_extra_fields(module):
+    models = [
+        model for _, model in inspect.getmembers(module, inspect.isclass)
+        if issubclass(model, BaseModel) and model.__module__ == module.__name__
+    ]
+    assert models
+    assert all(model.model_config.get("extra") == "forbid" for model in models)
 
 
 @pytest.mark.parametrize("dangerous", DANGEROUS_STRINGS)
