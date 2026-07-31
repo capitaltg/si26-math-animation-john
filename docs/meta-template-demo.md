@@ -217,8 +217,10 @@ Open `http://localhost:5173/?meta-review`, enter reviewer token
    verification and keeps the existing validation, quality and preview evidence.
    **Changing a fixture's params instead discards that evidence** (the stored
    report no longer describes the artifact you are approving), which clears the
-   preview and blocks approval until a new candidate is generated — so do not
-   edit the params during the demo.
+   preview and blocks approval. That is recoverable — the banner offers
+   **Re-validate this draft**, which re-runs the checks and re-renders the
+   preview against your corrected params and keeps the correction — but it costs
+   a fresh render, so leave the params alone during the demo.
 6. Enter the unique lowercase template name `rectangle_perimeter`.
 7. Confirm that the mathematical semantics and preview are correct, then click
    **Approve and publish**.

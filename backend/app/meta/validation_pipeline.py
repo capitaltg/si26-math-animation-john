@@ -139,13 +139,23 @@ def merge_quality_reports(static_quality, rendered_quality, *, artifact_hash: st
     }
 
 
-def compute_candidate_hash(proposal: DraftProposal, scene_program: SceneProgramDocument) -> str:
-    dsl_versions = {
+def dsl_schema_versions(proposal: DraftProposal, scene_program: SceneProgramDocument) -> dict:
+    """The document schema versions a candidate was compiled against.
+
+    Shared by the artifact hash, ``drafts.persist_reviewable_draft`` and
+    ``revalidation``, so a draft's stored versions can never disagree with the
+    ones its hash was computed from.
+    """
+    return {
         "params_version": proposal.params_document.params_version,
         "guard_version": proposal.guard_document.guard_version,
         "teaching_plan_version": proposal.teaching_plan_document.plan_version,
         "scene_version": scene_program.scene_version,
     }
+
+
+def compute_candidate_hash(proposal: DraftProposal, scene_program: SceneProgramDocument) -> str:
+    dsl_versions = dsl_schema_versions(proposal, scene_program)
     return compute_artifact_hash(
         params_document=proposal.params_document.model_dump(mode="json"),
         guard_document=proposal.guard_document.model_dump(mode="json"),

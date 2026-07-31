@@ -275,6 +275,30 @@ export default function MetaReviewPanel() {
     }
   }
 
+  async function revalidateDraft() {
+    if (!selected) return
+    setLoading(true)
+    setError(null)
+    try {
+      const resp = await fetch(`/meta/drafts/${selected.id}/revalidate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not re-validate draft'))
+      // The route answers with the whole refreshed draft, so the restored
+      // reports and preview land without a second detail fetch -- and unlike
+      // openDraft, this keeps the template name and confirmation the reviewer
+      // may already have filled in.
+      setSelected(data)
+      await loadPreview(data.preview_url)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function saveFixture(fixture) {
     const texts = fixtureTexts[fixture.id] || {
       params: JSON.stringify(fixture.params),
@@ -457,11 +481,16 @@ export default function MetaReviewPanel() {
                   </p>
                 </>
               ) : (
-                <p>
-                  Validation cannot be re-run on an existing draft — use "Reject and
-                  request refinement" below so the worker regenerates one that covers
-                  your corrected fixture.
-                </p>
+                <>
+                  <p>
+                    Nothing failed — the checks and the preview just need to run again
+                    against your corrected fixture. Re-validating keeps your edit;
+                    rejecting below discards it.
+                  </p>
+                  <button type="button" onClick={revalidateDraft} disabled={loading}>
+                    Re-validate this draft
+                  </button>
+                </>
               )}
             </div>
           )}

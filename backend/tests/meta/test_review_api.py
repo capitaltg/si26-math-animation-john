@@ -946,6 +946,224 @@ def test_approve_maps_each_service_exception_to_http_status(exc_cls, expected_st
     assert resp.json()["detail"] == "boom"
 
 
+# ----------------------------------------------------------------- revalidate
+#
+# Issue #63: `update_fixture` correctly clears approval evidence when a
+# reviewer actually changes a fixture's params, but until `/revalidate` existed
+# nothing could rebuild it, so the edited draft could never leave
+# pending_review and rejecting it discarded the correction.
+
+
+@pytest.fixture
+def stubbed_render(monkeypatch):
+    """Replace the manim probe subprocess for both the seeding validation and
+    the revalidation under test, exactly as
+    `test_approve_succeeds_after_confirming_a_fixture_through_the_real_production_pipeline`
+    does. `validate_rendered_quality` must be stubbed too: the sentinel
+    manifest is not real probe output and would fail the manifest contract, so
+    without it nothing past preview would run at all.
+
+    The preview hash changes on every call so a test can prove revalidation
+    re-rendered rather than leaving the pre-edit preview in place.
+    """
+    renders = {"count": 0}
+
+    def _render(*args, **kwargs):
+        renders["count"] += 1
+        return f"sha256:revalidate-preview-{renders['count']}", {"probe": "complete"}
+
+    monkeypatch.setattr("app.meta.validation_pipeline.render_preview_and_probe", _render)
+    monkeypatch.setattr(
+        "app.meta.validation_pipeline.validate_rendered_quality",
+        lambda probe: QualityReport(True, [
+            QualityCheck("render_probe_complete", True, "probe", "passed"),
+        ]),
+    )
+    return renders
+
+
+def _seed_revalidatable_draft(
+    *, draft_id, fingerprint_key, observation_id, source_excerpt, artifact_root,
+):
+    """Seed through the real production path -- `validate_candidate()` then
+    `persist_reviewable_draft()` -- so the draft carries genuine reports whose
+    artifact hash matches the draft's, and so revalidation is re-running the
+    same pipeline that produced it."""
+    with db.meta_session() as session:
+        session.add(models.FallbackObservation(
+            id=observation_id, candidate_id=f"cand-{observation_id}",
+            source_excerpt=source_excerpt, grade_level=2,
+            observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        ))
+        job = models.GenerationJob(
+            id=f"job-{draft_id}", fingerprint_key=fingerprint_key, fingerprint_version=1,
+            fingerprint_json=_sample_fingerprint_json(),
+            trigger_observation_ids=json.dumps([observation_id]),
+            status=models.JOB_SUCCEEDED, created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+        session.flush()
+
+        observation = session.get(models.FallbackObservation, observation_id)
+        candidate = validate_candidate(
+            _proposal(observation_id),
+            observations_by_id={observation_id: observation},
+            artifact_root=artifact_root,
+            compile_context=CompileContext(concept_family="revalidate", grade_band="K-2"),
+        )
+        draft = persist_reviewable_draft(
+            session, new_id=draft_id, job=job, candidate=candidate, now=_now(),
+        )
+        return draft.id
+
+
+def test_revalidate_after_a_params_edit_restores_evidence_and_allows_approval(
+    approval_client, monkeypatch, tmp_path, stubbed_render,
+):
+    """The issue #63 end-to-end proof: a reviewer corrects a fixture's params,
+    which clears the approval evidence, and revalidation rebuilds it in place
+    so the corrected draft can be approved -- without regenerating and without
+    losing the correction."""
+    monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+    get_settings.cache_clear()
+    draft_id = _seed_revalidatable_draft(
+        draft_id="draft-reval-ok", fingerprint_key="k-reval-ok",
+        observation_id="obs-reval-ok",
+        # Both 5 (as generated) and 7 (the reviewer's correction) are grounded
+        # in this excerpt, so the edit is a legitimate correction rather than an
+        # ungrounded value the grounding check must reject.
+        source_excerpt="there are 5 apples and 7 pears",
+        artifact_root=get_settings().meta_artifact_root,
+    )
+
+    before = approval_client.get(f"/meta/drafts/{draft_id}").json()
+    fixture = next(f for f in before["fixtures"] if f["observation_id"] == "obs-reval-ok")
+    assert fixture["params"] == {"n": 5}
+
+    edit = approval_client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"n": 7}, "expected_result": {"answer": "7"}},
+    )
+    assert edit.status_code == 200, edit.json()
+    assert edit.json()["structural_check_passed"] is None
+    cleared = approval_client.get(f"/meta/drafts/{draft_id}").json()
+    assert cleared["validation_report"] is None
+    assert cleared["quality_report"] is None
+    assert cleared["preview_url"] is None
+
+    revalidated = approval_client.post(f"/meta/drafts/{draft_id}/revalidate")
+    assert revalidated.status_code == 200, revalidated.json()
+    body = revalidated.json()
+    assert body["validation_report"]["passed"] is True
+    assert body["quality_report"]["passed"] is True
+    assert body["preview_url"] is not None
+    assert body["preview_url"] != before["preview_url"]
+    # The reports must describe the artifact now on the draft, or approval
+    # precondition 4 would 422 on a stale-hash mismatch.
+    assert body["validation_report"]["artifact_hash"] == body["artifact_hash"]
+    assert body["quality_report"]["artifact_hash"] == body["artifact_hash"]
+    # The reviewer's correction, and the answer they confirmed for it, survive.
+    revalidated_fixture = next(f for f in body["fixtures"] if f["id"] == fixture["id"])
+    assert revalidated_fixture["params"] == {"n": 7}
+    assert revalidated_fixture["expected_result"] == {"answer": "7"}
+    assert revalidated_fixture["structural_check_passed"] is True
+
+    approve = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "reval_apples", "math_semantics_confirmed": True},
+    )
+    assert approve.status_code == 200, approve.json()
+    assert approve.json()["status"] == "enabled"
+
+
+def test_revalidate_reports_the_failure_and_leaves_evidence_cleared(
+    client, monkeypatch, tmp_path, stubbed_render,
+):
+    """A params edit that genuinely breaks a check must not become approvable.
+    The route reports why, and no failing validation report is persisted -- the
+    v3 invariant is that only a passing report can exist in the database."""
+    monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+    get_settings.cache_clear()
+    draft_id = _seed_revalidatable_draft(
+        draft_id="draft-reval-bad", fingerprint_key="k-reval-bad",
+        observation_id="obs-reval-bad", source_excerpt="there are 5 apples",
+        artifact_root=get_settings().meta_artifact_root,
+    )
+    fixture = client.get(f"/meta/drafts/{draft_id}").json()["fixtures"][0]
+
+    # 9 is a valid param and evaluates fine, so `update_fixture` accepts it --
+    # but it appears nowhere in the source excerpt, so the grounding check in
+    # `validate_fixture` must fail on revalidation.
+    edit = client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"n": 9}, "expected_result": {"answer": "9"}},
+    )
+    assert edit.status_code == 200, edit.json()
+
+    resp = client.post(f"/meta/drafts/{draft_id}/revalidate")
+    assert resp.status_code == 422
+    assert "not grounded in source" in resp.json()["detail"]
+
+    after = client.get(f"/meta/drafts/{draft_id}")
+    # Still pending_review (a non-pending draft would 404 here), still
+    # unapprovable, and no report was written.
+    assert after.status_code == 200
+    assert after.json()["validation_report"] is None
+    assert after.json()["quality_report"] is None
+    assert after.json()["preview_url"] is None
+
+
+def test_revalidate_aborts_when_the_draft_is_decided_mid_flight(
+    client, monkeypatch, tmp_path, stubbed_render,
+):
+    """Validation runs a preview render outside any database session, so a
+    concurrent approve or reject can land while it is in flight. The write must
+    re-check the status and abort rather than writing evidence onto a draft
+    that has already been decided."""
+    monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+    get_settings.cache_clear()
+    draft_id = _seed_revalidatable_draft(
+        draft_id="draft-reval-race", fingerprint_key="k-reval-race",
+        observation_id="obs-reval-race", source_excerpt="there are 5 apples",
+        artifact_root=get_settings().meta_artifact_root,
+    )
+    with db.meta_session() as session:
+        session.get(models.TemplateDraft, draft_id).validation_report_json = None
+
+    real_validate = validate_candidate
+
+    def _validate_then_approve_concurrently(*args, **kwargs):
+        candidate = real_validate(*args, **kwargs)
+        with db.meta_session() as session:
+            session.get(models.TemplateDraft, draft_id).status = models.DRAFT_APPROVED
+        return candidate
+
+    monkeypatch.setattr(
+        "app.meta.revalidation.validate_candidate", _validate_then_approve_concurrently
+    )
+
+    resp = client.post(f"/meta/drafts/{draft_id}/revalidate")
+    assert resp.status_code == 409
+    with db.meta_session() as session:
+        draft = session.get(models.TemplateDraft, draft_id)
+        assert draft.status == models.DRAFT_APPROVED
+        assert draft.validation_report_json is None
+
+
+def test_revalidate_unknown_draft_returns_404(client):
+    resp = client.post("/meta/drafts/does-not-exist/revalidate")
+    assert resp.status_code == 404
+
+
+def test_revalidate_non_pending_draft_returns_409(client):
+    draft_id = _seed_approvable_draft(
+        draft_id="draft-reval-approved", fingerprint_key="k-reval-approved",
+        status=models.DRAFT_APPROVED,
+    )
+    resp = client.post(f"/meta/drafts/{draft_id}/revalidate")
+    assert resp.status_code == 409
+
+
 def test_review_router_absent_when_meta_templates_disabled(monkeypatch, tmp_path):
     engine = db.make_engine(tmp_path / "meta.db")
     monkeypatch.setattr(db, "get_engine", lambda: engine)
@@ -964,6 +1182,7 @@ def test_review_router_absent_when_meta_templates_disabled(monkeypatch, tmp_path
     ("get", "/meta/preview/any-hash"),
     ("post", "/meta/drafts/any-id/fixtures/any-fixture"),
     ("post", "/meta/drafts/any-id/reject"),
+    ("post", "/meta/drafts/any-id/revalidate"),
     ("post", "/meta/drafts/any-id/approve"),
 ])
 def test_meta_routes_require_a_bearer_token(method, path, client_without_token):

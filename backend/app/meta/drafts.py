@@ -16,7 +16,7 @@ from app.meta.models import (
     TemplateDraftFixture,
     TemplateReview,
 )
-from app.meta.validation_pipeline import ValidatedCandidate
+from app.meta.validation_pipeline import ValidatedCandidate, dsl_schema_versions
 
 _ExpressionAdapter = TypeAdapter(ExpressionNode)
 
@@ -39,12 +39,7 @@ def persist_reviewable_draft(
 
     proposal = candidate.proposal
     _require_matching_fixture_result_ids(proposal.fixtures, candidate.fixture_results)
-    dsl_versions = {
-        "params_version": proposal.params_document.params_version,
-        "guard_version": proposal.guard_document.guard_version,
-        "teaching_plan_version": proposal.teaching_plan_document.plan_version,
-        "scene_version": candidate.scene_program.scene_version,
-    }
+    dsl_versions = dsl_schema_versions(proposal, candidate.scene_program)
     draft = TemplateDraft(
         id=new_id,
         job_id=job.id,

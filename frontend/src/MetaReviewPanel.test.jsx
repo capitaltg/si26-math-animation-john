@@ -445,23 +445,40 @@ it('explains why a draft with a failing validation report cannot be approved', a
   expect(screen.getByText('1 of 2 guard predicates (#1) have no guard case proving they correctly reject bad input.')).not.toBeNull()
 })
 
-it('tells a reviewer whose fixture edit cleared the validation evidence to reject and refine', async () => {
-  // The reachable no-evidence shape: editing a fixture's params nulls the
-  // whole validation_report (review_api.update_fixture), leaving a
-  // pending_review draft with no report at all -- not a failing one. Nothing
-  // failed here, and no endpoint re-validates an existing draft, so the copy
-  // must point at reject-and-refine rather than at a validation error.
-  const clearedDraftDetail = {
-    ...draftDetail,
-    guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
-    validation_report: null,
+// The reachable no-evidence shape: editing a fixture's params nulls the whole
+// validation_report (review_api.update_fixture), leaving a pending_review draft
+// with no report at all -- not a failing one.
+const clearedDraftDetail = {
+  ...draftDetail,
+  guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
+  validation_report: null,
+  quality_report: null,
+  preview_url: null,
+}
+
+function installClearedFetchMock(overrides = {}) {
+  const restored = {
+    ...clearedDraftDetail,
+    validation_report: { passed: true, negative_predicate_coverage: [0, 1] },
+    quality_report: { passed: true, checks: [] },
+    preview_url: '/meta/preview/sha256:revalidated',
   }
-  vi.stubGlobal('fetch', vi.fn(async (url) => {
+  const fetchMock = vi.fn(async (url, options) => {
     if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => clearedDraftDetail }
-    if (url === clearedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    if (url === '/meta/drafts/draft-1/revalidate') {
+      expect(options.method).toBe('POST')
+      return overrides.revalidate ?? { ok: true, json: async () => restored }
+    }
+    if (url === restored.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     throw new Error(`Unexpected fetch: ${url}`)
-  }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+it('offers to re-validate a draft whose fixture edit cleared the validation evidence', async () => {
+  installClearedFetchMock()
 
   render(<MetaReviewPanel />)
   await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
@@ -472,10 +489,68 @@ it('tells a reviewer whose fixture edit cleared the validation evidence to rejec
       screen.getByText("Your fixture edit cleared this draft's validation evidence, so it can't be approved."),
     ).not.toBeNull(),
   )
+  expect(screen.getByText('Re-validate this draft')).not.toBeNull()
+  // Rejecting is no longer the only way out, so the copy must not say that.
+  expect(screen.queryByText(/Validation cannot be re-run/)).toBeNull()
   // The failure-specific details belong to the other branch -- a cleared
   // report has no guard coverage to report a shortfall against.
   expect(screen.queryByText(/have no guard case proving/)).toBeNull()
   expect(screen.queryByText("This draft failed automatic validation and can't be approved yet.")).toBeNull()
+})
+
+it('re-validates a cleared draft and shows the restored evidence', async () => {
+  const fetchMock = installClearedFetchMock()
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByText('Re-validate this draft')).not.toBeNull())
+
+  fireEvent.click(screen.getByText('Re-validate this draft'))
+
+  // The banner is gone because the route returned the refreshed draft, and the
+  // restored preview is displayed.
+  await waitFor(() =>
+    expect(
+      screen.queryByText("Your fixture edit cleared this draft's validation evidence, so it can't be approved."),
+    ).toBeNull(),
+  )
+  await waitFor(() =>
+    expect(screen.getByAltText('preview').getAttribute('src')).toBe('blob:/meta/preview/sha256:revalidated'),
+  )
+  // The route answers with the whole draft, so re-validating must not need a
+  // second detail fetch.
+  const detailFetches = fetchMock.mock.calls.filter(([url]) => url === '/meta/drafts/draft-1')
+  expect(detailFetches).toHaveLength(1)
+})
+
+it('surfaces the reason a re-validation failed and keeps the draft open', async () => {
+  installClearedFetchMock({
+    revalidate: {
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail: 'Revalidation failed at fixtures[fixture-0] (fixture_validation_failed): '
+          + 'expected fixture behavior consistent with the proposed template, '
+          + 'observed not grounded in source: n -- correct the fixture or candidate documents and regenerate',
+      }),
+    },
+  })
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+  await waitFor(() => expect(screen.getByText('Re-validate this draft')).not.toBeNull())
+
+  fireEvent.click(screen.getByText('Re-validate this draft'))
+
+  await waitFor(() => expect(screen.getByText(/not grounded in source: n/)).not.toBeNull())
+  // The reviewer stays on the draft with the banner up, free to correct the
+  // fixture and re-run.
+  expect(
+    screen.getByText("Your fixture edit cleared this draft's validation evidence, so it can't be approved."),
+  ).not.toBeNull()
+  expect(screen.getByText('Re-validate this draft')).not.toBeNull()
 })
 
 it('labels a passing boundary fixture as accepting, not as a rejection guard case', async () => {
