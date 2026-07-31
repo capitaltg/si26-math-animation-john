@@ -32,6 +32,12 @@ from app.meta.review_actions import (
     DraftRefinementFailedError,
     reject_and_refine,
 )
+from app.meta.revalidation import (
+    DraftNotRevalidatableError,
+    RevalidationDraftNotFoundError,
+    RevalidationFailedError,
+    revalidate_draft as revalidate_draft_service,
+)
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import GuardDocument
@@ -327,6 +333,34 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         session.flush()
 
         return _fixture_out(session, fixture)
+
+
+@router.post(
+    "/drafts/{draft_id}/revalidate",
+    response_model=DraftDetailOut,
+    dependencies=[Depends(require_reviewer_token)],
+)
+def revalidate_draft(draft_id: str):
+    """Rebuild the approval evidence a fixture edit cleared (issue #63).
+
+    Returns the whole refreshed draft rather than just the reports, so the
+    review panel can render the restored preview and fixture checks without a
+    second round trip.
+    """
+    try:
+        revalidate_draft_service(draft_id)
+    except RevalidationDraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DraftNotRevalidatableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RevalidationFailedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    with meta_session() as session:
+        draft = session.get(TemplateDraft, draft_id)
+        if draft is None or draft.status != DRAFT_PENDING_REVIEW:
+            raise HTTPException(status_code=404, detail=f"Unknown draft {draft_id}")
+        return _draft_detail(session, draft)
 
 
 @router.post(
