@@ -1,5 +1,6 @@
 import hmac
 import json
+from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
@@ -288,6 +289,12 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
 
         fixture.params_json = json.dumps(request.params)
         fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
+        fixture.structural_check_passed = None
+        fixture.structural_check_detail = None
+        draft.validation_report_json = None
+        draft.quality_report_json = None
+        draft.preview_artifact_hash = None
+        draft.updated_at = datetime.now(timezone.utc)
         session.flush()
 
         return _fixture_out(session, fixture)
