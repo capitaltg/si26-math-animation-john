@@ -176,6 +176,16 @@ class TeachingPlanDocument(BaseModel):
     def require_focus_and_conclusion_order(self):
         if self.beats[-1].kind != "conclude":
             raise ValueError("the final beat must be conclude")
+        # A `conclude` beat is where the compiler reveals the evaluated answer
+        # and gives it the `conclusion` role (see
+        # `beat_expander._standard_actions`). Requiring only that the LAST beat
+        # be `conclude` made a *second*, mid-scene `conclude` schema-legal --
+        # which reveals the answer before the focus/derive beat that is
+        # supposed to derive it, violating the constraint that the
+        # evaluated-answer visual is introduced only during `conclude`. There
+        # is exactly one conclusion per lesson, so say so here.
+        if any(beat.kind == "conclude" for beat in self.beats[:-1]):
+            raise ValueError("only the final beat may be conclude")
         if not any(beat.kind in {"orient", "reveal", "organize"} for beat in self.beats[:-1]):
             raise ValueError("a context-establishing beat must precede conclude")
         if not any(beat.kind in {"focus", "derive"} for beat in self.beats[:-1]):

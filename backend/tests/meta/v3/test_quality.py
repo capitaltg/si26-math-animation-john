@@ -1,10 +1,15 @@
 from dataclasses import dataclass
 
 import pytest
+from pydantic import ValidationError
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
 from app.meta.dsl.scene_program import CalloutRelation
-from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.teaching_plan import (
+    OrderedValuesVisual,
+    TeachingBeat,
+    TeachingPlanDocument,
+)
 from app.meta.dsl.v3_common import AnchorRef, CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
@@ -176,6 +181,115 @@ def test_quality_mutations_fail(valid_program, mutation, expected_code):
 
     assert report.passed is False
     assert expected_code in [check.code for check in report.checks if not check.passed]
+
+
+def _mid_scene_conclude_plan_data():
+    """The median plan with a SECOND `conclude` beat inserted before the beat
+    that derives the answer -- so the evaluated answer is revealed and given
+    its `conclusion` role at 1.3s of a 6.5s scene, 20% in, before the `focus`
+    beat that is supposed to derive it."""
+    return {
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{index}") for index in range(1, 8)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "blurt_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median before it has been derived"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "premature-answer",
+    }
+
+
+def test_a_non_final_conclude_beat_is_rejected_by_the_plan_schema():
+    """Layer 1 of the premature-answer fix. `TeachingPlanDocument` used to
+    require only that the LAST beat be `conclude`, so a mid-scene `conclude`
+    was schema-legal -- and `beat_expander._standard_actions` reveals the
+    evaluated answer in EVERY `conclude` beat. The Global Constraint is that
+    the evaluated-answer visual is introduced only during `conclude` (singular,
+    at the end), so a second `conclude` beat is not a pacing preference but a
+    schema error."""
+    with pytest.raises(ValidationError, match="only the final beat may be conclude"):
+        TeachingPlanDocument.model_validate(_mid_scene_conclude_plan_data())
+
+
+def _plan_with_only_the_beat_order_rule_bypassed(plan_data):
+    """Construct a `TeachingPlanDocument` with the document-level
+    beat-order validator (`require_focus_and_conclusion_order`) -- and ONLY
+    that validator -- skipped.
+
+    Every nested model is still fully validated through `model_validate`, and
+    the program under test is still produced by the REAL
+    `compile_teaching_plan`. The bypass exists because the two halves of the
+    premature-answer fix are deliberately layered: the schema rejects a
+    non-final `conclude` beat outright (proved directly above), and
+    `check_answer_timing` independently refuses to call such a reveal legal.
+    Testing the second layer requires an input the first layer no longer
+    admits; `model_construct` is the narrowest possible way to get one, and it
+    is used here to prove a *gate*, not to hand-build a program shape (which
+    is the pattern this suite is otherwise moving away from -- see the
+    compiler-built tests below).
+    """
+    return TeachingPlanDocument.model_construct(
+        plan_version=3,
+        learning_objective=plan_data["learning_objective"],
+        primary_visual=OrderedValuesVisual.model_validate(plan_data["primary_visual"]),
+        supporting_visuals=[],
+        strategy=plan_data["strategy"],
+        beats=[TeachingBeat.model_validate(beat) for beat in plan_data["beats"]],
+        variation_seed=plan_data["variation_seed"],
+    )
+
+
+def test_answer_revealed_in_a_non_final_conclude_beat_fails_premature_answer_emphasis():
+    """Layer 2 of the premature-answer fix, and the finding itself:
+    `check_answer_timing` built its set of legal conclusion beats from EVERY
+    `conclude` beat in the plan, so the premature reveal's own `beat_id` was a
+    member of that set and the check named `premature_answer_emphasis` passed
+    on premature answer emphasis. Before the fix this exact program returned
+    `passed=True` with zero failing checks.
+
+    The failing input is a real compiled `SceneProgramDocument` from
+    `compile_teaching_plan`, not a `model_copy`-mutated one, so the assertion
+    below is about what the gate does to compiler output.
+    """
+    plan = _plan_with_only_the_beat_order_rule_bypassed(_mid_scene_conclude_plan_data())
+    program = _compile(
+        plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
+    )
+
+    # Confirm the compiler really did emit the premature reveal -- the whole
+    # point is that this is reachable output, not a hypothetical shape.
+    answer_reveals = [
+        (entry.beat_id, entry.at_seconds) for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+    ]
+    assert answer_reveals[0][0] == "blurt_answer" != plan.beats[-1].id
+    first_focus = min(
+        entry.at_seconds for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+    )
+    assert answer_reveals[0][1] < first_focus
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    assert "premature_answer_emphasis" in [
+        check.code for check in report.checks if not check.passed
+    ]
 
 
 def test_callout_on_whole_rectangle_with_no_part_fails_dimension_anchor_specificity():

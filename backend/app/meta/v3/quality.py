@@ -96,7 +96,16 @@ def check_answer_timing(plan, program) -> QualityCheck:
     if answer is not None and getattr(answer, "initial_role", "neutral") != "neutral":
         return _failed("premature_answer_emphasis", "visuals.evaluated_answer.initial_role", "the evaluated answer must begin neutral")
 
-    conclusions = {beat.id for beat in plan.beats if beat.kind == "conclude"}
+    # Only the FINAL beat may be `conclude`
+    # (`TeachingPlanDocument.require_focus_and_conclusion_order`), so the one
+    # beat in which the evaluated answer may legally appear is the last one.
+    # Building this set from *every* `conclude` beat instead made any
+    # mid-scene conclusion a legal place to reveal the answer -- so the check
+    # named `premature_answer_emphasis` passed on exactly the premature
+    # emphasis it exists to catch. Kept as an independent second layer: if the
+    # plan schema's beat-order rule is ever relaxed, this check still fails
+    # the candidate rather than silently reporting success.
+    conclusions = {plan.beats[-1].id} if plan.beats[-1].kind == "conclude" else set()
     premature = [
         index for index, entry in enumerate(program.timeline)
         if entry.action.kind == "reveal"
