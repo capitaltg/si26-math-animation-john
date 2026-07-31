@@ -1,41 +1,21 @@
 import json
 import subprocess
 import sys
-from subprocess import CompletedProcess
-from unittest.mock import patch
 
-import pytest
-
-from app.meta.dsl.animation import AnimationDocument, compile_animation_document
-from app.meta.preview_render import render_and_store_preview
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
 from app.render.full_render import BACKEND_ROOT
 
-
-def _compiled():
-    # A renderable animation must actually display something: build a visual, then
-    # `appear` it and hold with a `wait`. A bare layout/label without an appear
-    # renders an all-black frame (see test_blank_frame_raises below).
-    document = AnimationDocument(root={
-        "kind": "sequence",
-        "steps": [
-            {"kind": "label", "ref": "lbl", "text": "hello"},
-            {"kind": "appear", "target_ref": "lbl"},
-            {"kind": "wait", "seconds": 1},
-        ],
-    })
-    return compile_animation_document(document, known_fields=frozenset())
-
-
-@patch("app.meta.preview_render.subprocess.run")
-def test_render_and_store_preview_raises_on_subprocess_failure(mock_run, tmp_path):
-    mock_run.return_value = CompletedProcess(args=[], returncode=1, stdout="", stderr="manim failed")
-    compiled = _compiled()
-    with pytest.raises(RuntimeError, match="Preview render failed"):
-        render_and_store_preview(compiled, frozenset(), {}, tmp_path)
+# `test_render_and_store_preview_raises_on_subprocess_failure` used to live
+# here. It exercised `preview_render.render_and_store_preview`, which wrote a v1
+# `AnimationDocument` and handed it to this worker as the first positional
+# argument -- an argument the worker has parsed as a `SceneProgramDocument`
+# since the v3 cutover, so the function would have raised if anything had
+# called it. Nothing did; its only test patched `subprocess.run`, so it could
+# never notice. Function and test are both deleted. The worker's real
+# subprocess behaviour is covered by the three tests below.
 
 
 def _median_plan():
