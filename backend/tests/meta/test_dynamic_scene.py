@@ -152,7 +152,7 @@ def test_render_rectangle_uses_evaluated_dimensions():
     assert "3 cm" in texts
 
 
-def test_scene_requires_compiled_animation_and_values():
+def test_scene_requires_scene_program_and_values():
     scene = DynamicTemplateScene()
     with pytest.raises(ValueError):
         scene.construct()

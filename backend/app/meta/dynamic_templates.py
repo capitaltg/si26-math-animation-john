@@ -11,10 +11,11 @@ from dataclasses import dataclass
 from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
-from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
+from app.meta.dsl.scene_program import SceneProgramDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.models import (
     TEMPLATE_VERSION_ENABLED,
@@ -144,15 +145,16 @@ def get_dynamic_template(ref: TemplateRef) -> tuple[type, type]:
         params_document = ParamsDocument.model_validate_json(draft.params_document_json)
         guard_document = GuardDocument.model_validate_json(draft.guard_document_json)
         answer_expression = _ExpressionAdapter.validate_json(draft.answer_expression_json)
-        animation_document = AnimationDocument.model_validate_json(draft.animation_document_json)
+        teaching_plan_document = TeachingPlanDocument.model_validate_json(draft.teaching_plan_json)
+        scene_program = SceneProgramDocument.model_validate_json(draft.scene_program_json)
         compiled = compile_draft_documents(
-            params_document, guard_document, answer_expression, animation_document
+            params_document, guard_document, answer_expression, teaching_plan_document
         )
 
     scene_cls = type(
         f"DynamicScene_{ref.version_id}",
         (DynamicTemplateScene,),
-        {"compiled_animation": compiled.compiled_animation},
+        {"scene_program": scene_program},
     )
     result = (scene_cls, compiled.params_cls)
     _DYNAMIC_TEMPLATE_CACHE[ref.version_id] = result

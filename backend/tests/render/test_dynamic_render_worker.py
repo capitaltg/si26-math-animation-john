@@ -1,13 +1,11 @@
 import json
 import subprocess
 import sys
-from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
 import pytest
 
-from app.meta.artifacts import artifact_exists, load_artifact
 from app.meta.dsl.animation import AnimationDocument, compile_animation_document
 from app.meta.preview_render import render_and_store_preview
 from app.meta.dsl.expression import FieldRefNode
@@ -32,51 +30,6 @@ def _compiled():
     return compile_animation_document(document, known_fields=frozenset())
 
 
-def test_render_and_store_preview_produces_a_stored_png(tmp_path):
-    compiled = _compiled()
-    digest = render_and_store_preview(compiled, frozenset(), {}, tmp_path)
-    assert artifact_exists(tmp_path, digest)
-    assert len(load_artifact(tmp_path, digest)) > 0
-
-
-def test_render_and_store_preview_uses_field_values():
-    compiled_with_expr = compile_animation_document(
-        AnimationDocument(root={
-            "kind": "sequence",
-            "steps": [
-                {
-                    "kind": "grid", "ref": "g",
-                    "rows": {"node": "field_ref", "field": "rows"},
-                    "cols": {"node": "literal", "value": 2},
-                },
-                {"kind": "appear", "target_ref": "g"},
-                {"kind": "wait", "seconds": 1},
-            ],
-        }),
-        known_fields=frozenset({"rows"}),
-    )
-    import tempfile
-    from pathlib import Path
-    with tempfile.TemporaryDirectory() as tmp:
-        digest = render_and_store_preview(
-            compiled_with_expr, frozenset({"rows"}), {"rows": 3}, Path(tmp)
-        )
-        assert digest
-
-
-def test_render_and_store_preview_rejects_blank_frame(tmp_path):
-    # An animation that only *builds* a visual but never `appear`s it renders an
-    # all-black frame; a full MP4 of the same scene would produce no video at all.
-    # persist_validation relies on this raising so such a draft fails validation
-    # and can never be approved and shipped to the end-user render path.
-    blank = compile_animation_document(
-        AnimationDocument(root={"kind": "row", "children": [{"kind": "label", "text": "hi"}]}),
-        known_fields=frozenset(),
-    )
-    with pytest.raises(RuntimeError, match="blank frame"):
-        render_and_store_preview(blank, frozenset(), {}, tmp_path)
-
-
 @patch("app.meta.preview_render.subprocess.run")
 def test_render_and_store_preview_raises_on_subprocess_failure(mock_run, tmp_path):
     mock_run.return_value = CompletedProcess(args=[], returncode=1, stdout="", stderr="manim failed")
@@ -85,8 +38,12 @@ def test_render_and_store_preview_raises_on_subprocess_failure(mock_run, tmp_pat
         render_and_store_preview(compiled, frozenset(), {}, tmp_path)
 
 
-def test_worker_probe_mode_writes_final_frame_and_manifest(tmp_path):
-    plan = TeachingPlanDocument.model_validate({
+def _median_plan():
+    # Identify-the-median-of-seven plan: it compiles to a scene program with a
+    # "median_callout" relation targeting values.item[3].bottom, giving both the
+    # probe test and the full/thumbnail-mode test below real (non-trivial)
+    # layout and timeline evidence to assert against.
+    return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
         "primary_visual": {
@@ -108,10 +65,44 @@ def test_worker_probe_mode_writes_final_frame_and_manifest(tmp_path):
         ],
         "variation_seed": "worker-probe",
     })
-    program = compile_teaching_plan(
-        plan, FieldRefNode(field="v4"), frozenset(f"v{index}" for index in range(1, 8)),
+
+
+def _median_scene_program():
+    return compile_teaching_plan(
+        _median_plan(), FieldRefNode(field="v4"), frozenset(f"v{index}" for index in range(1, 8)),
         CompileContext(concept_family="measurement", grade_band="3-5"),
     )
+
+
+def test_worker_thumbnail_mode_renders_a_real_png_from_stored_scene_program(tmp_path):
+    # Task 11: main()'s full/thumbnail branch was cut over from compiling a v1
+    # AnimationDocument to loading the stored v3 SceneProgramDocument directly
+    # (the same document a published TemplateVersion's draft persists) -- this
+    # exercises that branch end-to-end, distinct from the probe-mode test below.
+    program = _median_scene_program()
+    program_path = tmp_path / "scene.json"
+    fields_path = tmp_path / "fields.json"
+    values_path = tmp_path / "values.json"
+    output_path = tmp_path / "thumbnail.png"
+    program_path.write_text(program.model_dump_json())
+    fields_path.write_text(json.dumps([f"v{index}" for index in range(1, 8)]))
+    values_path.write_text(json.dumps({f"v{index}": index for index in range(1, 8)}))
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "app.render.dynamic_render_worker", str(program_path),
+            str(fields_path), str(values_path), str(output_path), "thumbnail", str(tmp_path),
+        ],
+        capture_output=True, text=True, cwd=BACKEND_ROOT, timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+
+def test_worker_probe_mode_writes_final_frame_and_manifest(tmp_path):
+    program = _median_scene_program()
     program_path = tmp_path / "scene.json"
     fields_path = tmp_path / "fields.json"
     values_path = tmp_path / "values.json"

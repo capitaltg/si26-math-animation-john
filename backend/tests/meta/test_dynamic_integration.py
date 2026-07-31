@@ -70,30 +70,31 @@ def test_approved_dynamic_template_flows_end_to_end(session, tmp_path, monkeypat
 
     template_ref = resolve_dynamic_ref(session, dynamic_option.template, dynamic_option.version_id)
 
-    # Confirm the seeded params document's real field names ("a"/"b", per
-    # _seed_draft_and_version) before trusting the extraction mock below --
-    # get_template(template_ref) returns the exact dynamically-compiled
-    # params_cls this candidate will be validated against.
+    # Confirm the seeded params document's real field names ("v1".."v7", per
+    # _seed_draft_and_version's median-of-seven teaching plan) before trusting
+    # the extraction mock below -- get_template(template_ref) returns the exact
+    # dynamically-compiled params_cls this candidate will be validated against.
     _, params_cls = get_template(template_ref)
-    assert set(params_cls.model_fields) >= {"a", "b"}
+    assert set(params_cls.model_fields) >= {"v1", "v2", "v3", "v4", "v5", "v6", "v7"}
 
     candidate = Candidate(
         candidate_id="c1",
-        source_excerpt="A is 3 and B is 4.",
+        source_excerpt="The ordered values are 3, 5, 6, 8, 9, 12, 15.",
         slide_index=0,
-        one_line_summary="Detected: 3 and 4",
+        one_line_summary="Detected: seven ordered values",
     )
 
+    extracted_params = {"v1": 3, "v2": 5, "v3": 6, "v4": 8, "v5": 9, "v6": 12, "v7": 15}
     with patch("app.pipeline.extraction.call_with_tool") as mock_extract, patch(
         "app.render.full_render.subprocess.run"
     ) as mock_run:
-        mock_extract.return_value = ("report_params", {"a": 3, "b": 4})
+        mock_extract.return_value = ("report_params", extracted_params)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         scene = assemble_scene(candidate, tmp_path, template=template_ref, grade=3)
 
     assert scene.status == "pending_review"
     assert scene.template == template_ref
-    assert scene.params == {"a": 3, "b": 4}
+    assert scene.params == extracted_params
     assert scene.thumbnail_path is not None
     mock_extract.assert_called_once()
     mock_run.assert_called_once()

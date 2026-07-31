@@ -2,7 +2,6 @@ import json
 import sys
 from pathlib import Path
 
-from app.meta.dsl.animation import AnimationDocument, compile_animation_document
 from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
@@ -14,21 +13,20 @@ VALID_MODES = {"full", "thumbnail", "probe"}
 
 
 def main() -> None:
-    anim_path, known_fields_path, values_path, output_path_str, mode, scratch_dir_str = sys.argv[1:7]
+    program_path, known_fields_path, values_path, output_path_str, mode, scratch_dir_str = sys.argv[1:7]
     if mode not in VALID_MODES:
         raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
 
     if mode == "probe":
         _render_probe(
-            Path(anim_path), Path(known_fields_path), Path(values_path),
+            Path(program_path), Path(known_fields_path), Path(values_path),
             Path(output_path_str), Path(scratch_dir_str),
         )
         return
 
-    animation_document = AnimationDocument.model_validate_json(Path(anim_path).read_text())
-    known_fields = frozenset(json.loads(Path(known_fields_path).read_text()))
+    del known_fields_path  # The stored scene program is already compiled against its field contract.
+    scene_program = SceneProgramDocument.model_validate_json(Path(program_path).read_text())
     field_values = json.loads(Path(values_path).read_text())
-    compiled = compile_animation_document(animation_document, known_fields)
 
     from manim import tempconfig
 
@@ -46,7 +44,7 @@ def main() -> None:
 
     with tempconfig(overrides):
         scene = DynamicTemplateScene()
-        scene.compiled_animation = compiled
+        scene.scene_program = scene_program
         scene.field_values = field_values
         scene.render()
 
