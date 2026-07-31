@@ -27,6 +27,11 @@ def test_meta_draft_max_refinements_default():
     assert Settings().meta_draft_max_refinements == 5
 
 
-def test_version_constants_identify_rendered_values_and_geometry_fix_wave():
-    assert DSL_COMPILER_VERSION == 2
-    assert DYNAMIC_RENDERER_VERSION == 2
+def test_version_constants_identify_the_v3_teaching_plan_cutover_wave():
+    # Both constants are part of every draft's artifact hash and of approval's
+    # stale-runtime precondition, so the v3 cutover (teaching-plan compiler +
+    # scene-program renderer) had to bump them: a draft validated by the v2
+    # compiler must not stay approvable under the v3 one. This is the tripwire
+    # that keeps the next compiler/renderer change from forgetting the bump.
+    assert DSL_COMPILER_VERSION == 3
+    assert DYNAMIC_RENDERER_VERSION == 3

@@ -91,9 +91,26 @@ The meta-template system can learn a bounded, reviewable animation template
 from a concrete problem that falls back to `text_card`, then reuse the
 published template for structurally similar problems.
 
-For setup, the bundled fixture deck, the live presentation sequence, expected
-checkpoints, reset steps, and troubleshooting, follow the canonical
-[meta-template demo runbook](docs/meta-template-demo.md).
+Generation produces a **semantic teaching plan**, not animation code: one
+learning objective, one primary semantic visual, a closed explanation strategy,
+and three to five ordered teaching beats ending in an explicit conclusion. A
+deterministic compiler lowers that plan into a parameterized scene program, and
+every preview and render resolves the program against the current field values
+(measure → lay out → resolve anchors → bind the timeline → render). Static and
+rendered quality gates run privately before a draft becomes reviewable, so a
+reviewer only ever sees candidates whose pacing, anchors and rendered frames
+already pass.
+
+The demo publishes two lessons from the bundled deck — a rectangle perimeter
+(`boundary_trace`) and a median of seven (`pair_elimination`) — and reuses the
+perimeter template on a second problem. For setup, the live presentation
+sequence, expected checkpoints, reset steps, and troubleshooting, follow the
+canonical [meta-template demo runbook](docs/meta-template-demo.md).
+
+The v3 teaching-plan schema replaces the earlier generated-animation-document
+format outright: **v1/v2 drafts and published versions are intentionally not
+supported**. After migrating to the v3 schema, reset the disposable demo
+database as the runbook describes rather than trying to reuse older drafts.
 
 Keep all meta-template flags disabled in production until the operational
 rollout work is complete.
