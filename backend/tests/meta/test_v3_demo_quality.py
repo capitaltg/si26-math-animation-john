@@ -7,6 +7,21 @@ compares it against what the lesson must teach. Expected values are derived from
 the real compiler and the real probe manifest, never copied out of a passing
 run, so a regression in compilation, layout, resolution, styling or rendering
 fails a named assertion here.
+
+Two tiers of assertion live below, and the difference matters when reading a
+failure:
+
+*Load-bearing* -- the only checks here that no shipped gate already enforces, so
+these are the contract's real teeth: ``simple_reveal_mode``, ``state_order``,
+the callout's ``target_anchor``, ``traced_paths``, the non-empty dimension-refs
+guard, and the derive beat's observed edge emphasis.
+
+*Deliberately redundant* -- assertions restating a gate that already ran before
+the fixture returned, so they can never be the failing line: a violation raises
+inside the fixture (rendered gates run in ``render_preview_and_probe``) or keeps
+the draft from ever being persisted (static gates run pre-persist). They are
+kept verbatim as the plan wrote them, for plan fidelity and as documentation of
+the contract; each one names the gate that actually enforces it.
 """
 
 from tests.meta.test_demo_end_to_end import (  # noqa: F401  (imported as pytest fixtures)
@@ -19,46 +34,69 @@ from tests.meta.test_demo_end_to_end import (  # noqa: F401  (imported as pytest
 def test_rendered_median_meets_v3_contract(rendered_median):
     report = rendered_median.quality_report
 
-    # Standard animation duration, and the collection reveals as one group
-    # rather than trickling in item by item.
+    # Redundant: static `check_duration` already bounds this at 6/12 pre-persist.
     assert 6 <= report["total_duration_seconds"] <= 12
+    # Load-bearing: the collection reveals as one group rather than trickling in
+    # item by item.
     assert report["simple_reveal_mode"] == "together"
 
-    # Every emphasized target's observed styling trajectory: the median item is
-    # neutral before it is focused, and the evaluated answer only reaches its
-    # conclusion styling at the end.
+    # Load-bearing: every emphasized target's observed styling trajectory. The
+    # median item is neutral before it is focused, and the evaluated answer only
+    # reaches its conclusion styling at the end.
     assert report["state_order"] == [
         "values.item[3]:neutral",
         "values.item[3]:focus",
         "evaluated_answer:conclusion",
     ]
 
-    # The item-specific callout is anchored to the median item itself, and the
-    # rendered arrow tip really lands on that anchor.
+    # Load-bearing: the callout is anchored to the median item itself, not to the
+    # collection as a whole.
     median_callout = report["relations"]["median_callout"]
     assert median_callout["target_anchor"] == "values.item[3].bottom"
+    # Redundant: rendered `check_relation_alignment` already compares this exact
+    # distance against this exact tolerance, and raises inside the fixture.
     assert median_callout["alignment_error"] <= report["anchor_tolerance"]
 
+    # Redundant: static `check_conclusion_hold` already enforces the 1.5s floor.
     assert report["conclusion_hold_seconds"] >= 1.5
 
 
 def test_rendered_perimeter_meets_v3_contract(rendered_perimeter):
     report = rendered_perimeter.quality_report
+    lesson = rendered_perimeter.lesson
 
+    # Redundant: static `check_duration` already bounds this at 6/12 pre-persist.
     assert 6 <= report["total_duration_seconds"] <= 12
 
-    # The boundary is actually traced, so the perimeter is shown as a process.
+    # Load-bearing: the boundary is actually traced, so the perimeter is shown as
+    # a process rather than asserted.
     assert "rectangle.perimeter" in report["traced_paths"]
 
-    # Both dimension labels stay attached to the edges they measure. The refs
-    # come from the compiled program (the compiler names callout relations
-    # positionally), and the non-empty guard means a dimension filter that stops
+    # Load-bearing guard: the refs come from the compiled program (the compiler
+    # names callout relations positionally), so a dimension filter that stops
     # matching real programs fails here instead of comparing {} == {}.
     dimension_refs = rendered_perimeter.dimension_relation_refs
     assert dimension_refs, "the perimeter plan's edge callouts must compile to dimension relations"
+    # Redundant: rendered `check_dimension_attachments` already fails any
+    # detached or missing dimension anchor, and raises inside the fixture.
     assert report["dimension_anchor_checks"] == {ref: True for ref in dimension_refs}
 
-    # The derivation is visible on screen, not merely implied by the answer.
+    # Load-bearing, and the only guard on the mandated derive beat: within that
+    # beat the renderer really emphasized all four edges -- the length pair
+    # (bottom, top) and the width pair (left, right) -- which is what maps the
+    # boundary onto 2 x (length + width). No shipped gate checks this, and
+    # `derivation_visible` below cannot catch it: the worker derives that flag as
+    # `bool(path_events) or any(focus)`, so the traced perimeter asserted above
+    # already forces it True regardless of what the derive beat does.
+    derive_beat_id = lesson.derive_beat_id
+    assert derive_beat_id, "the perimeter lesson must teach the pairing in a derive beat"
+    assert report["emphasis_targets_by_beat"][derive_beat_id] == {
+        f"{lesson.primary_visual_ref}.edge[{index}]" for index in range(4)
+    }
+
+    # Redundant: implied by the traced path asserted above (see the comment on
+    # the derive-beat assertion for why).
     assert report["derivation_visible"] is True
 
+    # Redundant: static `check_conclusion_hold` already enforces the 1.5s floor.
     assert report["conclusion_hold_seconds"] >= 1.5

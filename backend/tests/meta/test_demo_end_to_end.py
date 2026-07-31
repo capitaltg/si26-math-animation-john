@@ -110,6 +110,14 @@ class DemoLesson:
     def known_fields(self) -> frozenset[str]:
         return frozenset(field["name"] for field in self.params_document["fields"])
 
+    @property
+    def derive_beat_id(self) -> str | None:
+        """Id of the beat that derives the answer, if the lesson teaches one."""
+        return next(
+            (beat["id"] for beat in self.teaching_plan["beats"] if beat["kind"] == "derive"),
+            None,
+        )
+
 
 def _median_values(values):
     return {f"v{index}": value for index, value in enumerate(values, start=1)}
@@ -249,6 +257,13 @@ PERIMETER_LESSON = DemoLesson(
                      "visual_ref": "rectangle", "part": "width_edge", "index": 0, "anchor": "left",
                  }},
              ]},
+            # The mandated derive beat: emphasize the two length edges, then the
+            # two width edges, so the boundary visibly maps onto
+            # 2 x (length + width). rectangle_measurement emits edges in the
+            # order bottom, right, top, left (see rectangle_measurement.py), so
+            # the length pair is edge[0] (bottom) + edge[2] (top) and the width
+            # pair is edge[3] (left) + edge[1] (right) -- listed pair by pair,
+            # not in index order. `emphasize` defaults to the "focus" role.
             {"id": "pair_the_edges", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
              "intent": "each length and each width edge occurs twice, so the boundary is 2 × (length + width)",
              "custom_actions": [
@@ -327,6 +342,41 @@ def _emphasis_state_order(state_events) -> list[str]:
     ]
 
 
+# A sampled frame's `seconds` is the beat's scheduled end, but a state event's
+# `seconds` is the probe's own accumulated elapsed time, which lands a fraction
+# of a nanosecond above that end (the compiler rounds timeline entries to nine
+# decimal places). This tolerance absorbs that drift while staying orders of
+# magnitude below the 0.15s minimum action length, so an event on a beat
+# boundary is still credited to the beat that produced it.
+_BEAT_BOUNDARY_TOLERANCE_SECONDS = 1e-6
+
+
+def _emphasis_targets_by_beat(frames, state_events) -> dict[str, set[str]]:
+    """Targets the renderer was observed to actually emphasize, per teaching beat.
+
+    Beat windows come from the probe's own sampled frames -- one per beat, each
+    stamped with that beat's id and the second it ended -- so no timing is
+    hardcoded here. Every sampled beat gets an entry, including an empty one, so
+    an assertion about a beat that stopped emphasizing anything fails on the
+    comparison instead of on a missing key.
+    """
+    ordered = sorted(frames, key=lambda frame: frame["seconds"])
+    by_beat: dict[str, set[str]] = {frame["beat_id"]: set() for frame in ordered}
+    for event in state_events:
+        if event["role"] != "focus":
+            continue
+        beat_id = next(
+            (
+                frame["beat_id"] for frame in ordered
+                if event["seconds"] <= frame["seconds"] + _BEAT_BOUNDARY_TOLERANCE_SECONDS
+            ),
+            None,
+        )
+        if beat_id is not None:
+            by_beat[beat_id].add(event["target"])
+    return by_beat
+
+
 def build_demo_quality_report(manifest: dict) -> dict:
     """Project probe-manifest evidence onto the fields the demo contracts read.
 
@@ -342,6 +392,9 @@ def build_demo_quality_report(manifest: dict) -> dict:
         "simple_reveal_mode": manifest["simple_reveal_mode"],
         "anchor_tolerance": ANCHOR_TOLERANCE,
         "state_order": _emphasis_state_order(manifest["state_events"]),
+        "emphasis_targets_by_beat": _emphasis_targets_by_beat(
+            manifest["frames"], manifest["state_events"]
+        ),
         "relations": {
             ref: {
                 **relation,
