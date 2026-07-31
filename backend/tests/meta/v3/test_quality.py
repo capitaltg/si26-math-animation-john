@@ -327,6 +327,100 @@ def test_callout_on_whole_rectangle_with_no_part_fails_dimension_anchor_specific
     assert "dimension_anchor_mismatch" in [check.code for check in report.checks if not check.passed]
 
 
+def _median_plan_naming_two_different_items():
+    """A `pair_elimination` plan whose derive beat names `values.item[0]` and
+    whose focus/conclude beats name `values.item[3]` -- naming two items is the
+    natural way to teach pairing, and the compiler accepts it."""
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{index}") for index in range(1, 8)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "eliminate_smallest", "kind": "derive",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 0}],
+             "intent": "pair the smallest value off against the largest"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "two-item-targets",
+    })
+
+
+def test_a_plan_naming_two_different_items_passes_semantic_anchor_specificity():
+    """`check_semantic_anchor_specificity` required each relation to match
+    EVERY item target in the plan rather than to be item-level at all. As soon
+    as two beats named different items on one visual, any relation on that
+    visual mismatched at least one of them and the check failed -- on a plan
+    whose only relation (`median_callout` on `values.item[3]`) is item-specific,
+    making the reported detail untrue as well. That blocked legitimate
+    pair_elimination candidates and misdirected the repair loop.
+    """
+    plan = _median_plan_naming_two_different_items()
+    program = _compile(
+        plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
+    )
+    # Two distinct item targets on one visual, and a relation that really is
+    # item-specific -- the exact combination that used to fail.
+    item_targets = {
+        (target.visual_ref, target.part, target.index)
+        for beat in plan.beats for target in beat.targets
+        if target.part is not None
+    }
+    assert len({index for _, _, index in item_targets}) == 2
+    assert all(
+        relation.target.part is not None and relation.target.index is not None
+        for relation in program.relations
+    )
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is True
+    assert [check.code for check in report.checks if not check.passed] == []
+
+
+def test_a_whole_collection_callout_still_fails_semantic_anchor_specificity():
+    """The counterweight to the test above: fixing the false positive must not
+    turn the check into a dead filter. A callout targeting `values` with no
+    `part` compiles cleanly (`compiler._validate_target` returns immediately
+    when `part is None`, and `_validate_callout_anchor` only constrains the
+    anchor of item-level targets), so this genuinely non-specific anchor is
+    reachable compiler output -- and the plan instructs on `values.item[3]`,
+    so a whole-collection arrow cannot point at what is being taught.
+    """
+    plan_data = _median_plan_naming_two_different_items().model_dump()
+    plan_data["beats"][0]["custom_actions"] = [
+        {"kind": "callout", "text": "seven values in order", "target": {
+            "visual_ref": "values", "anchor": "top",
+        }},
+    ]
+    plan = TeachingPlanDocument.model_validate(plan_data)
+    program = _compile(
+        plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
+    )
+    non_specific = [
+        index for index, relation in enumerate(program.relations)
+        if relation.target.part is None
+    ]
+    assert non_specific, "the compiler must really emit a whole-collection callout"
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    failed = [check for check in report.checks if not check.passed]
+    assert [check.code for check in failed] == ["collection_anchor_for_item"]
+    assert failed[0].path == f"relations[{non_specific[0]}].target"
+
+
 def _perimeter_plan_with_dimension_callouts():
     # A real teaching plan whose derive beat requests "callout" custom
     # actions on the declared "length_edge"/"width_edge" semantic parts (see

@@ -156,18 +156,29 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
 
 
 def check_semantic_anchor_specificity(plan, program) -> QualityCheck:
-    item_targets = {
-        (target.visual_ref, target.part, target.index)
+    # A relation anchored to a whole collection cannot point at one of its
+    # items, so a plan that instructs on individual items needs item-level
+    # relation anchors. Quantify over the *relations*: the previous form
+    # required each relation to match EVERY item target in the plan, so as soon
+    # as two beats named different items of the same visual, any relation on
+    # that visual mismatched at least one of them and the check failed -- on
+    # plans whose anchors were already item-specific. That rejected legitimate
+    # `pair_elimination` candidates (naming two items is how pairing is taught)
+    # and told the repair loop to make an anchor item-specific when it already
+    # was, so retries could not converge.
+    visuals_with_item_instruction = {
+        target.visual_ref
         for beat in plan.beats for target in beat.targets
         if target.part is not None and target.index is not None
     }
     for relation_index, relation in enumerate(program.relations):
-        for visual_ref, part, index in item_targets:
-            if relation.target.visual_ref == visual_ref and (relation.target.part, relation.target.index) != (part, index):
-                return _failed(
-                    "collection_anchor_for_item", f"relations[{relation_index}].target",
-                    "item-specific instruction needs an item-specific relation anchor",
-                )
+        if relation.target.visual_ref in visuals_with_item_instruction and (
+            relation.target.part is None or relation.target.index is None
+        ):
+            return _failed(
+                "collection_anchor_for_item", f"relations[{relation_index}].target",
+                "item-specific instruction needs an item-specific relation anchor",
+            )
     return _passed("collection_anchor_for_item", "relations")
 
 
