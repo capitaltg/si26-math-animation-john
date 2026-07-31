@@ -175,3 +175,98 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
 
     assert all(("rectangle", "edge", index) in rendered.targets for index in range(4))
     assert any(call.kind == "trace" for call in scene.play_calls)
+
+
+def _perimeter_plan_emphasizing_alias_edges():
+    """A boundary_trace plan whose derive beat emphasizes the declared
+    `length_edge`/`width_edge` semantic parts.
+
+    `compiler._PART_CARDINALITY` declares both as valid rectangle targets
+    (cardinality 2 each) and `resolver` resolves them, so this plan compiles,
+    resolves and passes static quality -- but the renderer only ever built
+    child mobjects for the plain numbered `edge` parts, so every such plan
+    died with a `KeyError` inside `_target_mobject`. The subprocess exit is
+    caught and converted to a validation failure, so the operator only ever
+    saw three burnt generation attempts and a generic retry hint.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the rectangle"},
+            {"id": "pair_the_edges", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "each length edge and each width edge occurs twice",
+             "custom_actions": [
+                 {"kind": "emphasize", "target": {
+                     "visual_ref": "rectangle", "part": "length_edge", "index": 0}},
+                 {"kind": "emphasize", "target": {
+                     "visual_ref": "rectangle", "part": "length_edge", "index": 1}},
+                 {"kind": "emphasize", "target": {
+                     "visual_ref": "rectangle", "part": "width_edge", "index": 0}},
+                 {"kind": "emphasize", "target": {
+                     "visual_ref": "rectangle", "part": "width_edge", "index": 1}},
+             ]},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the result"},
+        ],
+        "variation_seed": "rectangle-alias-edges",
+    })
+
+
+def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edges():
+    """The alias entries must point at the SAME `Line` mobjects the numbered
+    edges use, in the pairing `rectangle_measurement.measure_rectangle`
+    declares: length is bottom/top (edge 0 and 2), width is left/right
+    (edge 3 and 1). Asserting object identity -- not merely presence -- is what
+    makes this fail if the aliases are ever registered as fresh, separately
+    styled duplicates that emphasis would visibly miss.
+    """
+    plan = _perimeter_plan_emphasizing_alias_edges()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, LiteralTextMeasurer())
+
+    scene = RecordingScene()
+    rendered = render_resolved_scene(scene, resolved)
+
+    targets = rendered.targets
+    assert targets[("rectangle", "length_edge", 0)] is targets[("rectangle", "edge", 0)]
+    assert targets[("rectangle", "length_edge", 1)] is targets[("rectangle", "edge", 2)]
+    assert targets[("rectangle", "width_edge", 0)] is targets[("rectangle", "edge", 3)]
+    assert targets[("rectangle", "width_edge", 1)] is targets[("rectangle", "edge", 1)]
+    # The four emphasis actions really did play, so `_target_mobject` resolved
+    # every alias key rather than raising.
+    assert [call.role for call in scene.play_calls if call.role] == ["focus"] * 4
+
+
+def test_alias_edge_lines_are_added_to_the_rectangle_group_exactly_once():
+    """The aliases share mobjects with the numbered edges, so registering them
+    must not also re-add those lines to the rectangle's own submobject group --
+    a duplicated submobject would be animated twice by any group-level
+    reveal."""
+    plan = _perimeter_plan_emphasizing_alias_edges()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, LiteralTextMeasurer())
+
+    rendered = render_resolved_scene(RecordingScene(), resolved)
+
+    edges = [rendered.targets[("rectangle", "edge", index)] for index in range(4)]
+    submobjects = rendered.visuals["rectangle"].submobjects
+    assert len(submobjects) == 4
+    assert all(any(edge is submobject for submobject in submobjects) for edge in edges)

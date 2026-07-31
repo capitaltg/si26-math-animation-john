@@ -179,7 +179,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         if relation.ref not in observed_relation_refs:
             continue
         target_anchor = _target_label(relation_specs[relation.ref].target)
-        target_mobject = _rendered_target_mobject(scene, resolved, relation_specs[relation.ref].target)
+        target_mobject = _rendered_target_mobject(scene, relation_specs[relation.ref].target)
         target = _pixel_array_point(_mobject_anchor(target_mobject, relation_specs[relation.ref].target.anchor), width, height)
         anchors[target_anchor] = target
         mobject = scene.rendered.relations[relation.ref]
@@ -306,33 +306,16 @@ def _mobject_has_color(mobject, expected) -> bool:
     return any(member.get_color().to_hex() == expected_hex for member in mobject.get_family())
 
 
-def _target_key(target):
-    return target.visual_ref, target.part, target.index
-
-
-def _rendered_target_mobject(scene, resolved, target):
-    """Find the actually-rendered mobject a relation's typed target anchors to.
-
-    The renderer only builds child mobjects for a subset of a visual's
-    declared semantic parts (e.g. a rectangle's "edge" parts, not its
-    "length_edge"/"width_edge" aliases -- see `rectangle_measurement.py`
-    and `app/meta/v3/renderer.py`), so a target naming an alias part has no
-    direct entry in `scene.rendered.targets`. Resolve it by matching the
-    alias's declared geometry against every part of the same visual that
-    *did* get rendered, so the probe still OBSERVES a real rendered
-    mobject -- never fabricating one from program data -- instead of
-    crashing on parts the renderer never names as such.
+def _rendered_target_mobject(scene, target):
+    """Look up the actually-rendered mobject a relation's typed target anchors
+    to. Every semantic part the compiler accepts as a target -- including a
+    rectangle's `length_edge`/`width_edge` aliases -- is registered in
+    `scene.rendered.targets` by `app/meta/v3/renderer.py`, so this is a direct
+    lookup on renderer-OBSERVED state: a missing key means the renderer and the
+    compiler disagree about what is targetable, which must fail loudly rather
+    than be reconstructed from program data.
     """
-    key = _target_key(target)
-    if key in scene.rendered.targets:
-        return scene.rendered.targets[key]
-    visual = resolved.visual(target.visual_ref)
-    alias_bounds = visual.measured.parts[(target.part, target.index)].bounds
-    for (part, index), semantic_part in visual.measured.parts.items():
-        candidate_key = (target.visual_ref, part, index)
-        if semantic_part.bounds == alias_bounds and candidate_key in scene.rendered.targets:
-            return scene.rendered.targets[candidate_key]
-    raise KeyError(key)
+    return scene.rendered.targets[(target.visual_ref, target.part, target.index)]
 
 
 def _mobject_anchor(mobject, anchor):

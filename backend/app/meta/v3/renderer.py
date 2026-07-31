@@ -128,12 +128,26 @@ def _build_visual(placed, palette: str):
     elif {"length", "width", "unit"} <= payload.keys():
         root = Rectangle(width=bounds.right - bounds.left, height=bounds.top - bounds.bottom)
         root.move_to(_array(bounds.center))
-        children = {
-            (part, index): _line_for_bounds(_translated(part_value.bounds, placed.offset))
+        edges = {
+            index: _line_for_bounds(_translated(part_value.bounds, placed.offset))
             for (part, index), part_value in measured.parts.items()
             if part == "edge"
         }
-        root.add(*children.values())
+        # `rectangle_measurement.measure_rectangle` exposes `length_edge` and
+        # `width_edge` as ALIASES for two of the four numbered edges, and
+        # `compiler._PART_CARDINALITY` accepts both as emphasize/dim/restore/
+        # reveal targets. Register them here against the *same* Line mobjects
+        # (length = bottom/top = edge 0/2, width = left/right = edge 3/1),
+        # otherwise `_target_mobject` raises KeyError on a plan the compiler,
+        # the resolver and the static quality gate all accept. They must not be
+        # re-added to `root` below: they are the very lines already there, and a
+        # duplicated submobject would be animated twice.
+        children = {
+            **{("edge", index): line for index, line in edges.items()},
+            ("length_edge", 0): edges[0], ("length_edge", 1): edges[2],
+            ("width_edge", 0): edges[3], ("width_edge", 1): edges[1],
+        }
+        root.add(*edges.values())
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center), {}
     elif "markers" in payload:
