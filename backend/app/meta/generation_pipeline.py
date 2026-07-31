@@ -17,7 +17,6 @@ from app.meta.v3.errors import V3Failure, V3ValidationError
 
 logger = logging.getLogger(__name__)
 
-_MAX_CANDIDATE_GENERATION_ATTEMPTS = 3
 _PUBLIC_EXHAUSTION_CODE = "automatic_generation_needs_manual_authoring"
 
 
@@ -66,7 +65,7 @@ def generate_and_validate_revision(
     observations_by_id = {observation.id: observation for observation in observations}
     last_failure: V3Failure | None = None
 
-    for _ in range(_MAX_CANDIDATE_GENERATION_ATTEMPTS):
+    for _ in range(get_settings().meta_draft_generation_max_attempts):
         proposal = propose_template_draft(
             fingerprint,
             observations,
