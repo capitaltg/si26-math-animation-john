@@ -307,13 +307,22 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
                 status_code=422, detail="Expected result does not match answer expression"
             )
 
+        # Only an actual change to the fixture's params stales the render
+        # evidence. Supplying the human-verified answer for UNCHANGED params
+        # is a confirmation, not a new candidate -- it must not destroy the
+        # `structural_check_passed` / validation / quality / preview evidence
+        # that approval precondition 8 requires, or no production path could
+        # ever both confirm an answer and stay approvable. Compare parsed
+        # values (not the raw JSON string) so key order or numeric formatting
+        # differences can never masquerade as a real change.
+        if request.params != json.loads(fixture.params_json):
+            fixture.structural_check_passed = None
+            fixture.structural_check_detail = None
+            draft.validation_report_json = None
+            draft.quality_report_json = None
+            draft.preview_artifact_hash = None
         fixture.params_json = json.dumps(request.params)
         fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
-        fixture.structural_check_passed = None
-        fixture.structural_check_detail = None
-        draft.validation_report_json = None
-        draft.quality_report_json = None
-        draft.preview_artifact_hash = None
         draft.updated_at = datetime.now(timezone.utc)
         session.flush()
 

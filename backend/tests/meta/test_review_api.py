@@ -27,9 +27,9 @@ from app.meta.fingerprint import Fingerprint
 from app.meta.generation_pipeline import run_generation_job
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3Failure, V3ValidationError
-from app.meta.v3.quality import validate_static_quality
+from app.meta.v3.quality import QualityCheck, QualityReport, validate_static_quality
 from app.meta.validation import FixtureCheckResult
-from app.meta.validation_pipeline import ValidatedCandidate
+from app.meta.validation_pipeline import ValidatedCandidate, validate_candidate
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 
@@ -580,6 +580,78 @@ def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
     assert fixture["expected_result"] is None
 
 
+def test_update_fixture_confirming_unchanged_params_preserves_approval_evidence(client, pending_v3_draft):
+    """Defect B: `update_fixture` is the only production writer of
+    expected_result_json, and unconditionally nulling structural_check_passed
+    and the three draft-level reports every time it runs means the one path
+    that can satisfy approval precondition 8 (a human-confirmed answer)
+    always breaks precondition 3/5 in the same transaction -- no production
+    draft could ever become approvable. Confirming the SAME params must
+    preserve all four, since nothing about the rendered candidate changed."""
+    draft_id = pending_v3_draft.id
+    before = client.get(f"/meta/drafts/{draft_id}").json()
+    fixture = before["fixtures"][0]
+    assert fixture["observation_id"] == "obs-evidence"
+    assert fixture["params"] == {"a": 3, "b": 5, "c": 9}
+    assert fixture["structural_check_passed"] is True
+    assert before["validation_report"] is not None
+    assert before["quality_report"] is not None
+    assert before["preview_url"] is not None
+
+    response = client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"a": 3, "b": 5, "c": 9}, "expected_result": {"answer": "9"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["structural_check_passed"] is True
+
+    after = client.get(f"/meta/drafts/{draft_id}").json()
+    assert after["validation_report"] == before["validation_report"]
+    assert after["quality_report"] == before["quality_report"]
+    assert after["preview_url"] == before["preview_url"]
+
+
+def test_update_fixture_reordered_or_reformatted_params_count_as_unchanged(client, pending_v3_draft):
+    """Params that differ only in JSON key order (or, equivalently, numeric
+    formatting like 9 vs 9.0) must not masquerade as a real change -- the
+    comparison must be over parsed values, not the raw JSON string."""
+    draft_id = pending_v3_draft.id
+    before = client.get(f"/meta/drafts/{draft_id}").json()
+    fixture = before["fixtures"][0]
+
+    response = client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"c": 9, "a": 3, "b": 5}, "expected_result": {"answer": "9"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["structural_check_passed"] is True
+
+    after = client.get(f"/meta/drafts/{draft_id}").json()
+    assert after["validation_report"] == before["validation_report"]
+    assert after["quality_report"] == before["quality_report"]
+    assert after["preview_url"] == before["preview_url"]
+
+
+def test_update_fixture_changed_params_still_invalidates_approval_evidence(client, pending_v3_draft):
+    """The narrowed invalidation must keep Task 10's fail-closed behavior
+    exactly for an actual params change (not just widen it to never fire)."""
+    draft_id = pending_v3_draft.id
+    fixture = client.get(f"/meta/drafts/{draft_id}").json()["fixtures"][0]
+
+    response = client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"a": 4, "b": 5, "c": 9}, "expected_result": {"answer": "9"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["structural_check_passed"] is None
+    assert response.json()["structural_check_detail"] is None
+
+    after = client.get(f"/meta/drafts/{draft_id}").json()
+    assert after["validation_report"] is None
+    assert after["quality_report"] is None
+    assert after["preview_url"] is None
+
+
 def test_update_fixture_rejects_edit_on_approved_draft_without_mutation(client):
     draft = _seed_pending_review_draft()
     fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
@@ -679,6 +751,88 @@ def test_approve_success_returns_200_and_publishes_version(approval_client):
         assert version.id == body["template_version_id"]
         reloaded_draft = session.get(models.TemplateDraft, draft_id)
         assert reloaded_draft.status == models.DRAFT_APPROVED
+
+
+def test_approve_succeeds_after_confirming_a_fixture_through_the_real_production_pipeline(
+    approval_client, monkeypatch, tmp_path,
+):
+    """The required end-to-end proof: walks the real production path --
+    ``validate_candidate()`` (the actual production builder, not a hand-built
+    ``ValidatedCandidate`` literal) -> ``persist_reviewable_draft()`` ->
+    ``update_fixture()`` to confirm the human-verified answer for UNCHANGED
+    params -> ``approve_draft_service()``. This single test fails if either
+    defect A or defect B is reintroduced:
+      - defect A: if ``build_validation_report`` ever again drops (or
+        mismatches) ``artifact_hash``, approval 422s at precondition 4
+        ("Validation report is stale: artifact hash mismatch");
+      - defect B: if ``update_fixture`` ever again unconditionally nulls
+        ``structural_check_passed``/``validation_report_json``/
+        ``quality_report_json``/``preview_artifact_hash`` even for an
+        unchanged-params confirmation, approval 422s at precondition 3
+        ("Draft has no passing validation report").
+    (Defect C is proven separately at the render-probe layer in
+    ``test_dynamic_render_worker.py``, since this plan's "label" visual has
+    no dimension relations to observe.)
+    """
+    monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+    get_settings.cache_clear()
+    # Only the expensive manim subprocess is mocked (matching
+    # test_validation_pipeline.py's `passing_render_probe` fixture) -- every
+    # other step, including report assembly, runs the real production code.
+    monkeypatch.setattr(
+        "app.meta.validation_pipeline.render_preview_and_probe",
+        lambda *args, **kwargs: ("sha256:e2e-preview", {"probe": "complete"}),
+    )
+    monkeypatch.setattr(
+        "app.meta.validation_pipeline.validate_rendered_quality",
+        lambda probe: QualityReport(True, [
+            QualityCheck("render_probe_complete", True, "probe", "passed"),
+        ]),
+    )
+
+    observation_id = "obs-e2e"
+    with db.meta_session() as session:
+        session.add(models.FallbackObservation(
+            id=observation_id, candidate_id="cand-e2e", source_excerpt="there are 5 apples",
+            grade_level=2, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        ))
+        job = models.GenerationJob(
+            id="job-e2e", fingerprint_key="k-e2e", fingerprint_version=1,
+            fingerprint_json=_sample_fingerprint_json(), trigger_observation_ids=json.dumps([observation_id]),
+            status=models.JOB_SUCCEEDED, created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+        session.flush()
+
+        observation = session.get(models.FallbackObservation, observation_id)
+        candidate = validate_candidate(
+            _proposal(observation_id),
+            observations_by_id={observation_id: observation},
+            artifact_root=tmp_path / "artifacts",
+            compile_context=CompileContext(concept_family="review_api_e2e", grade_band="K-2"),
+        )
+        draft = persist_reviewable_draft(
+            session, new_id="draft-e2e", job=job, candidate=candidate, now=_now(),
+        )
+        draft_id = draft.id
+
+    detail = approval_client.get(f"/meta/drafts/{draft_id}").json()
+    fixture = next(f for f in detail["fixtures"] if f["observation_id"] == observation_id)
+    assert fixture["params"] == {"n": 5}
+
+    confirm = approval_client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"n": 5}, "expected_result": {"answer": "5"}},
+    )
+    assert confirm.status_code == 200
+    assert confirm.json()["structural_check_passed"] is True
+
+    approve = approval_client.post(
+        f"/meta/drafts/{draft_id}/approve",
+        json={"template_name": "e2e_apples", "math_semantics_confirmed": True},
+    )
+    assert approve.status_code == 200, approve.json()
+    assert approve.json()["status"] == "enabled"
 
 
 def test_approve_unconfirmed_semantics_returns_422(approval_client):

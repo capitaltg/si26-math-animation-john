@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -129,6 +130,38 @@ def test_validate_candidate_builds_a_passing_in_memory_v3_candidate(tmp_path, pa
     assert candidate.quality_report["passed"] is True
     assert candidate.quality_report["artifact_hash"].startswith("sha256:")
     assert len(candidate.fixture_results) == 3
+    # Defect A: approval precondition 4 (app/meta/approval.py) compares
+    # validation_report["artifact_hash"] to draft.artifact_hash, which is
+    # populated from quality_report["artifact_hash"] (drafts.py:65). If the
+    # production builder ever stops writing this key -- or writes a second,
+    # independently-computed hash -- every real draft becomes unapprovable
+    # even though both reports passed. This must be the *same* hash, not
+    # merely present.
+    assert candidate.validation_report["artifact_hash"] == candidate.quality_report["artifact_hash"]
+
+
+def test_build_validation_report_embeds_the_supplied_artifact_hash():
+    # Direct unit test of the production report builder (not a hand-built
+    # report literal): if `artifact_hash` were ever dropped from the return
+    # value, approval precondition 4 would 422 every real draft with
+    # "Validation report is stale: artifact hash mismatch".
+    from app.meta.validation_pipeline import build_validation_report
+    from app.meta.validation import FixtureCheckResult
+
+    compiled = SimpleNamespace(known_fields=frozenset({"length", "width"}))
+    fixture_results = [
+        FixtureCheckResult("fixture-0", True, "accepted"),
+        FixtureCheckResult("fixture-1", True, "rejected", frozenset({0})),
+    ]
+
+    report = build_validation_report(
+        compiled=compiled,
+        fixture_results=fixture_results,
+        preview_artifact_hash="sha256:preview",
+        artifact_hash="sha256:candidate",
+    )
+
+    assert report["artifact_hash"] == "sha256:candidate"
 
 
 def test_invalid_candidate_creates_no_draft(session, tmp_path, passing_render_probe):

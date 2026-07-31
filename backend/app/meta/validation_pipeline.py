@@ -79,15 +79,17 @@ def validate_candidate(
     rendered_quality = validate_rendered_quality(probe)
     rendered_quality.require_passed()
 
+    artifact_hash = compute_candidate_hash(proposal, scene_program)
     validation_report = build_validation_report(
         compiled=compiled,
         fixture_results=fixture_results,
         preview_artifact_hash=preview_hash,
+        artifact_hash=artifact_hash,
     )
     quality_report = merge_quality_reports(
         static_quality,
         rendered_quality,
-        artifact_hash=compute_candidate_hash(proposal, scene_program),
+        artifact_hash=artifact_hash,
     )
     return ValidatedCandidate(
         proposal=proposal,
@@ -99,7 +101,9 @@ def validate_candidate(
     )
 
 
-def build_validation_report(*, compiled, fixture_results, preview_artifact_hash: str) -> dict:
+def build_validation_report(
+    *, compiled, fixture_results, preview_artifact_hash: str, artifact_hash: str
+) -> dict:
     coverage = sorted({
         index
         for result in fixture_results
@@ -117,6 +121,11 @@ def build_validation_report(*, compiled, fixture_results, preview_artifact_hash:
         "renderer_version": DYNAMIC_RENDERER_VERSION,
         "negative_predicate_coverage": coverage,
         "known_fields": sorted(compiled.known_fields),
+        # Approval precondition 4 (app/meta/approval.py) compares this to
+        # draft.artifact_hash to prove the report validated the exact
+        # artifact on the draft -- must be the same hash merge_quality_reports
+        # embeds, not a second, independently-computed one.
+        "artifact_hash": artifact_hash,
     }
 
 

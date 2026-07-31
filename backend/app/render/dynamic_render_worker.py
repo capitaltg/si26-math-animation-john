@@ -11,6 +11,15 @@ from app.meta.v3.resolver import resolve_scene
 
 VALID_MODES = {"full", "thumbnail", "probe"}
 
+# Semantic parts that name a rectangle's length/width dimension edges (see
+# `app/meta/v3/rectangle_measurement.py`) -- these are the typed targets a
+# compiled program actually emits for a length/width callout. No compiled
+# relation ref ever contains the substring "dimension" (the beat expander
+# names callout relations `callout_{beat}_{action}` or `median_callout`;
+# see `app/meta/v3/beat_expander.py`), so identification must key off the
+# relation's typed target part instead of the free-form ref string.
+_DIMENSION_TARGET_PARTS = frozenset({"length_edge", "width_edge"})
+
 
 def main() -> None:
     program_path, known_fields_path, values_path, output_path_str, mode, scratch_dir_str = sys.argv[1:7]
@@ -178,7 +187,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         if relation.ref not in observed_relation_refs:
             continue
         target_anchor = _target_label(relation_specs[relation.ref].target)
-        target_mobject = scene.rendered.targets[_target_key(relation_specs[relation.ref].target)]
+        target_mobject = _rendered_target_mobject(scene, resolved, relation_specs[relation.ref].target)
         target = _pixel_array_point(_mobject_anchor(target_mobject, relation_specs[relation.ref].target.anchor), width, height)
         anchors[target_anchor] = target
         mobject = scene.rendered.relations[relation.ref]
@@ -193,8 +202,15 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     path_events = [event["path_ref"] for event in scene.render_events if event["path_ref"] is not None]
     state_events = _state_events(scene.render_events, resolved)
     dimensions = {
-        relation.ref: {"passed": _point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02}
-        for relation in program.relations if "dimension" in relation.ref
+        # bool(...): the coordinates flowing into `_point_distance` originate
+        # from manim/numpy mobject geometry, so the comparison can yield a
+        # numpy.bool_ instead of a native bool -- not JSON-serializable. This
+        # dict comprehension was previously always empty (no compiled ref
+        # ever matched the old "dimension" substring filter), so the
+        # coercion was never exercised until real dimension relations
+        # started flowing through it.
+        relation.ref: {"passed": bool(_point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02)}
+        for relation in program.relations if relation.target.part in _DIMENSION_TARGET_PARTS
         for relation_data in [relations.get(relation.ref, {})]
         if relation_data
     }
@@ -214,7 +230,10 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
             action.action.path_ref for action in resolved.timeline if action.action.kind in {"trace", "move"}
         ],
         "dimension_anchor_checks": dimensions,
-        "declared_dimension_anchors": [relation.ref for relation in program.relations if "dimension" in relation.ref],
+        "declared_dimension_anchors": [
+            relation.ref for relation in program.relations
+            if relation.target.part in _DIMENSION_TARGET_PARTS
+        ],
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),
         "final_answer_visible": scene.final_answer_visible,
@@ -297,6 +316,31 @@ def _mobject_has_color(mobject, expected) -> bool:
 
 def _target_key(target):
     return target.visual_ref, target.part, target.index
+
+
+def _rendered_target_mobject(scene, resolved, target):
+    """Find the actually-rendered mobject a relation's typed target anchors to.
+
+    The renderer only builds child mobjects for a subset of a visual's
+    declared semantic parts (e.g. a rectangle's "edge" parts, not its
+    "length_edge"/"width_edge" aliases -- see `rectangle_measurement.py`
+    and `app/meta/v3/renderer.py`), so a target naming an alias part has no
+    direct entry in `scene.rendered.targets`. Resolve it by matching the
+    alias's declared geometry against every part of the same visual that
+    *did* get rendered, so the probe still OBSERVES a real rendered
+    mobject -- never fabricating one from program data -- instead of
+    crashing on parts the renderer never names as such.
+    """
+    key = _target_key(target)
+    if key in scene.rendered.targets:
+        return scene.rendered.targets[key]
+    visual = resolved.visual(target.visual_ref)
+    alias_bounds = visual.measured.parts[(target.part, target.index)].bounds
+    for (part, index), semantic_part in visual.measured.parts.items():
+        candidate_key = (target.visual_ref, part, index)
+        if semantic_part.bounds == alias_bounds and candidate_key in scene.rendered.targets:
+            return scene.rendered.targets[candidate_key]
+    raise KeyError(key)
 
 
 def _mobject_anchor(mobject, anchor):

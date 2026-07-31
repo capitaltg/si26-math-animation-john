@@ -20,7 +20,10 @@ from app.meta.models import (
     TEMPLATE_VERSION_ENABLED,
     TEMPLATE_VERSION_REVOKED,
 )
+from app.meta.draft_generation import ProposedFixture
 from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.validation import compile_draft_documents, validate_proposed_fixtures
+from app.meta.validation_pipeline import build_validation_report
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 import app.meta.approval as approval
@@ -250,6 +253,50 @@ def test_approve_publishes_enabled_version_and_durable_review(engine, session):
     assert reviews[0].reviewer_label == "dev"
     assert reviews[0].math_semantics_confirmed is True
     check.close()
+
+
+def test_approve_succeeds_with_a_validation_report_built_by_the_production_builder(engine, session):
+    """Defect A: every other test in this file seeds validation_report_json
+    with a hand-built dict shaped like ``build_validation_report``'s output --
+    a shape production never actually emits (the real builder didn't even
+    write an ``artifact_hash`` key). A test that constructs its own report
+    literal cannot catch that class of regression. This one instead calls
+    ``build_validation_report`` -- the exact function ``validate_candidate``
+    calls -- against the draft's own compiled documents and real fixture
+    results, so it fails immediately if the production builder ever again
+    stops writing (or duplicates with a different value) the artifact_hash
+    precondition 4 checks."""
+    draft = _seed_draft(session, draft_id="draft-1", include_report=False)
+
+    params_document = ParamsDocument.model_validate(json.loads(draft.params_document_json))
+    guard_document = GuardDocument.model_validate(json.loads(draft.guard_document_json))
+    answer_expression = FieldRefNode.model_validate(json.loads(draft.answer_expression_json))
+    plan = TeachingPlanDocument.model_validate(json.loads(draft.teaching_plan_json))
+    compiled = compile_draft_documents(params_document, guard_document, answer_expression, plan)
+
+    fixtures = [
+        ProposedFixture(
+            kind="positive", expected_outcome="accept",
+            observation_id="obs-draft-1-0", params={"n": 5},
+        ),
+        ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
+    ]
+    fixture_results = validate_proposed_fixtures(fixtures, compiled, observations_by_id={})
+
+    report = build_validation_report(
+        compiled=compiled,
+        fixture_results=fixture_results,
+        preview_artifact_hash="preview-hash",
+        artifact_hash=draft.artifact_hash,
+    )
+    draft.validation_report_json = json.dumps(report)
+    session.commit()
+
+    version = approve_draft_service(
+        draft_id="draft-1", template_name="apples_count",
+        reviewer_label="dev", math_semantics_confirmed=True,
+    )
+    assert version.status == TEMPLATE_VERSION_ENABLED
 
 
 # ------------------------------------------------ preconditions (in order)
