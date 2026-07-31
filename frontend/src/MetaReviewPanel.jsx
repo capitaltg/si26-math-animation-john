@@ -93,13 +93,6 @@ function formatBeat(beat) {
   return `${capitalize(beat.kind)} · ${beat.intent}`
 }
 
-// The API exposes the compiled timeline (each timed action's at_seconds/
-// duration_seconds) rather than a separate total-duration field, so the
-// panel derives the scene's total compiled duration from it directly.
-function totalTimelineSeconds(timeline) {
-  return timeline.reduce((max, entry) => Math.max(max, entry.at_seconds + entry.duration_seconds), 0)
-}
-
 // Trim trailing zeros: 8 seconds, not 8.0 seconds; 7.5 seconds, not 7.50.
 function formatSeconds(seconds) {
   return `${Number(seconds.toFixed(2))} seconds`
@@ -357,7 +350,7 @@ export default function MetaReviewPanel() {
   const guardFixtures = selected ? selected.fixtures.filter((f) => f.kind !== 'positive') : []
   const validationPassed = selected?.validation_report?.passed === true
   const passingQualityLabels = passingQualityCategoryLabels(selected?.quality_report)
-  const totalDurationSeconds = selected ? totalTimelineSeconds(selected.timeline) : 0
+  const totalDurationSeconds = selected?.total_duration_seconds ?? 0
   const canApprove = Boolean(
     selected
     && selected.status === 'pending_review'

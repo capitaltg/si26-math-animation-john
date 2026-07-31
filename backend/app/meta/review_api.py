@@ -86,6 +86,7 @@ class DraftDetailOut(BaseModel):
     answer_expression: dict
     teaching_plan: dict
     timeline: list[dict]
+    total_duration_seconds: float
     quality_report: dict | None
     classifier_bullet: str
     artifact_hash: str
@@ -157,7 +158,14 @@ def _fixture_out(session, fixture: TemplateDraftFixture) -> FixtureOut:
 def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
     fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
     preview_url = f"/meta/preview/{draft.preview_artifact_hash}" if draft.preview_artifact_hash else None
-    timeline = json.loads(draft.scene_program_json).get("timeline", []) if draft.scene_program_json else []
+    # scene_program_json is nullable at the DB level (a draft can, in
+    # principle, exist before a scene program is compiled for it), so this
+    # falls back to an empty timeline and a 0-second duration rather than
+    # crashing detail serialization -- consistent with "nothing compiled yet"
+    # rather than fabricating a fake duration.
+    scene_program = json.loads(draft.scene_program_json) if draft.scene_program_json else {}
+    timeline = scene_program.get("timeline", [])
+    total_duration_seconds = scene_program.get("total_duration_seconds", 0.0)
     return DraftDetailOut(
         id=draft.id, fingerprint_key=draft.fingerprint_key, revision=draft.revision,
         status=draft.status, params_document=json.loads(draft.params_document_json),
@@ -165,6 +173,7 @@ def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
         answer_expression=json.loads(draft.answer_expression_json),
         teaching_plan=json.loads(draft.teaching_plan_json),
         timeline=timeline,
+        total_duration_seconds=total_duration_seconds,
         quality_report=json.loads(draft.quality_report_json) if draft.quality_report_json else None,
         classifier_bullet=draft.classifier_bullet, artifact_hash=draft.artifact_hash,
         validation_report=json.loads(draft.validation_report_json) if draft.validation_report_json else None,

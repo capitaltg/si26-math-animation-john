@@ -32,9 +32,17 @@ const draftDetail = {
       { id: 'conclude', kind: 'conclude', intent: 'state the fraction shown' },
     ],
   },
+  // Each timed action's duration_seconds must stay <= MAX_ACTION_SECONDS
+  // (2.0, backend/app/meta/dsl/scene_program.py) -- a real compiled scene
+  // program can never have a single 6-second action. total_duration_seconds
+  // is declared separately and deliberately does not equal the timeline's
+  // own max end (0 + 2, then 2 + 1.5 = 3.5), the same way a real compiled
+  // scene's declared total is a beat-budget sum, not a max-end derivation.
   timeline: [
-    { at_seconds: 0, duration_seconds: 6, beat_id: 'reveal' },
+    { at_seconds: 0, duration_seconds: 2, beat_id: 'reveal' },
+    { at_seconds: 2, duration_seconds: 1.5, beat_id: 'conclude' },
   ],
+  total_duration_seconds: 6,
   quality_report: { passed: true, checks: [] },
   classifier_bullet: 'use for fraction-of-whole bars',
   artifact_hash: 'sha256:abc',
@@ -67,9 +75,17 @@ const v3DraftDetail = {
       { id: 'conclude', kind: 'conclude', intent: 'state the largest value' },
     ],
   },
+  // Three schema-legal actions (each <= MAX_ACTION_SECONDS = 2.0) whose max
+  // end (0 + 2, 2 + 2, 4 + 1.5 = 5.5) is deliberately different from the
+  // declared total_duration_seconds below (7.5) -- this is the case that
+  // catches a panel that derives the total from timeline entries instead of
+  // reading the field the backend declares (Task 12 review finding #1).
   timeline: [
-    { at_seconds: 0, duration_seconds: 7.5, beat_id: 'reveal_values' },
+    { at_seconds: 0, duration_seconds: 2, beat_id: 'reveal_values' },
+    { at_seconds: 2, duration_seconds: 2, beat_id: 'focus_largest' },
+    { at_seconds: 4, duration_seconds: 1.5, beat_id: 'conclude' },
   ],
+  total_duration_seconds: 7.5,
   quality_report: {
     passed: true,
     checks: [

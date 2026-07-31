@@ -470,6 +470,14 @@ def test_draft_detail_returns_v3_review_evidence(client, pending_v3_draft):
     assert detail["timeline"][0]["beat_id"] == "reveal_values"
     assert detail["quality_report"]["passed"] is True
     assert "animation_document" not in detail
+    # The API must forward the compiler's *declared* total_duration_seconds,
+    # not a value derived from the timeline entries: each TimedAction's
+    # duration_seconds is independently clamped to MAX_ACTION_SECONDS (2.0s),
+    # so summing/maxing timeline entries can undercount the real total and
+    # even report a scene as shorter than the 6-second floor when it is not.
+    real_scene_program = json.loads(pending_v3_draft.scene_program_json)
+    assert detail["total_duration_seconds"] == real_scene_program["total_duration_seconds"]
+    assert 6.0 <= detail["total_duration_seconds"] <= 12.0
 
 
 @pytest.mark.parametrize(
