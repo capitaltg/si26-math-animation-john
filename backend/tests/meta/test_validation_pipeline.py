@@ -100,6 +100,20 @@ def _observation():
 
 @pytest.fixture
 def passing_render_probe(monkeypatch):
+    """Stub out BOTH halves of the rendered-quality step, not just the renderer.
+
+    `render_preview_and_probe` is replaced to avoid the expensive manim probe
+    subprocess, and it returns the sentinel manifest `{"probe": "complete"}`.
+    `validate_rendered_quality` must therefore be stubbed too: that sentinel is
+    not real probe output and would fail `check_manifest_contract` outright, so
+    the second stub is load-bearing rather than belt-and-braces.
+
+    Consequence: tests using this fixture do NOT cover the rendered-quality
+    gate -- they cover everything around it (compilation, fixture validation,
+    report assembly, artifact hashing). The gate's own coverage is
+    `tests/meta/v3/test_render_probe.py`, plus `test_demo_end_to_end.py` and
+    `test_v3_demo_quality.py`, which run a real probe subprocess.
+    """
     monkeypatch.setattr(
         "app.meta.validation_pipeline.render_preview_and_probe",
         lambda *args, **kwargs: ("sha256:preview", {"probe": "complete"}),

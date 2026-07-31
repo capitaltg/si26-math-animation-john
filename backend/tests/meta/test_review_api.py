@@ -797,9 +797,21 @@ def test_approve_succeeds_after_confirming_a_fixture_through_the_real_production
     """
     monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
     get_settings.cache_clear()
-    # Only the expensive manim subprocess is mocked (matching
-    # test_validation_pipeline.py's `passing_render_probe` fixture) -- every
-    # other step, including report assembly, runs the real production code.
+    # TWO stubs are installed here, not one (same pair as
+    # test_validation_pipeline.py's `passing_render_probe` fixture):
+    #   1. `render_preview_and_probe` -- replaces the expensive manim probe
+    #      subprocess with the sentinel manifest `{"probe": "complete"}`.
+    #   2. `validate_rendered_quality` -- stubbed *because of* (1). That
+    #      sentinel is not real probe output and would fail
+    #      `check_manifest_contract` outright, so this stub is load-bearing:
+    #      without it nothing past preview would run at all.
+    # So the rendered-quality gate is REPLACED here, not merely its renderer.
+    # This test's value is the API/persistence path: compilation, fixture
+    # validation, validation- and quality-report assembly, `persist_reviewable_
+    # draft`, `update_fixture` and the entire approval transaction all run the
+    # real production code. Real rendered-gate coverage lives in
+    # `tests/meta/v3/test_render_probe.py` and, against a real probe
+    # subprocess, in `test_demo_end_to_end.py` / `test_v3_demo_quality.py`.
     monkeypatch.setattr(
         "app.meta.validation_pipeline.render_preview_and_probe",
         lambda *args, **kwargs: ("sha256:e2e-preview", {"probe": "complete"}),
