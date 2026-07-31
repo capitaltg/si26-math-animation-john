@@ -3,10 +3,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.fingerprint import Fingerprint
 from app.meta.models import FallbackObservation
 from app.pipeline.bedrock_client import call_with_tool
@@ -30,40 +30,31 @@ class DraftProposal(BaseModel):
     params_document: ParamsDocument
     guard_document: GuardDocument
     answer_expression: ExpressionNode
-    animation_document: AnimationDocument
+    teaching_plan_document: TeachingPlanDocument
     classifier_bullet: str = Field(max_length=MAX_CLASSIFIER_BULLET_LENGTH)
     fixtures: list[ProposedFixture] = Field(min_length=MIN_PROPOSED_FIXTURES, max_length=MAX_PROPOSED_FIXTURES)
 
 
 _DRAFT_SYSTEM_PROMPT = (
-    "You propose a declarative K-8 math animation template by calling the "
+    "You propose a declarative K-8 math teaching template by calling the "
     "propose_template_draft tool. Output only bounded JSON: a params field "
     "schema, guard predicates over a closed expression DSL, one answer "
-    "expression computing the correct numeric result from params, an "
-    "animation document built only from the closed library of layout/visual/"
-    "animation primitives already described in the tool schema, one "
+    "expression computing the correct numeric result from params, "
+    "a semantic teaching plan, one "
     "classifier contract bullet describing when this template applies, and "
     "example fixtures (positive/negative/boundary) with the params values "
     "that make each fixture true. Never invent a field type, predicate, or "
-    "animation node kind outside the schema. Never emit prose, code, "
+    "teaching-plan node kind outside the schema. Never emit prose, code, "
     "imports, or file paths. A fixture's observation_id must be one of the "
     "candidate ids given to you, or null.\n\n"
-    "The animation document MUST actually display its content over time, or it "
-    "renders a blank frame and cannot be published. Layout and visual nodes "
-    "(row, column, label, grid, tally_marks, object_set, ...) only BUILD a "
-    "mobject; they do not show it. Every visual you want on screen must be "
-    "given a 'ref' and then revealed by an 'appear' node targeting that ref, "
-    "held on screen with a 'wait' node. Structure the animation as a "
-    "'sequence' whose steps interleave building a visual, an 'appear' of it, "
-    "and a 'wait'. Include at least one 'appear' and at least one 'wait'; an "
-    "animation with no appear/wait nodes is invalid.\n\n"
-    "A sequence controls time, not spatial position. Manim places independently "
-    "built visuals at the frame center, so appearing several independent sequence "
-    "children makes them overlap. When displaying more than one persistent visual, "
-    "build every appeared visual inside one shared row, column, overlay, align, or "
-    "padding layout tree. You may progressively appear positioned descendants of "
-    "that shared tree. Do not create multiple independent layout trees for visuals "
-    "that remain on screen together.\n\n"
+    "The teaching_plan_document MUST use plan_version 3 and describe three to "
+    "five teaching beats. Prefer semantic strategy over custom actions, and use "
+    "custom actions only inside their owning beat. All answer-related visuals "
+    "start neutral, and the final evaluated answer is introduced only during "
+    "conclude. Simple collections reveal together. Perimeter explanations use "
+    "boundary_trace. Median ordered values use item-specific targets. Never "
+    "include URLs, raw controls, positions, durations beyond requested bounded "
+    "actions, colors, code, renderer objects, or Manim concepts.\n\n"
     "Provide at least one 'positive' fixture whose observation_id references a "
     "given candidate id and whose params are the exact values stated in that "
     "candidate's excerpt -- this is the fixture a human verifies before "
@@ -77,8 +68,10 @@ _DRAFT_SYSTEM_PROMPT = (
 
 
 _STRUCTURED_PROPOSAL_FIELDS = (
-    "params_document", "guard_document", "answer_expression", "animation_document", "fixtures",
+    "params_document", "guard_document", "answer_expression", "teaching_plan_document", "fixtures",
 )
+
+_STABLE_REPAIR_FEEDBACK_FIELDS = ("code", "path", "hint")
 
 
 def _coerce_stringified_json_fields(raw: dict) -> dict:
@@ -113,21 +106,33 @@ def _observation_context(observations: list[FallbackObservation]) -> str:
     return "\n".join(lines)
 
 
+def _reviewer_feedback_context(reviewer_feedback: str | dict[str, object]) -> str:
+    if isinstance(reviewer_feedback, str):
+        return reviewer_feedback
+    normalized = {}
+    for field in _STABLE_REPAIR_FEEDBACK_FIELDS:
+        value = reviewer_feedback.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("structured reviewer feedback requires code, path, and hint")
+        normalized[field] = value.strip()
+    return json.dumps(normalized, separators=(",", ":"), sort_keys=True)
+
+
 def propose_template_draft(
     fingerprint: Fingerprint,
     observations: list[FallbackObservation],
     *,
     prior_proposal: DraftProposal | None = None,
-    reviewer_feedback: str | None = None,
+    reviewer_feedback: str | dict[str, object] | None = None,
 ) -> DraftProposal:
     user_message = (
         f"fingerprint={fingerprint.model_dump_json()}\n\n"
         f"observations:\n{_observation_context(observations)}"
     )
-    if prior_proposal is not None and reviewer_feedback:
+    if prior_proposal is not None and reviewer_feedback is not None:
         user_message += (
             f"\n\nprior proposal:\n{prior_proposal.model_dump_json()}"
-            f"\n\nreviewer feedback to address:\n{reviewer_feedback}"
+            f"\n\nreviewer feedback to address:\n{_reviewer_feedback_context(reviewer_feedback)}"
         )
     _, raw = call_with_tool(
         system_prompt=_DRAFT_SYSTEM_PROMPT,
@@ -135,6 +140,8 @@ def propose_template_draft(
         tools=[{"name": "propose_template_draft", "schema": DraftProposal.model_json_schema()}],
     )
     proposal = DraftProposal.model_validate(_coerce_stringified_json_fields(raw))
+    if proposal.teaching_plan_document.plan_version != 3:
+        raise ValueError("generated teaching_plan_document must use plan_version 3")
     observation_ids = {observation.id for observation in observations}
     for fixture in proposal.fixtures:
         if fixture.observation_id is not None and fixture.observation_id not in observation_ids:

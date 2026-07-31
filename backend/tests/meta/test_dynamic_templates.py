@@ -5,10 +5,11 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from app.meta import db
-from app.meta.dsl.animation import AnimationDocument, LabelNode
 from app.meta.dsl.expression import FieldRefNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.v3_common import CompileContext
 from app.meta.models import (
     JOB_SUCCEEDED,
     TEMPLATE_VERSION_DISABLED,
@@ -18,6 +19,7 @@ from app.meta.models import (
     TemplateDraft,
     TemplateVersion,
 )
+from app.meta.v3.compiler import compile_teaching_plan
 
 # Same local engine/session fixture pattern used across tests/meta/ (see
 # test_approval.py, test_validation_pipeline.py, test_drafts.py, test_models.py) --
@@ -49,25 +51,62 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+_MEDIAN_FIELDS = [f"v{index}" for index in range(1, 8)]
+
+
+def _median_teaching_plan():
+    # The same "identify the median of seven ordered values" plan validated
+    # end-to-end in tests/render/test_dynamic_render_worker.py -- it compiles to
+    # a scene program with a "median_callout" relation targeting
+    # values.item[3].bottom, which is exactly the item-specific anchor the
+    # Task 11 reuse test below checks resolves correctly for every params set.
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [{"node": "field_ref", "field": name} for name in _MEDIAN_FIELDS],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "dynamic-templates-test",
+    })
+
+
 def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid", status=TEMPLATE_VERSION_ENABLED):
     now = _now()
     # Built from real DSL document models (not hand-rolled dicts) so the fixture
-    # can't silently drift from the actual schemas -- LabelNode.text is a plain
-    # `str` (not an ExpressionNode) and AnimationDocument forbids extra fields
-    # (no top-level total_duration_seconds; that's computed by compile_animation_document).
+    # can't silently drift from the actual schemas.
     params_document = ParamsDocument(
         params_version=1,
         fields=[
-            IntegerFieldSpec(name="a", label="A", description="", minimum=1, maximum=20),
-            IntegerFieldSpec(name="b", label="B", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name=name, label=name.upper(), description="", minimum=1, maximum=100)
+            for name in _MEDIAN_FIELDS
         ],
     )
     guard_document = GuardDocument(
         guard_version=1,
-        predicates=[PositivePredicate(value=FieldRefNode(field="a"))],
+        predicates=[PositivePredicate(value=FieldRefNode(field="v1"))],
     )
-    answer_expression = FieldRefNode(field="a")
-    animation_document = AnimationDocument(root=LabelNode(text="a dynamic template", style="primary"))
+    answer_expression = FieldRefNode(field="v4")
+    teaching_plan_document = _median_teaching_plan()
+    scene_program = compile_teaching_plan(
+        teaching_plan_document,
+        answer_expression,
+        frozenset(_MEDIAN_FIELDS),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
 
     job = GenerationJob(
         id=f"job-{uuid4().hex}",
@@ -92,9 +131,10 @@ def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid",
         params_document_json=params_document.model_dump_json(),
         guard_document_json=guard_document.model_dump_json(),
         answer_expression_json=answer_expression.model_dump_json(),
-        animation_document_json=animation_document.model_dump_json(),
+        teaching_plan_json=teaching_plan_document.model_dump_json(),
+        scene_program_json=scene_program.model_dump_json(),
         classifier_bullet=f"- {template_name}: a test dynamic template.",
-        dsl_schema_versions_json='{"params": 1, "guard": 1, "animation": 1}',
+        dsl_schema_versions_json='{"params": 1, "guard": 1, "teaching_plan": 3, "scene": 3}',
         artifact_hash="sha256:draftx",
         status="approved",
         created_at=now,
@@ -200,10 +240,10 @@ def test_get_dynamic_template_loads_a_scene_and_params_class(session):
     scene_cls, params_cls = get_dynamic_template(ref)
 
     assert issubclass(scene_cls, DynamicTemplateScene)
-    assert scene_cls.compiled_animation is not None
+    assert scene_cls.scene_program is not None
     assert issubclass(params_cls, TemplateParamsBase)
-    params = params_cls(a=3, b=4)
-    assert params.a == 3
+    params = params_cls(v1=3, v2=5, v3=6, v4=8, v5=9, v6=12, v7=15)
+    assert params.v4 == 8
 
 
 def test_get_dynamic_template_is_cached_by_version_and_hash(session):
@@ -262,3 +302,41 @@ def test_get_dynamic_template_rejects_a_tampered_hash_after_cache_is_populated(s
 
     with pytest.raises(TemplateArtifactMismatchError):
         get_dynamic_template(tampered)
+
+
+def test_published_v3_template_resolves_layout_for_each_params_set(session):
+    """Task 11's reuse test: the same published template, resolved against two
+    different digit widths, must still produce a correctly item-specific anchor
+    (values.item[3].bottom) for its median callout -- layout is never cached or
+    baked in at publish time, it is resolved fresh for every params set."""
+    from app.meta.dynamic_scene import resolve_dynamic_scene
+    from app.meta.dynamic_templates import get_dynamic_template, resolve_dynamic_ref
+
+    _draft, version = _seed_draft_and_version(session, template_name="median_of_seven")
+    ref = resolve_dynamic_ref(session, "median_of_seven", version.id)
+    scene_cls, params_cls = get_dynamic_template(ref)
+
+    def _resolve_for_test(params):
+        # Delegates to the exact same resolution helper DynamicTemplateScene.construct()
+        # calls, so this test exercises production resolution logic rather than a
+        # parallel reimplementation of it.
+        return resolve_dynamic_scene(scene_cls.scene_program, params.model_dump())
+
+    first = _resolve_for_test(params_cls.model_validate(
+        {"v1": 3, "v2": 5, "v3": 6, "v4": 8, "v5": 9, "v6": 12, "v7": 15}
+    ))
+    second = _resolve_for_test(params_cls.model_validate(
+        {"v1": 10, "v2": 20, "v3": 30, "v4": 40, "v5": 50, "v6": 60, "v7": 70}
+    ))
+
+    assert first.relation("median_callout").target == first.anchor("values", "item", 3, "bottom")
+    assert second.relation("median_callout").target == second.anchor("values", "item", 3, "bottom")
+
+    # Prove the two params sets actually produce DIFFERENT geometry -- without
+    # this, a resolver that ignored `values` entirely (or served baked-in/
+    # fixture coordinates) would still pass both assertions above, since each
+    # only compares a resolution against itself. The 1-digit vs 2-digit values
+    # widen the rendered text differently, so real per-params-set re-resolution
+    # must shift these anchors; item[0] has the largest digit-width delta.
+    assert first.anchor("values", "item", 3, "bottom") != second.anchor("values", "item", 3, "bottom")
+    assert first.anchor("values", "item", 0, "bottom") != second.anchor("values", "item", 0, "bottom")

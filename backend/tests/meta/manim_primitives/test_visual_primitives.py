@@ -1,16 +1,20 @@
+from fractions import Fraction
+
 import pytest
-from manim import Dot, Line, Text
+from manim import Dot, Line, Rectangle, Text
 
 from app.meta.manim_primitives.visuals import (
     build_arrow,
     build_bar,
     build_brace,
+    build_rectangle,
     build_grid,
     build_label,
     build_number_line,
     build_object_set,
     build_shape_partition,
     build_tally_marks,
+    format_expression_value,
 )
 
 
@@ -70,3 +74,55 @@ def test_build_label_creates_text():
     label = build_label("hello")
     assert isinstance(label, Text)
     assert label.original_text == "hello"
+
+
+def test_format_expression_value_preserves_integer_and_fraction():
+    assert format_expression_value(Fraction(22, 1)) == "22"
+    assert format_expression_value(Fraction(3, 4)) == "3/4"
+
+
+def test_build_rectangle_preserves_ratio_and_labels_dimensions():
+    group = build_rectangle(Fraction(8), Fraction(3), unit="cm")
+    shapes = [m for m in group.submobjects if isinstance(m, Rectangle)]
+    texts = [m.original_text for m in group.submobjects if isinstance(m, Text)]
+    assert len(shapes) == 1
+    assert shapes[0].width / shapes[0].height == pytest.approx(8 / 3, rel=0.02)
+    assert "8 cm" in texts
+    assert "3 cm" in texts
+
+
+@pytest.mark.parametrize(
+    ("length", "width", "expected_ratio", "expected_labels"),
+    [
+        (
+            Fraction(1),
+            Fraction(1, 10**400),
+            4.0,
+            {"1 cm", f"1/{10**400} cm"},
+        ),
+        (
+            Fraction(1, 10**400),
+            Fraction(1),
+            0.25,
+            {f"1/{10**400} cm", "1 cm"},
+        ),
+    ],
+)
+def test_build_rectangle_clamps_extreme_ratios_without_losing_exact_dimension_labels(
+    length, width, expected_ratio, expected_labels
+):
+    group = build_rectangle(length, width, unit="cm")
+    rectangle = next(mobject for mobject in group.submobjects if isinstance(mobject, Rectangle))
+    labels = {mobject.original_text for mobject in group.submobjects if isinstance(mobject, Text)}
+
+    assert rectangle.width / rectangle.height == pytest.approx(expected_ratio, rel=0.02)
+    assert labels == expected_labels
+
+
+@pytest.mark.parametrize(
+    ("length", "width"),
+    [(Fraction(0), Fraction(3)), (Fraction(8), Fraction(-1))],
+)
+def test_build_rectangle_rejects_non_positive_dimensions(length, width):
+    with pytest.raises(ValueError, match="positive"):
+        build_rectangle(length, width)

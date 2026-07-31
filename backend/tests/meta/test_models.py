@@ -108,7 +108,7 @@ def test_template_draft_and_fixtures_insert(session):
     draft = models.TemplateDraft(
         id="draft-1", job_id="job-1", fingerprint_key="k1", fingerprint_version=1,
         fingerprint_json="{}", revision=1, params_document_json="{}",
-        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", teaching_plan_json="{}",
         classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
         status=models.DRAFT_GENERATED, created_at=_now(), updated_at=_now(),
     )
@@ -130,11 +130,17 @@ def test_template_draft_and_fixtures_insert(session):
     assert session.query(models.TemplateReview).count() == 1
 
 
+def test_template_draft_model_exposes_dedicated_v3_documents():
+    columns = set(models.TemplateDraft.__table__.c.keys())
+    assert {"teaching_plan_json", "scene_program_json", "quality_report_json"} <= columns
+    assert "animation_document_json" not in columns
+
+
 def test_template_draft_requires_known_job(session):
     session.add(models.TemplateDraft(
         id="draft-orphan", job_id="ghost-job", fingerprint_key="k1", fingerprint_version=1,
         fingerprint_json="{}", revision=1, params_document_json="{}", guard_document_json="{}",
-        answer_expression_json="{}", animation_document_json="{}", classifier_bullet="x",
+        answer_expression_json="{}", teaching_plan_json="{}", classifier_bullet="x",
         dsl_schema_versions_json="{}", artifact_hash="sha256:x", status=models.DRAFT_GENERATED,
         created_at=_now(), updated_at=_now(),
     ))
@@ -182,7 +188,7 @@ def test_approved_review_preserves_math_semantics_confirmed(session):
     session.add(models.TemplateDraft(
         id="draft-approve", job_id="job-approve", fingerprint_key="k1", fingerprint_version=1,
         fingerprint_json="{}", revision=1, params_document_json="{}",
-        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", teaching_plan_json="{}",
         classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
         status=models.DRAFT_APPROVED, created_at=_now(), updated_at=_now(),
     ))
@@ -210,7 +216,7 @@ def test_rejection_review_leaves_math_semantics_confirmed_null(session):
     session.add(models.TemplateDraft(
         id="draft-reject", job_id="job-reject", fingerprint_key="k1", fingerprint_version=1,
         fingerprint_json="{}", revision=1, params_document_json="{}",
-        guard_document_json="{}", answer_expression_json="{}", animation_document_json="{}",
+        guard_document_json="{}", answer_expression_json="{}", teaching_plan_json="{}",
         classifier_bullet="use for X", dsl_schema_versions_json="{}", artifact_hash="sha256:x",
         status=models.DRAFT_REJECTED, created_at=_now(), updated_at=_now(),
     ))

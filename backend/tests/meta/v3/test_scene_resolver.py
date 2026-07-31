@@ -1,0 +1,240 @@
+from fractions import Fraction
+
+import pytest
+
+from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.scene_program import ShowRelationAction, TimedAction
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.v3_common import AnchorRef, CompileContext
+from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.errors import V3ValidationError
+from app.meta.v3.geometry import Bounds, MeasuredVisual, Point, SemanticPart
+from app.meta.v3.layout import SAFE_FRAME, place_vertical_lesson
+from app.meta.v3.resolver import resolve_scene
+
+
+class LiteralTextMeasurer:
+    def measure(self, text: str, font_role: str):
+        return len(text) * 0.3, 0.6
+
+
+def _field(name):
+    return {"node": "field_ref", "field": name}
+
+
+def _measured_visual(ref, height, width=2):
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
+    return MeasuredVisual(
+        ref=ref,
+        bounds=bounds,
+        parts={("item", 0): SemanticPart("item", 0, bounds)},
+        paths={},
+        payload={},
+    )
+
+
+@pytest.fixture
+def measurer():
+    return LiteralTextMeasurer()
+
+
+@pytest.fixture
+def program():
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values",
+            "ref": "values",
+            "values": [_field(f"v{index}") for index in range(1, 8)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "median-demo",
+    })
+    return compile_teaching_plan(
+        plan,
+        FieldRefNode(field="v4"),
+        frozenset({f"v{index}" for index in range(1, 8)}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+
+@pytest.fixture
+def perimeter_program():
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": _field("length"), "width": _field("width"), "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "trace_boundary", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "trace every edge of the boundary"},
+            {"id": "show_perimeter", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "perimeter-demo",
+    })
+    return compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+
+def test_runtime_resolution_remeasures_new_values_and_keeps_callout_under_item(program, measurer):
+    first = resolve_scene(program, {"v1": 3, "v2": 5, "v3": 6, "v4": 8,
+                                    "v5": 9, "v6": 12, "v7": 15}, measurer)
+    second = resolve_scene(program, {"v1": 10, "v2": 20, "v3": 30, "v4": 40,
+                                     "v5": 50, "v6": 60, "v7": 70}, measurer)
+    first_target = first.anchor("values", "item", 3, "bottom")
+    second_target = second.anchor("values", "item", 3, "bottom")
+    assert first.relation("median_callout").target == first_target
+    assert second.relation("median_callout").target == second_target
+    assert first_target.x != second_target.x or first.visual("values").bounds != second.visual("values").bounds
+
+
+def test_trace_path_and_timeline_target_use_final_placed_geometry(perimeter_program, measurer):
+    scene = resolve_scene(perimeter_program, {"length": 8, "width": 3}, measurer)
+    rectangle = scene.visual("rectangle")
+    reveal = next(action for action in scene.timeline if action.action.kind == "reveal")
+    trace = next(action for action in scene.timeline if action.action.kind == "trace")
+
+    assert reveal.targets[0].bounds == rectangle.bounds
+    assert trace.path[0] == Point(
+        rectangle.measured.paths["perimeter"][0].x + rectangle.offset.x,
+        rectangle.measured.paths["perimeter"][0].y + rectangle.offset.y,
+    )
+    assert trace.path[0] == trace.path[-1]
+
+
+def test_relation_with_missing_semantic_part_has_structured_anchor_failure(program, measurer):
+    relation = program.relations[0].model_copy(update={
+        "target": AnchorRef(visual_ref="values", part="missing", index=3, anchor="bottom"),
+    })
+    malformed = program.model_copy(update={"relations": [relation]})
+
+    with pytest.raises(V3ValidationError) as exc:
+        resolve_scene(malformed, {f"v{index}": index for index in range(1, 8)}, measurer)
+
+    assert exc.value.failure.code == "unknown_semantic_anchor"
+    assert exc.value.failure.path == "relations[0].target"
+
+
+def test_relation_rejects_collection_anchor_for_item(program, measurer):
+    relation = program.relations[0].model_copy(update={
+        "target": AnchorRef(visual_ref="values", part="item", anchor="bottom"),
+    })
+    malformed = program.model_copy(update={"relations": [relation]})
+
+    with pytest.raises(V3ValidationError) as exc:
+        resolve_scene(malformed, {f"v{index}": index for index in range(1, 8)}, measurer)
+
+    assert exc.value.failure.code == "collection_anchor_for_item"
+
+
+def test_timeline_unknown_relation_has_structured_action_path(program, measurer):
+    replacement = TimedAction(
+        at_seconds=program.timeline[0].at_seconds,
+        duration_seconds=program.timeline[0].duration_seconds,
+        beat_id=program.timeline[0].beat_id,
+        action=ShowRelationAction(relation_ref="missing_relation"),
+    )
+    malformed = program.model_copy(update={"timeline": [replacement, *program.timeline[1:]]})
+
+    with pytest.raises(V3ValidationError) as exc:
+        resolve_scene(malformed, {f"v{index}": Fraction(index) for index in range(1, 8)}, measurer)
+
+    assert exc.value.failure.code == "unknown_relation"
+    assert exc.value.failure.path == "timeline[0].action.relation_ref"
+
+
+def test_vertical_layout_centers_primary_and_reserves_conclusion_band():
+    primary, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 2),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    assert primary.bounds.center.y == pytest.approx(0.6)
+    assert primary.bounds.bottom >= -2.4
+    assert primary.bounds.top <= SAFE_FRAME.top
+    assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
+    assert conclusion.bounds.top <= -2.4
+    assert conclusion.bounds.top < primary.bounds.bottom
+
+
+def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
+    original_gap = 0.45
+    primary, supporting, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 3),
+        _measured_visual("supporting", 3, width=7),
+        _measured_visual("evaluated_answer", 1),
+    ])
+    scale = (primary.bounds.top - primary.bounds.bottom) / 3
+
+    assert scale < 1
+    assert primary.bounds.left - supporting.bounds.right == pytest.approx(original_gap * scale)
+    for visual in (primary, supporting, conclusion):
+        assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
+        assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
+        assert visual.bounds.top <= SAFE_FRAME.top + 1e-9
+
+
+def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_visuals():
+    primary, supporting, conclusion = place_vertical_lesson([
+        _measured_visual("primary", 2),
+        _measured_visual("supporting", 0.8),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    assert primary.bounds.center.y == pytest.approx(0.6)
+    assert primary.bounds.left - supporting.bounds.right == pytest.approx(0.45)
+    assert conclusion.bounds.top <= -2.4
+    for visual in (primary, supporting, conclusion):
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom
+        assert visual.bounds.top <= SAFE_FRAME.top
+
+
+def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
+    conclusion, = place_vertical_lesson([_measured_visual("evaluated_answer", 0.6)])
+
+    assert conclusion.bounds.center.y == pytest.approx(-3.0)
+    assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
+    assert conclusion.bounds.top <= -2.4
+
+
+def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
+    placed = place_vertical_lesson([
+        _measured_visual("primary", 0.2, width=0.2),
+        _measured_visual("support_0", 0.2, width=0.2),
+        _measured_visual("support_1", 0.2, width=1),
+        _measured_visual("support_2", 0.2, width=0.2),
+        _measured_visual("support_3", 0.2, width=7),
+        _measured_visual("evaluated_answer", 0.6),
+    ])
+
+    scale = (placed[0].bounds.right - placed[0].bounds.left) / 0.2
+    assert scale == pytest.approx(0.74576, abs=1e-5)
+    for visual in placed:
+        assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
+        assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
+        assert visual.bounds.top <= SAFE_FRAME.top + 1e-9

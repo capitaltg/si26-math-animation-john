@@ -13,6 +13,13 @@ def build_transform(source_mobject, target_mobject):
     return Transform(source_mobject, target_mobject)
 
 
+def build_role_transition(mobject, style: dict):
+    target = mobject.copy()
+    target.set_color(style["color"])
+    target.set_stroke(width=style["stroke_width"])
+    return Transform(mobject, target)
+
+
 def build_move_along_path(mobject, path_mobject):
     return MoveAlongPath(mobject, path_mobject)
 

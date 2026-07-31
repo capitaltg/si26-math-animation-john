@@ -1,133 +1,170 @@
-import json
-from datetime import datetime
+"""In-memory validation for proposed meta-template v3 candidates."""
+
+from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import TypeAdapter, ValidationError
-from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
-from app.meta.dsl.animation import AnimationDocument
+from app.meta.draft_generation import DraftProposal
+from app.meta.draft_hash import compute_artifact_hash
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import ExpressionNode
-from app.meta.dsl.guard import GuardDocument
-from app.meta.dsl.params import ParamsDocument
-from app.meta.models import DRAFT_FAILED_VALIDATION, DRAFT_PENDING_REVIEW, FallbackObservation, TemplateDraft, TemplateDraftFixture
-from app.meta.preview_render import render_and_store_preview
-from app.meta.validation import compile_draft_documents, validate_fixture
+from app.meta.dsl.scene_program import SceneProgramDocument
+from app.meta.dsl.v3_common import CompileContext
+from app.meta.preview_render import render_preview_and_probe
+from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.quality import validate_static_quality
+from app.meta.v3.render_probe import validate_rendered_quality
+from app.meta.validation import (
+    FixtureCheckResult,
+    compile_draft_documents,
+    first_positive_values,
+    require_all_fixtures_and_guard_coverage,
+    validate_proposed_fixtures,
+)
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
-_ExpressionAdapter = TypeAdapter(ExpressionNode)
+
+@dataclass(frozen=True)
+class ValidatedCandidate:
+    proposal: DraftProposal
+    scene_program: SceneProgramDocument
+    validation_report: dict
+    quality_report: dict
+    preview_artifact_hash: str
+    fixture_results: list[FixtureCheckResult]
 
 
-def persist_validation(
-    session: Session,
-    draft: TemplateDraft,
-    observations_by_id: dict[str, FallbackObservation],
-    now: datetime,
+def validate_candidate(
+    proposal: DraftProposal,
+    observations_by_id: dict,
     artifact_root: Path,
-) -> bool:
+    compile_context: CompileContext,
+) -> ValidatedCandidate:
+    """Validate a candidate without opening or accepting a database session."""
     try:
-        params_document = ParamsDocument.model_validate_json(draft.params_document_json)
-        guard_document = GuardDocument.model_validate_json(draft.guard_document_json)
-        answer_expression = _ExpressionAdapter.validate_json(draft.answer_expression_json)
-        animation_document = AnimationDocument.model_validate_json(draft.animation_document_json)
         compiled = compile_draft_documents(
-            params_document, guard_document, answer_expression, animation_document
+            proposal.params_document,
+            proposal.guard_document,
+            proposal.answer_expression,
+            proposal.teaching_plan_document,
         )
     except (DslValidationError, ValidationError) as exc:
-        _finish(
-            draft, now, passed=False, compile_error=str(exc), fixture_results=[],
-            preview_ok=False, preview_error=None, preview_hash=None,
-            negative_predicate_coverage=set(),
-        )
-        return False
+        raise _validation_failure(exc, "documents", "valid parameter, guard, answer, and teaching-plan documents") from exc
 
-    fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
-    fixture_results = []
-    all_passed = True
-    positive_params_for_preview = None
-    negative_predicate_coverage: set[int] = set()
-    for fixture in fixtures:
-        observation = observations_by_id.get(fixture.observation_id) if fixture.observation_id else None
-        result = validate_fixture(
-            fixture, compiled, observation.source_excerpt if observation else None
-        )
-        fixture.structural_check_passed = result.passed
-        fixture.structural_check_detail = result.detail
-        fixture_results.append({"fixture_id": result.fixture_id, "passed": result.passed, "detail": result.detail})
-        negative_predicate_coverage |= result.failed_predicate_indexes
-        if not result.passed:
-            all_passed = False
-        elif fixture.kind == "positive" and fixture.expected_outcome == "accept" and positive_params_for_preview is None:
-            positive_params_for_preview = json.loads(fixture.params_json)
-
-    if not all_passed:
-        _finish(
-            draft, now, passed=False, compile_error=None, fixture_results=fixture_results,
-            preview_ok=False, preview_error=None, preview_hash=None,
-            negative_predicate_coverage=negative_predicate_coverage,
-        )
-        return False
-
-    all_predicate_indexes = set(range(len(guard_document.predicates)))
-    if not all_predicate_indexes.issubset(negative_predicate_coverage):
-        _finish(
-            draft, now, passed=False, compile_error=None, fixture_results=fixture_results,
-            preview_ok=False, preview_error=None, preview_hash=None,
-            negative_predicate_coverage=negative_predicate_coverage,
-        )
-        return False
-
-    if positive_params_for_preview is None:
-        _finish(
-            draft, now, passed=False, compile_error=None, fixture_results=fixture_results,
-            preview_ok=False, preview_error="no accepted positive fixture available for preview",
-            preview_hash=None, negative_predicate_coverage=negative_predicate_coverage,
-        )
-        return False
+    fixture_results = validate_proposed_fixtures(
+        proposal.fixtures, compiled, observations_by_id
+    )
+    require_all_fixtures_and_guard_coverage(fixture_results, compiled)
 
     try:
-        preview_hash = render_and_store_preview(
-            compiled.compiled_animation, compiled.known_fields, positive_params_for_preview, artifact_root,
+        scene_program = compile_teaching_plan(
+            proposal.teaching_plan_document,
+            proposal.answer_expression,
+            compiled.known_fields,
+            compile_context,
         )
-    except Exception as exc:
-        _finish(
-            draft, now, passed=False, compile_error=None, fixture_results=fixture_results,
-            preview_ok=False, preview_error=str(exc), preview_hash=None,
-            negative_predicate_coverage=negative_predicate_coverage,
-        )
-        return False
+    except (DslValidationError, ValidationError) as exc:
+        raise _validation_failure(exc, "teaching_plan_document", "a compilable v3 teaching plan") from exc
 
-    _finish(
-        draft, now, passed=True, compile_error=None, fixture_results=fixture_results,
-        preview_ok=True, preview_error=None, preview_hash=preview_hash,
-        negative_predicate_coverage=negative_predicate_coverage,
+    static_quality = validate_static_quality(proposal.teaching_plan_document, scene_program)
+    static_quality.require_passed()
+
+    preview_hash, probe = render_preview_and_probe(
+        scene_program,
+        compiled.known_fields,
+        first_positive_values(proposal.fixtures),
+        artifact_root,
     )
-    return True
+    rendered_quality = validate_rendered_quality(probe)
+    rendered_quality.require_passed()
+
+    artifact_hash = compute_candidate_hash(proposal, scene_program)
+    validation_report = build_validation_report(
+        compiled=compiled,
+        fixture_results=fixture_results,
+        preview_artifact_hash=preview_hash,
+        artifact_hash=artifact_hash,
+    )
+    quality_report = merge_quality_reports(
+        static_quality,
+        rendered_quality,
+        artifact_hash=artifact_hash,
+    )
+    return ValidatedCandidate(
+        proposal=proposal,
+        scene_program=scene_program,
+        validation_report=validation_report,
+        quality_report=quality_report,
+        preview_artifact_hash=preview_hash,
+        fixture_results=fixture_results,
+    )
 
 
-def _finish(
-    draft: TemplateDraft,
-    now: datetime,
-    *,
-    passed: bool,
-    compile_error: str | None,
-    fixture_results: list[dict],
-    preview_ok: bool,
-    preview_error: str | None,
-    preview_hash: str | None,
-    negative_predicate_coverage: set[int],
-) -> None:
-    draft.status = DRAFT_PENDING_REVIEW if passed else DRAFT_FAILED_VALIDATION
-    draft.validation_report_json = json.dumps({
-        "passed": passed,
-        "compile_error": compile_error,
-        "fixture_results": fixture_results,
-        "preview_ok": preview_ok,
-        "preview_error": preview_error,
-        "artifact_hash": draft.artifact_hash,
+def build_validation_report(
+    *, compiled, fixture_results, preview_artifact_hash: str, artifact_hash: str
+) -> dict:
+    coverage = sorted({
+        index
+        for result in fixture_results
+        for index in result.failed_predicate_indexes
+    })
+    return {
+        "passed": True,
+        "fixture_results": [
+            {"fixture_id": result.fixture_id, "passed": result.passed, "detail": result.detail}
+            for result in fixture_results
+        ],
+        "preview_ok": True,
+        "preview_artifact_hash": preview_artifact_hash,
         "compiler_version": DSL_COMPILER_VERSION,
         "renderer_version": DYNAMIC_RENDERER_VERSION,
-        "negative_predicate_coverage": sorted(negative_predicate_coverage),
-    })
-    draft.preview_artifact_hash = preview_hash
-    draft.updated_at = now
+        "negative_predicate_coverage": coverage,
+        "known_fields": sorted(compiled.known_fields),
+        # Approval precondition 4 (app/meta/approval.py) compares this to
+        # draft.artifact_hash to prove the report validated the exact
+        # artifact on the draft -- must be the same hash merge_quality_reports
+        # embeds, not a second, independently-computed one.
+        "artifact_hash": artifact_hash,
+    }
+
+
+def merge_quality_reports(static_quality, rendered_quality, *, artifact_hash: str) -> dict:
+    static_payload = static_quality.model_payload()
+    rendered_payload = rendered_quality.model_payload()
+    return {
+        "passed": static_payload["passed"] and rendered_payload["passed"],
+        "checks": [*static_payload["checks"], *rendered_payload["checks"]],
+        "artifact_hash": artifact_hash,
+    }
+
+
+def compute_candidate_hash(proposal: DraftProposal, scene_program: SceneProgramDocument) -> str:
+    dsl_versions = {
+        "params_version": proposal.params_document.params_version,
+        "guard_version": proposal.guard_document.guard_version,
+        "teaching_plan_version": proposal.teaching_plan_document.plan_version,
+        "scene_version": scene_program.scene_version,
+    }
+    return compute_artifact_hash(
+        params_document=proposal.params_document.model_dump(mode="json"),
+        guard_document=proposal.guard_document.model_dump(mode="json"),
+        answer_expression=proposal.answer_expression.model_dump(mode="json"),
+        teaching_plan_document=proposal.teaching_plan_document.model_dump(mode="json"),
+        scene_program_document=scene_program.model_dump(mode="json"),
+        classifier_bullet=proposal.classifier_bullet,
+        dsl_schema_versions=dsl_versions,
+        compiler_version=DSL_COMPILER_VERSION,
+        renderer_version=DYNAMIC_RENDERER_VERSION,
+    )
+
+
+def _validation_failure(exc: Exception, path: str, expected: str) -> V3ValidationError:
+    code = getattr(exc, "code", "candidate_compile_failed")
+    return V3ValidationError(V3Failure(
+        code=code,
+        path=path,
+        expected=expected,
+        observed=str(exc),
+        hint="correct the candidate documents and regenerate",
+    ))

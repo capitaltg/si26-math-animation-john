@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from app.meta.dsl.animation import AnimationDocument, CompiledAnimation, compile_animation_document
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import CompiledGuard, GuardDocument, compile_guard
@@ -14,7 +13,6 @@ from app.pipeline.grounding import check_params_grounded
 @dataclass(frozen=True)
 class CompiledDraft:
     params_cls: type[TemplateParamsBase]
-    compiled_animation: CompiledAnimation
     answer_expression: ExpressionNode
     known_fields: frozenset[str]
     compiled_guard: CompiledGuard
@@ -24,16 +22,14 @@ def compile_draft_documents(
     params_document: ParamsDocument,
     guard_document: GuardDocument,
     answer_expression: ExpressionNode,
-    animation_document: AnimationDocument,
+    teaching_plan_document,
 ) -> CompiledDraft:
     known_fields = frozenset(field.name for field in params_document.fields)
     compiled_guard = compile_guard(guard_document, known_fields)
     params_cls = compile_template_params(params_document, compiled_guard)
     compile_expression(answer_expression, known_fields)
-    compiled_animation = compile_animation_document(animation_document, known_fields)
     return CompiledDraft(
         params_cls=params_cls,
-        compiled_animation=compiled_animation,
         answer_expression=answer_expression,
         known_fields=known_fields,
         compiled_guard=compiled_guard,
@@ -93,3 +89,86 @@ def validate_fixture(fixture, compiled: CompiledDraft, source_excerpt: str | Non
             )
 
     return FixtureCheckResult(fixture.id, True, detail, failed_predicate_indexes)
+
+
+@dataclass(frozen=True)
+class _ProposedFixtureForValidation:
+    id: str
+    kind: str
+    expected_outcome: str
+    params_json: str
+
+
+def validate_proposed_fixtures(fixtures, compiled: CompiledDraft, observations_by_id: dict) -> list[FixtureCheckResult]:
+    """Run structural checks without materializing ``TemplateDraftFixture`` rows."""
+    results = []
+    for index, fixture in enumerate(fixtures):
+        fixture_id = f"fixture-{index}"
+        candidate_fixture = _ProposedFixtureForValidation(
+            id=fixture_id,
+            kind=fixture.kind,
+            expected_outcome=fixture.expected_outcome,
+            params_json=json.dumps(fixture.params),
+        )
+        observation = observations_by_id.get(fixture.observation_id) if fixture.observation_id else None
+        results.append(validate_fixture(
+            candidate_fixture,
+            compiled,
+            observation.source_excerpt if observation is not None else None,
+        ))
+    return results
+
+
+def require_all_fixtures_and_guard_coverage(
+    fixture_results: list[FixtureCheckResult], compiled: CompiledDraft
+) -> None:
+    failed = next((result for result in fixture_results if not result.passed), None)
+    if failed is not None:
+        raise _fixture_failure(
+            "fixture_validation_failed",
+            f"fixtures[{failed.fixture_id}]",
+            "fixture behavior consistent with the proposed template",
+            failed.detail,
+            "correct the fixture or candidate documents and regenerate",
+        )
+
+    covered = {
+        predicate_index
+        for result in fixture_results
+        for predicate_index in result.failed_predicate_indexes
+    }
+    expected = set(range(len(compiled.compiled_guard.document.predicates)))
+    if expected - covered:
+        missing = ", ".join(str(index) for index in sorted(expected - covered))
+        raise _fixture_failure(
+            "guard_predicate_coverage_incomplete",
+            "guard_document.predicates",
+            "a rejecting fixture witness for every guard predicate",
+            f"missing predicate indexes: {missing}",
+            "add negative fixtures that independently reject on each missing predicate",
+        )
+
+
+def first_positive_values(fixtures) -> dict:
+    for fixture in fixtures:
+        if fixture.kind == "positive" and fixture.expected_outcome == "accept":
+            return fixture.params
+    raise _fixture_failure(
+        "missing_preview_fixture",
+        "fixtures",
+        "an accepted positive fixture for the preview",
+        "no accepted positive fixture was proposed",
+        "add a grounded positive fixture and regenerate",
+    )
+
+
+def _fixture_failure(code: str, path: str, expected: str, observed: str, hint: str):
+    from app.meta.v3.errors import V3Failure, V3ValidationError
+
+    return V3ValidationError(V3Failure(
+        code=code,
+        path=path,
+        expected=expected,
+        observed=observed,
+        hint=hint,
+    ))

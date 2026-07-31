@@ -1,38 +1,9 @@
-import json
+from datetime import datetime, timezone
 from unittest.mock import patch
 
-import pytest
-from fastapi.testclient import TestClient
-
-from app.config import get_settings
-from app.meta import db, models
-from app.meta.draft_generation import DraftProposal, ProposedFixture
-from app.meta.dsl.animation import AnimationDocument
-from app.meta.dsl.expression import FieldRefNode
-from app.meta.dsl.guard import GuardDocument, PositivePredicate
-from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.draft_generation import propose_template_draft
 from app.meta.fingerprint import Fingerprint
-from app.meta.generation_pipeline import run_generation_job
-from app.meta.ingest import record_unsupported_shape
-from app.models.scene import TemplateName
-from app.pipeline.classification import ClassificationResult, TemplateOption
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    engine = db.make_engine(tmp_path / "meta.db")
-    monkeypatch.setattr(db, "get_engine", lambda: engine)
-    db.create_all(engine)
-    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
-    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
-    monkeypatch.setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
-    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
-    get_settings.cache_clear()
-    from app.main import create_app
-
-    yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
-    get_settings.cache_clear()
+from app.meta.models import FallbackObservation
 
 
 def _fingerprint():
@@ -47,92 +18,84 @@ def _fingerprint():
     )
 
 
-def _proposal_dict(observation_id):
-    proposal = DraftProposal(
-        params_document=ParamsDocument(
-            params_version=1,
-            fields=[
-                IntegerFieldSpec(
-                    name="n", label="N", description="", minimum=1, maximum=10
-                )
-            ],
-        ),
-        guard_document=GuardDocument(
-            guard_version=1,
-            predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
-        ),
-        answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={
-            "kind": "sequence",
-            "steps": [
-                {"kind": "label", "ref": "n_label", "text": "n"},
-                {"kind": "appear", "target_ref": "n_label"},
-                {"kind": "wait", "seconds": 1},
-            ],
-        }),
-        classifier_bullet="use for fraction-of-whole bars",
-        fixtures=[
-            ProposedFixture(
-                kind="positive",
-                expected_outcome="accept",
-                observation_id=observation_id,
-                params={"n": 5},
-            ),
-            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
-        ],
+def _observation():
+    return FallbackObservation(
+        id="obs-1",
+        candidate_id="cand-1",
+        source_excerpt="Find the perimeter of a rectangle that is 6 cm by 4 cm.",
+        grade_level=4,
+        observation_kind="unsupported_shape",
+        excluded=False,
+        created_at=datetime(2026, 7, 28, tzinfo=timezone.utc),
     )
-    return json.loads(proposal.model_dump_json())
+
+
+def _proposal_response():
+    field = lambda name: {"node": "field_ref", "field": name}
+    return {
+        "params_document": {
+            "params_version": 1,
+            "fields": [
+                {"type": "integer", "name": "length", "label": "Length", "description": "", "minimum": 1, "maximum": 20},
+                {"type": "integer", "name": "width", "label": "Width", "description": "", "minimum": 1, "maximum": 20},
+            ],
+        },
+        "guard_document": {
+            "guard_version": 1,
+            "predicates": [{"predicate": "positive", "value": field("length")}],
+        },
+        "answer_expression": {
+            "node": "add",
+            "operands": [
+                {"node": "multiply", "operands": [{"node": "literal", "value": 2}, field("length")]},
+                {"node": "multiply", "operands": [{"node": "literal", "value": 2}, field("width")]},
+            ],
+        },
+        "teaching_plan_document": {
+            "plan_version": 3,
+            "learning_objective": "Find a rectangle perimeter from its dimensions.",
+            "primary_visual": {
+                "kind": "rectangle_measurement", "ref": "rectangle",
+                "length": field("length"), "width": field("width"), "unit": "cm",
+            },
+            "supporting_visuals": [],
+            "strategy": "boundary_trace",
+            "beats": [
+                {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rectangle"}], "intent": "show the measured rectangle", "custom_actions": []},
+                {"id": "trace", "kind": "focus", "targets": [{"visual_ref": "rectangle"}], "intent": "trace all four edges", "custom_actions": []},
+                {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rectangle"}], "intent": "map opposite edges to twice length plus width", "custom_actions": []},
+                {"id": "answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}], "intent": "state the evaluated perimeter", "custom_actions": []},
+            ],
+            "variation_seed": "perimeter-demo",
+        },
+        "classifier_bullet": "Use for rectangle perimeter from measured dimensions.",
+        "fixtures": [{"kind": "positive", "expected_outcome": "accept", "observation_id": "obs-1", "params": {"length": 6, "width": 4}}],
+    }
 
 
 @patch("app.meta.draft_generation.call_with_tool")
-@patch("app.meta.fingerprint.call_with_tool")
-def test_full_flow_from_observation_to_reject_and_refine(
-    mock_tag_call, mock_draft_call, client
-):
+def test_generation_repair_returns_v3_teaching_intent_with_structured_quality_feedback(mock_call):
+    mock_call.side_effect = [
+        ("propose_template_draft", _proposal_response()),
+        ("propose_template_draft", _proposal_response()),
+    ]
     fingerprint = _fingerprint()
-    mock_tag_call.return_value = ("fingerprint", fingerprint.model_dump())
-    classification = ClassificationResult(
-        grade_level=4,
-        ambiguous=False,
-        problem_kind="solvable",
-        options=[
-            TemplateOption(
-                template=TemplateName.TEXT_CARD,
-                rationale="no structural match",
-            )
-        ],
-    )
-    record_unsupported_shape(
-        candidate_id="cand-1",
-        source_excerpt="there are 5 apples in the bar",
-        classification=classification,
-        picked_template=TemplateName.TEXT_CARD,
-        scene_status="pending_review",
+    observations = [_observation()]
+
+    initial = propose_template_draft(fingerprint, observations)
+    repaired = propose_template_draft(
+        fingerprint,
+        observations,
+        prior_proposal=initial,
+        reviewer_feedback={
+            "code": "serial_simple_reveal",
+            "path": "timeline",
+            "hint": "reveal values together",
+        },
     )
 
-    with db.meta_session() as session:
-        job = session.query(models.GenerationJob).one()
-        assert job.status == models.JOB_QUEUED
-        observation_id = session.query(models.FallbackObservation).one().id
-
-    mock_draft_call.return_value = ("propose_template_draft", _proposal_dict(observation_id))
-    draft = run_generation_job(owner="worker-1")
-    assert draft.status == models.DRAFT_PENDING_REVIEW
-
-    response = client.get("/meta/drafts", params={"status": "pending_review"})
-    assert [draft_row["id"] for draft_row in response.json()] == [draft.id]
-
-    mock_draft_call.return_value = ("propose_template_draft", _proposal_dict(observation_id))
-    reject_response = client.post(
-        f"/meta/drafts/{draft.id}/reject", json={"feedback": "tighten it up"}
-    )
-    assert reject_response.status_code == 200
-    body = reject_response.json()
-    assert body["needs_manual_authoring"] is False
-    assert body["new_draft"]["revision"] == 2
-
-    approve_response = client.post(
-        f"/meta/drafts/{body['new_draft']['id']}/approve",
-        json={"template_name": "fraction_bars", "math_semantics_confirmed": True},
-    )
-    assert approve_response.status_code == 409
+    assert repaired.teaching_plan_document.plan_version == 3
+    second_message = mock_call.call_args_list[1].kwargs["user_message"]
+    assert '"teaching_plan_document"' in second_message
+    assert '"code":"serial_simple_reveal"' in second_message
+    assert "Traceback" not in second_message

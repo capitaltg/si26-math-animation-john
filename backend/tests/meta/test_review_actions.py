@@ -1,18 +1,15 @@
-import json
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 
 from app.config import get_settings
-from app.meta import db, jobs, models
+from app.meta import db, models
 from app.meta.draft_generation import DraftProposal, ProposedFixture
-from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.expression import FieldRefNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.fingerprint import Fingerprint
-from app.meta.generation_pipeline import run_generation_job
 from app.meta.review_actions import DraftNotRefinableError, reject_and_refine
 
 
@@ -22,114 +19,171 @@ def engine(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "get_engine", lambda: engine)
     db.create_all(engine)
     monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
-    monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
-    monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     get_settings.cache_clear()
     yield engine
     get_settings.cache_clear()
 
 
 def _now():
-    return datetime(2026, 7, 28, tzinfo=timezone.utc)
+    return datetime(2026, 7, 30, tzinfo=timezone.utc)
 
 
-def _sample_fingerprint_json():
-    # The brief's test sketch used the literal placeholder "{}" here, but
-    # run_generation_job / reject_and_refine both parse job.fingerprint_json
-    # into a real Fingerprint (all 7 fields required, extra="forbid") before
-    # the propose step even runs, so "{}" fails ValidationError
-    # unconditionally, independent of what's being mocked. Use a valid
-    # Fingerprint payload instead, matching the precedent already established
-    # in test_generation_pipeline.py's _sample_fingerprint_json().
+def _seed_draft(status):
+    with db.meta_session() as session:
+        job = models.GenerationJob(
+            id="job-1", fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+            trigger_observation_ids="[]", status=models.JOB_SUCCEEDED, created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+        session.add(models.TemplateDraft(
+            id="draft-1", job_id=job.id, fingerprint_key="k1", fingerprint_version=1,
+            fingerprint_json="{}", revision=1, params_document_json="{}", guard_document_json="{}",
+            answer_expression_json="{}", teaching_plan_json="{}", scene_program_json="{}",
+            quality_report_json="{}", classifier_bullet="Use for X", dsl_schema_versions_json="{}",
+            artifact_hash="sha256:candidate", status=status, created_at=_now(), updated_at=_now(),
+        ))
+
+
+def _fingerprint():
     return Fingerprint(
         fingerprint_version=1,
-        operation_family="compare",
-        representation_family="grid",
+        operation_family="measure",
+        representation_family="shape",
         number_domain="whole",
-        operand_arity=1,
-        step_count=1,
-        grade_band="K-2",
-    ).model_dump_json()
+        operand_arity=2,
+        step_count=2,
+        grade_band="6-8",
+    )
 
 
-def _proposal_dict(observation_id="obs-1"):
-    proposal = DraftProposal(
+def _proposal():
+    return DraftProposal(
         params_document=ParamsDocument(
             params_version=1,
-            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
+            fields=[IntegerFieldSpec(name="length", label="Length", description="", minimum=1, maximum=100)],
         ),
-        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
-        answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
-            {"kind": "label", "ref": "n_label", "text": "n"},
-            {"kind": "appear", "target_ref": "n_label"},
-            {"kind": "wait", "seconds": 1},
-        ]}),
-        classifier_bullet="use for X",
-        fixtures=[
-            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
-            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
-        ],
+        guard_document=GuardDocument(
+            guard_version=1,
+            predicates=[PositivePredicate(value=FieldRefNode(field="length"))],
+        ),
+        answer_expression=FieldRefNode(field="length"),
+        teaching_plan_document=TeachingPlanDocument.model_validate({
+            "plan_version": 3,
+            "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+            "primary_visual": {
+                "kind": "rectangle_measurement", "ref": "rectangle",
+                "length": {"node": "field_ref", "field": "length"},
+                "width": {"node": "literal", "value": 1}, "unit": "cm",
+            },
+            "strategy": "boundary_trace",
+            "beats": [
+                {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}], "intent": "show the rectangle"},
+                {"id": "trace", "kind": "derive", "targets": [{"visual_ref": "rectangle"}], "intent": "trace every edge"},
+                {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}], "intent": "state the perimeter"},
+            ],
+            "variation_seed": "review-refinement",
+        }),
+        classifier_bullet="Use for rectangle perimeter lessons.",
+        fixtures=[ProposedFixture(kind="positive", expected_outcome="accept", params={"length": 8})],
     )
-    return json.loads(proposal.model_dump_json())
 
 
-def _seeded_pending_review_draft():
+def _seed_pending_review_draft():
+    proposal = _proposal()
     with db.meta_session() as session:
-        obs = models.FallbackObservation(
-            id="obs-1", candidate_id="cand-1", source_excerpt="there are 5 apples",
-            grade_level=2, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        job = models.GenerationJob(
+            id="pending-job",
+            fingerprint_key="pending-key",
+            fingerprint_version=1,
+            fingerprint_json=_fingerprint().model_dump_json(),
+            trigger_observation_ids="[]",
+            status=models.JOB_SUCCEEDED,
+            created_at=_now(),
+            updated_at=_now(),
         )
-        session.add(obs)
-        session.flush()
-        jobs.evaluate_and_enqueue(
-            session, fingerprint_key="k1", fingerprint_version=1, fingerprint_json=_sample_fingerprint_json(),
-            trigger_observation_ids=[obs.id], threshold=0, new_id="job-1", now=_now(),
-        )
-    with patch("app.meta.draft_generation.call_with_tool") as mock_call:
-        mock_call.return_value = ("propose_template_draft", _proposal_dict())
-        return run_generation_job(owner="worker-1")
+        session.add(job)
+        session.add(models.TemplateDraft(
+            id="pending-draft",
+            job_id=job.id,
+            fingerprint_key=job.fingerprint_key,
+            fingerprint_version=job.fingerprint_version,
+            fingerprint_json=job.fingerprint_json,
+            revision=1,
+            params_document_json=proposal.params_document.model_dump_json(),
+            guard_document_json=proposal.guard_document.model_dump_json(),
+            answer_expression_json=proposal.answer_expression.model_dump_json(),
+            teaching_plan_json=proposal.teaching_plan_document.model_dump_json(),
+            scene_program_json="{}",
+            quality_report_json='{"passed": true}',
+            classifier_bullet=proposal.classifier_bullet,
+            dsl_schema_versions_json="{}",
+            artifact_hash="sha256:parent",
+            status=models.DRAFT_PENDING_REVIEW,
+            validation_report_json='{"passed": true}',
+            created_at=_now(),
+            updated_at=_now(),
+        ))
+    return proposal
 
 
-@patch("app.meta.draft_generation.call_with_tool")
-def test_reject_and_refine_creates_new_pending_review_revision(mock_call, engine):
-    draft = _seeded_pending_review_draft()
-    mock_call.return_value = ("propose_template_draft", _proposal_dict())
+def test_failed_validation_draft_is_not_reviewer_refinable(engine):
+    _seed_draft(models.DRAFT_FAILED_VALIDATION)
+
+    with pytest.raises(DraftNotRefinableError):
+        reject_and_refine(
+            "draft-1", feedback="fix the candidate", reviewer_label="reviewer", max_refinements=5
+        )
+
+
+def test_pending_review_refinement_persists_the_next_revision(monkeypatch, engine):
+    proposal = _seed_pending_review_draft()
+    generated = {}
+
+    def generate_next_revision(**kwargs):
+        generated.update(kwargs)
+        with db.meta_session() as session:
+            child = models.TemplateDraft(
+                id="refined-draft",
+                job_id=kwargs["job"].id,
+                fingerprint_key=kwargs["job"].fingerprint_key,
+                fingerprint_version=kwargs["job"].fingerprint_version,
+                fingerprint_json=kwargs["job"].fingerprint_json,
+                revision=kwargs["revision"],
+                parent_draft_id=kwargs["parent_draft_id"],
+                params_document_json=proposal.params_document.model_dump_json(),
+                guard_document_json=proposal.guard_document.model_dump_json(),
+                answer_expression_json=proposal.answer_expression.model_dump_json(),
+                teaching_plan_json=proposal.teaching_plan_document.model_dump_json(),
+                scene_program_json="{}",
+                quality_report_json='{"passed": true}',
+                classifier_bullet=proposal.classifier_bullet,
+                dsl_schema_versions_json="{}",
+                artifact_hash="sha256:child",
+                status=models.DRAFT_PENDING_REVIEW,
+                validation_report_json='{"passed": true}',
+                created_at=_now(),
+                updated_at=_now(),
+            )
+            session.add(child)
+            session.flush()
+            return child
+
+    monkeypatch.setattr("app.meta.review_actions.generate_and_validate_revision", generate_next_revision)
 
     refined = reject_and_refine(
-        draft.id, feedback="tighten the guard", reviewer_label="dev", max_refinements=5
+        "pending-draft", feedback="tighten the explanation", reviewer_label="reviewer", max_refinements=5
     )
 
-    assert refined is not None
+    assert refined.id == "refined-draft"
     assert refined.revision == 2
-    assert refined.parent_draft_id == draft.id
-    assert refined.status == models.DRAFT_PENDING_REVIEW
-
+    assert refined.parent_draft_id == "pending-draft"
+    assert generated["revision"] == 2
     with db.meta_session() as session:
-        original = session.get(models.TemplateDraft, draft.id)
-        assert original.status == models.DRAFT_REJECTED
-        assert original.reviewer_feedback == "tighten the guard"
-        reviews = session.query(models.TemplateReview).filter_by(draft_id=draft.id).all()
-        assert len(reviews) == 1
-        assert reviews[0].decision == "reject"
-
-
-@patch("app.meta.draft_generation.call_with_tool")
-def test_reject_and_refine_marks_needs_manual_authoring_when_exhausted(mock_call, engine):
-    draft = _seeded_pending_review_draft()
-    mock_call.return_value = ("propose_template_draft", _proposal_dict())
-
-    result = reject_and_refine(
-        draft.id, feedback="still wrong", reviewer_label="dev", max_refinements=1
-    )
-
-    assert result is None
-    mock_call.assert_not_called()
-    with db.meta_session() as session:
-        job = session.get(models.GenerationJob, draft.job_id)
-        assert job.status == models.JOB_NEEDS_MANUAL
-
-
-def test_reject_and_refine_raises_for_unknown_draft(engine):
-    with pytest.raises(DraftNotRefinableError):
-        reject_and_refine("no-such-draft", feedback="x", reviewer_label="dev", max_refinements=5)
+        parent = session.get(models.TemplateDraft, "pending-draft")
+        child = session.get(models.TemplateDraft, "refined-draft")
+        assert parent.status == models.DRAFT_REJECTED
+        assert parent.reviewer_feedback == "tighten the explanation"
+        assert child.revision == 2
+        assert child.parent_draft_id == parent.id
+        assert child.status == models.DRAFT_PENDING_REVIEW
+        assert session.query(models.TemplateReview).filter_by(draft_id=parent.id).count() == 1

@@ -1,48 +1,50 @@
 import json
 from datetime import datetime
 
+from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
-from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.draft_generation import DraftProposal
-from app.meta.draft_hash import compute_artifact_hash
-from app.meta.models import DRAFT_GENERATED, DRAFT_SUPERSEDED, GenerationJob, TemplateDraft, TemplateDraftFixture, TemplateReview
-from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
-
-from pydantic import TypeAdapter
+from app.meta.models import (
+    DRAFT_PENDING_REVIEW,
+    GenerationJob,
+    TemplateDraft,
+    TemplateDraftFixture,
+    TemplateReview,
+)
+from app.meta.validation_pipeline import ValidatedCandidate
 
 _ExpressionAdapter = TypeAdapter(ExpressionNode)
 
 
-def create_generated_draft(
+def persist_reviewable_draft(
     session: Session,
     *,
     new_id: str,
     job: GenerationJob,
-    proposal: DraftProposal,
+    candidate: ValidatedCandidate,
     now: datetime,
     revision: int = 1,
     parent_draft_id: str | None = None,
-    fixture_ids: list[str] | None = None,
 ) -> TemplateDraft:
+    """Persist a candidate only after all v3 validation gates have passed."""
+    if not isinstance(candidate, ValidatedCandidate):
+        raise TypeError("candidate must be a ValidatedCandidate")
+    if candidate.validation_report.get("passed") is not True or candidate.quality_report.get("passed") is not True:
+        raise ValueError("candidate must contain passing validation and quality reports")
+
+    proposal = candidate.proposal
+    _require_matching_fixture_result_ids(proposal.fixtures, candidate.fixture_results)
     dsl_versions = {
         "params_version": proposal.params_document.params_version,
         "guard_version": proposal.guard_document.guard_version,
-        "animation_version": proposal.animation_document.animation_version,
+        "teaching_plan_version": proposal.teaching_plan_document.plan_version,
+        "scene_version": candidate.scene_program.scene_version,
     }
-    artifact_hash = compute_artifact_hash(
-        params_document=proposal.params_document.model_dump(mode="json"),
-        guard_document=proposal.guard_document.model_dump(mode="json"),
-        answer_expression=proposal.answer_expression.model_dump(mode="json"),
-        animation_document=proposal.animation_document.model_dump(mode="json"),
-        classifier_bullet=proposal.classifier_bullet,
-        dsl_schema_versions=dsl_versions,
-        compiler_version=DSL_COMPILER_VERSION,
-        renderer_version=DYNAMIC_RENDERER_VERSION,
-    )
     draft = TemplateDraft(
         id=new_id,
         job_id=job.id,
@@ -54,53 +56,61 @@ def create_generated_draft(
         params_document_json=proposal.params_document.model_dump_json(),
         guard_document_json=proposal.guard_document.model_dump_json(),
         answer_expression_json=proposal.answer_expression.model_dump_json(),
-        animation_document_json=proposal.animation_document.model_dump_json(),
+        teaching_plan_json=proposal.teaching_plan_document.model_dump_json(),
+        scene_program_json=candidate.scene_program.model_dump_json(),
+        quality_report_json=json.dumps(candidate.quality_report),
+        validation_report_json=json.dumps(candidate.validation_report),
         classifier_bullet=proposal.classifier_bullet,
         dsl_schema_versions_json=json.dumps(dsl_versions),
-        artifact_hash=artifact_hash,
-        status=DRAFT_GENERATED,
+        artifact_hash=candidate.quality_report["artifact_hash"],
+        preview_artifact_hash=candidate.preview_artifact_hash,
+        status=DRAFT_PENDING_REVIEW,
         created_at=now,
         updated_at=now,
     )
     session.add(draft)
     session.flush()
+    persist_candidate_fixtures(
+        session=session,
+        draft_id=draft.id,
+        proposal_fixtures=proposal.fixtures,
+        fixture_results=candidate.fixture_results,
+        now=now,
+    )
+    session.flush()
+    return draft
 
-    ids = fixture_ids or [f"{new_id}-fixture-{i}" for i in range(len(proposal.fixtures))]
-    if len(ids) != len(proposal.fixtures):
-        raise ValueError("fixture_ids must have one entry per proposal fixture")
-    for fixture_id, fixture in zip(ids, proposal.fixtures):
+
+def persist_candidate_fixtures(
+    *,
+    session: Session,
+    draft_id: str,
+    proposal_fixtures,
+    fixture_results,
+    now: datetime,
+) -> None:
+    _require_matching_fixture_result_ids(proposal_fixtures, fixture_results)
+
+    for index, (fixture, result) in enumerate(zip(proposal_fixtures, fixture_results)):
         session.add(TemplateDraftFixture(
-            id=fixture_id,
-            draft_id=draft.id,
+            id=f"{draft_id}-fixture-{index}",
+            draft_id=draft_id,
             observation_id=fixture.observation_id,
             kind=fixture.kind,
             expected_outcome=fixture.expected_outcome,
             generation_method=fixture.generation_method,
             params_json=json.dumps(fixture.params),
+            structural_check_passed=result.passed,
+            structural_check_detail=result.detail,
             created_at=now,
         ))
-    session.flush()
-    return draft
 
 
-def supersede_and_refine(
-    session: Session,
-    *,
-    draft: TemplateDraft,
-    proposal: DraftProposal,
-    new_id: str,
-    now: datetime,
-    fixture_ids: list[str] | None = None,
-) -> TemplateDraft:
-    draft.status = DRAFT_SUPERSEDED
-    draft.updated_at = now
-    session.flush()
-
-    job = session.get(GenerationJob, draft.job_id)
-    return create_generated_draft(
-        session, new_id=new_id, job=job, proposal=proposal, now=now,
-        revision=draft.revision + 1, parent_draft_id=draft.id, fixture_ids=fixture_ids,
-    )
+def _require_matching_fixture_result_ids(proposal_fixtures, fixture_results) -> None:
+    expected_ids = [f"fixture-{index}" for index, _ in enumerate(proposal_fixtures)]
+    actual_ids = [result.fixture_id for result in fixture_results]
+    if actual_ids != expected_ids:
+        raise ValueError("fixture result ids must match proposal fixture ids")
 
 
 def record_review(
@@ -115,8 +125,12 @@ def record_review(
     math_semantics_confirmed: bool | None = None,
 ) -> TemplateReview:
     review = TemplateReview(
-        id=new_id, draft_id=draft_id, decision=decision,
-        reviewer_label=reviewer_label, feedback=feedback, created_at=now,
+        id=new_id,
+        draft_id=draft_id,
+        decision=decision,
+        reviewer_label=reviewer_label,
+        feedback=feedback,
+        created_at=now,
         math_semantics_confirmed=math_semantics_confirmed,
     )
     session.add(review)
@@ -125,17 +139,16 @@ def record_review(
 
 
 def load_draft_documents(draft: TemplateDraft) -> DraftProposal:
-    # DraftProposal.fixtures enforces min_length=MIN_PROPOSED_FIXTURES (>=1) for
-    # freshly-generated proposals (see draft_generation.py). This reconstruction
-    # deliberately omits fixtures (they live in a separate table and aren't needed
-    # here — see the docstring/brief), so build via model_construct to skip that
-    # constraint rather than re-validating already-persisted, already-valid
-    # sub-documents against a rule that doesn't apply to this use case.
+    """Reconstruct persisted documents for a refinement proposal.
+
+    Fixtures deliberately remain in their separate table; refinements generate a
+    fresh fixture set after receiving the review feedback.
+    """
     return DraftProposal.model_construct(
         params_document=ParamsDocument.model_validate_json(draft.params_document_json),
         guard_document=GuardDocument.model_validate_json(draft.guard_document_json),
         answer_expression=_ExpressionAdapter.validate_json(draft.answer_expression_json),
-        animation_document=AnimationDocument.model_validate_json(draft.animation_document_json),
+        teaching_plan_document=TeachingPlanDocument.model_validate_json(draft.teaching_plan_json),
         classifier_bullet=draft.classifier_bullet,
         fixtures=[],
     )
