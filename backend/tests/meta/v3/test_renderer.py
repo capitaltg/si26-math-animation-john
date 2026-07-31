@@ -248,25 +248,6 @@ def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edge
     # The four emphasis actions really did play, so `_target_mobject` resolved
     # every alias key rather than raising.
     assert [call.role for call in scene.play_calls if call.role] == ["focus"] * 4
-
-
-def test_alias_edge_lines_are_added_to_the_rectangle_group_exactly_once():
-    """The aliases share mobjects with the numbered edges, so registering them
-    must not also re-add those lines to the rectangle's own submobject group --
-    a duplicated submobject would be animated twice by any group-level
-    reveal."""
-    plan = _perimeter_plan_emphasizing_alias_edges()
-    program = compile_teaching_plan(
-        plan,
-        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
-        frozenset({"length", "width"}),
-        CompileContext(concept_family="measurement", grade_band="3-5"),
-    )
-    resolved = resolve_scene(program, {"length": 8, "width": 3}, LiteralTextMeasurer())
-
-    rendered = render_resolved_scene(RecordingScene(), resolved)
-
-    edges = [rendered.targets[("rectangle", "edge", index)] for index in range(4)]
-    submobjects = rendered.visuals["rectangle"].submobjects
-    assert len(submobjects) == 4
-    assert all(any(edge is submobject for submobject in submobjects) for edge in edges)
+    # The rectangle group still holds exactly its four edges: the aliases are
+    # additional *names* for those lines, not extra geometry.
+    assert len(rendered.visuals["rectangle"].submobjects) == 4

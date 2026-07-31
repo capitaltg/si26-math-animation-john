@@ -139,9 +139,11 @@ def _build_visual(placed, palette: str):
         # reveal targets. Register them here against the *same* Line mobjects
         # (length = bottom/top = edge 0/2, width = left/right = edge 3/1),
         # otherwise `_target_mobject` raises KeyError on a plan the compiler,
-        # the resolver and the static quality gate all accept. They must not be
-        # re-added to `root` below: they are the very lines already there, and a
-        # duplicated submobject would be animated twice.
+        # the resolver and the static quality gate all accept. Only `edges` is
+        # added to `root` below: the aliases are additional *names* for those
+        # same lines, so adding `children` would ask manim to hold a submobject
+        # twice -- which it ignores with a warning rather than duplicating, so
+        # this is about keeping the intent (and the log) clean, not correctness.
         children = {
             **{("edge", index): line for index, line in edges.items()},
             ("length_edge", 0): edges[0], ("length_edge", 1): edges[2],
