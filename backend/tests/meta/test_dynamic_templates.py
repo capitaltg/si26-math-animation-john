@@ -331,3 +331,12 @@ def test_published_v3_template_resolves_layout_for_each_params_set(session):
 
     assert first.relation("median_callout").target == first.anchor("values", "item", 3, "bottom")
     assert second.relation("median_callout").target == second.anchor("values", "item", 3, "bottom")
+
+    # Prove the two params sets actually produce DIFFERENT geometry -- without
+    # this, a resolver that ignored `values` entirely (or served baked-in/
+    # fixture coordinates) would still pass both assertions above, since each
+    # only compares a resolution against itself. The 1-digit vs 2-digit values
+    # widen the rendered text differently, so real per-params-set re-resolution
+    # must shift these anchors; item[0] has the largest digit-width delta.
+    assert first.anchor("values", "item", 3, "bottom") != second.anchor("values", "item", 3, "bottom")
+    assert first.anchor("values", "item", 0, "bottom") != second.anchor("values", "item", 0, "bottom")
