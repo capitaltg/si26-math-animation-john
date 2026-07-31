@@ -214,6 +214,145 @@ it('shows teaching beats, adaptive duration, and passing quality evidence', asyn
   expect(screen.getByText('Anchor alignment passed')).not.toBeNull()
 })
 
+// The same v3 draft, but with one Pacing check FAILING. No fixture in this
+// file previously contained `passed: false`, which is why nothing here could
+// tell `.every` from `.some` in passingQualityCategoryLabels, and why nothing
+// asserted that raw check codes/paths/details stay out of the DOM.
+const failingPacingCheck = {
+  code: 'timeline_over_budget',
+  passed: false,
+  path: 'total_duration_seconds',
+  detail: 'scene duration exceeds the 12-second budget',
+}
+
+const failingQualityDraftDetail = {
+  ...v3DraftDetail,
+  quality_report: {
+    passed: false,
+    checks: [...v3DraftDetail.quality_report.checks, failingPacingCheck],
+  },
+}
+
+it('suppresses a category label when any check in that category failed', async () => {
+  // MetaReviewPanel returns a category label only when EVERY matching check
+  // passed. Changing that `.every` to `.some` would show "Pacing passed" beside
+  // a failed pacing check -- the checklist's whole claim is that it is
+  // pass-only. Anchor alignment (all passing) must still be labelled, so this
+  // proves per-category suppression rather than a blanket hide.
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failingQualityDraftDetail }
+    if (url === failingQualityDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByRole('heading', { name: 'Teaching plan' })
+
+  expect(screen.queryByText('Pacing passed')).toBeNull()
+  expect(screen.getByText('Anchor alignment passed')).not.toBeNull()
+})
+
+it('never renders a raw quality-check code, path, or detail string', async () => {
+  // The reviewer-facing checklist promises human-readable category labels only.
+  // Rendering `{check.code}: {check.detail}` beside each label would otherwise
+  // pass every test in this file.
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failingQualityDraftDetail }
+    if (url === failingQualityDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  const { container } = render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByRole('heading', { name: 'Teaching plan' })
+
+  // Derived from the fixture itself, so a newly-added check cannot slip past.
+  const rendered = container.textContent
+  failingQualityDraftDetail.quality_report.checks.forEach((check) => {
+    expect(rendered).not.toContain(check.code)
+    // Structured paths only: bare one-word paths like "timeline" are ordinary
+    // English, so asserting their absence would be brittle rather than
+    // meaningful. Every path that identifies an internal location does contain
+    // a "." or "_".
+    if (/[._]/.test(check.path)) expect(rendered).not.toContain(check.path)
+  })
+  // The passing checks' detail is the word "passed", which legitimately appears
+  // in the category labels; the failing check's detail is the interesting one.
+  expect(rendered).not.toContain(failingPacingCheck.detail)
+})
+
+it('keeps Approve disabled when the validation report has not passed, even with every other gate satisfied', async () => {
+  // `canApprove`'s `&& validationPassed` conjunct: without it the panel offers
+  // a button that can only ever 422 at the server's precondition 3.
+  const unvalidatedDraftDetail = {
+    ...approvableDraftDetail,
+    validation_report: { passed: false, negative_predicate_coverage: [0] },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => unvalidatedDraftDetail }
+    if (url === unvalidatedDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByLabelText('Fixture fx-1 params')
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  // Every other client-side gate is satisfied: 5 qualifying fixtures against a
+  // required count of 1, full predicate coverage, a valid slug and the
+  // confirmation checked.
+  expect(
+    screen.getByRole('heading', { name: 'Approve' }).nextElementSibling.textContent,
+  ).toContain('Verified fixtures: 5 / 1 required.')
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('keeps Approve disabled when a guard predicate has no negative witness, even with every other gate satisfied', async () => {
+  // `canApprove`'s `&& hasFullPredicateCoverage` conjunct: the server refuses
+  // at precondition 7, so without this the button 422s.
+  const uncoveredDraftDetail = {
+    ...approvableDraftDetail,
+    guard_document: {
+      guard_version: 1,
+      predicates: [
+        { predicate: 'positive', value: { node: 'field_ref', field: 'n' } },
+        { predicate: 'positive', value: { node: 'field_ref', field: 'm' } },
+      ],
+    },
+    validation_report: { passed: true, negative_predicate_coverage: [0] },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => uncoveredDraftDetail }
+    if (url === uncoveredDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByLabelText('Fixture fx-1 params')
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
 it('submits reject feedback and returns to the list', async () => {
   const fetchMock = installFetchMock()
   render(<MetaReviewPanel />)
