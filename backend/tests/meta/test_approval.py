@@ -460,9 +460,52 @@ def test_duplicate_observation_fixtures_count_once(engine, session):
 
 def test_missing_expected_result_not_counted_raises_precondition(engine, session):
     # Fixtures with no human-confirmed expected_result must not count toward the
-    # minimum-real-fixture threshold even though observation_id is set.
-    _seed_draft(session, draft_id="draft-1", set_expected_result=False)
-    with pytest.raises(ApprovalPreconditionError):
+    # minimum-real-fixture threshold even though observation_id is set. This
+    # trips ONLY precondition 8: both reports are present, passing and
+    # hash-matching (see the assertions below), so approval reaches the
+    # verified-fixture count query and is stopped by its
+    # `expected_result_json.isnot(None)` clause and nothing else.
+    draft = _seed_draft(session, draft_id="draft-1", set_expected_result=False)
+    assert json.loads(draft.validation_report_json)["artifact_hash"] == draft.artifact_hash
+    assert json.loads(draft.quality_report_json)["artifact_hash"] == draft.artifact_hash
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
+        approve_draft_service(
+            draft_id="draft-1", template_name="x", reviewer_label="dev",
+            math_semantics_confirmed=True,
+        )
+
+
+@pytest.mark.parametrize("structural_state", [False, None])
+def test_unconfirmed_structural_check_not_counted_raises_precondition(
+    engine, session, structural_state
+):
+    """Precondition 8's ``structural_check_passed.is_(True)`` clause is the
+    security-relevant half of the Task 12.5 repair: ``update_fixture`` nulls
+    ``structural_check_passed`` when a reviewer changes a fixture's params, and
+    this clause is the *only* thing that then stops the draft from being
+    approvable. Nothing tested it -- the two tests that do produce that state
+    (``test_review_api.py``, ``test_review_api_v3.py``) simultaneously null
+    ``validation_report_json``, so approval stops at precondition 3 and never
+    reaches 8, and ``_seed_draft``'s ``structural_ok`` knob was never
+    overridden. Drop the clause and the suite stayed green, silently making
+    params-changed drafts approvable again.
+
+    Both reports are left intact, passing and hash-matching, so this trips
+    precondition 8 and only precondition 8. ``None`` is the state
+    ``update_fixture`` actually writes; ``False`` is a failed structural check.
+    """
+    draft = _seed_draft(session, draft_id="draft-1", structural_ok=structural_state)
+    assert json.loads(draft.validation_report_json)["passed"] is True
+    assert json.loads(draft.validation_report_json)["artifact_hash"] == draft.artifact_hash
+    assert json.loads(draft.quality_report_json)["artifact_hash"] == draft.artifact_hash
+    assert all(
+        fixture.structural_check_passed is structural_state
+        for fixture in session.query(models.TemplateDraftFixture)
+        .filter_by(draft_id="draft-1", kind="positive").all()
+    )
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
         approve_draft_service(
             draft_id="draft-1", template_name="x", reviewer_label="dev",
             math_semantics_confirmed=True,
