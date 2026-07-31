@@ -125,6 +125,16 @@ def apply_literal_test_mutation(candidate, mutation):
             "timeline": timeline, "total_duration_seconds": program.total_duration_seconds + 1.0,
         }))
     if mutation == "detach_dimension_label":
+        # A dimension relation is identified by its typed target part
+        # (`length_edge`/`width_edge` -- the same parts
+        # `check_dimension_anchor_specificity` and the rendered-quality probe
+        # both select on; see `app/meta/v3/quality.py`'s `DIMENSION_TARGET_PARTS`),
+        # not by a ref-name convention no compiled program follows. Detaching
+        # its index (while keeping the dimension-typed part) is the only way
+        # to construct a "genuinely non-specific" dimension anchor, since the
+        # compiler itself refuses to emit one -- this exercises the static
+        # check's actual fail path, not a ref string it never sees in
+        # production.
         plan = _perimeter_plan()
         perimeter = _compile(
             plan,
@@ -132,12 +142,12 @@ def apply_literal_test_mutation(candidate, mutation):
             {"length", "width"},
         )
         relation = CalloutRelation(
-            ref="length_dimension",
-            target=AnchorRef(visual_ref="rectangle", part="edge", index=0, anchor="center"),
+            ref="callout_1_0",
+            target=AnchorRef(visual_ref="rectangle", part="length_edge", index=0, anchor="bottom"),
             text="length",
         )
         detached = relation.model_copy(update={
-            "target": relation.target.model_copy(update={"part": None, "index": None}),
+            "target": relation.target.model_copy(update={"index": None}),
         })
         return Candidate(plan, perimeter.model_copy(update={"relations": [detached]}))
     if mutation == "overlap_callout":
@@ -166,6 +176,68 @@ def test_quality_mutations_fail(valid_program, mutation, expected_code):
 
     assert report.passed is False
     assert expected_code in [check.code for check in report.checks if not check.passed]
+
+
+def _perimeter_plan_with_dimension_callouts():
+    # A real teaching plan whose derive beat requests "callout" custom
+    # actions on the declared "length_edge"/"width_edge" semantic parts (see
+    # rectangle_measurement.py) -- the actual typed target a compiled
+    # program emits for a length/width label, and the same construction
+    # `test_dynamic_render_worker.py` uses to exercise this end to end at
+    # the render layer.
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": _field("length"), "width": _field("width"), "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "trace_boundary", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "trace every edge of the boundary",
+             "custom_actions": [
+                 {"kind": "callout", "text": "length", "target": {
+                     "visual_ref": "rectangle", "part": "length_edge", "index": 0, "anchor": "bottom",
+                 }},
+                 {"kind": "callout", "text": "width", "target": {
+                     "visual_ref": "rectangle", "part": "width_edge", "index": 0, "anchor": "left",
+                 }},
+             ]},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "quality-perimeter-dimensions",
+    })
+
+
+def test_real_perimeter_program_with_dimension_callouts_passes_static_quality():
+    """Proves `check_dimension_anchor_specificity` actually runs and ACCEPTS
+    the `length_edge`/`width_edge` alias parts as valid dimension anchors --
+    the exact typed target the real compiler emits for a length/width
+    callout. Before this fix, the check filtered on `"dimension" in
+    relation.ref` (never true) and, had it ever run, would have REJECTED
+    these same relations for not being anchored to a plain "edge" part --
+    i.e. the static gate and the compiler disagreed about what a valid
+    dimension anchor looks like."""
+    plan = _perimeter_plan_with_dimension_callouts()
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+    dimension_refs = {
+        relation.ref for relation in program.relations
+        if relation.target.part in {"length_edge", "width_edge"}
+    }
+    assert dimension_refs, "the plan's callouts must compile to real dimension relations"
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is True
+    assert all(check.passed for check in report.checks if check.code == "dimension_anchor_mismatch")
 
 
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):

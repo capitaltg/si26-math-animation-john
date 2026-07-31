@@ -6,19 +6,11 @@ from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.manim_measurer import ManimTextMeasurer
+from app.meta.v3.quality import DIMENSION_TARGET_PARTS
 from app.meta.v3.renderer import render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
 
 VALID_MODES = {"full", "thumbnail", "probe"}
-
-# Semantic parts that name a rectangle's length/width dimension edges (see
-# `app/meta/v3/rectangle_measurement.py`) -- these are the typed targets a
-# compiled program actually emits for a length/width callout. No compiled
-# relation ref ever contains the substring "dimension" (the beat expander
-# names callout relations `callout_{beat}_{action}` or `median_callout`;
-# see `app/meta/v3/beat_expander.py`), so identification must key off the
-# relation's typed target part instead of the free-form ref string.
-_DIMENSION_TARGET_PARTS = frozenset({"length_edge", "width_edge"})
 
 
 def main() -> None:
@@ -210,7 +202,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         # coercion was never exercised until real dimension relations
         # started flowing through it.
         relation.ref: {"passed": bool(_point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02)}
-        for relation in program.relations if relation.target.part in _DIMENSION_TARGET_PARTS
+        for relation in program.relations if relation.target.part in DIMENSION_TARGET_PARTS
         for relation_data in [relations.get(relation.ref, {})]
         if relation_data
     }
@@ -232,7 +224,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "dimension_anchor_checks": dimensions,
         "declared_dimension_anchors": [
             relation.ref for relation in program.relations
-            if relation.target.part in _DIMENSION_TARGET_PARTS
+            if relation.target.part in DIMENSION_TARGET_PARTS
         ],
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),

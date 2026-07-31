@@ -9,6 +9,16 @@ from app.meta.dsl.v3_common import (
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
 
+# Semantic parts that name a rectangle's length/width dimension edges (see
+# `app/meta/v3/rectangle_measurement.py`). Shared with
+# `app/render/dynamic_render_worker.py`'s rendered-quality probe so the two
+# quality gates agree on what counts as a dimension anchor -- a compiled
+# relation ref never contains the substring "dimension" (the beat expander
+# names callout relations `callout_{beat}_{action}` or `median_callout`; see
+# `app/meta/v3/beat_expander.py`), so identification must key off the
+# relation's typed target part instead of the free-form ref string.
+DIMENSION_TARGET_PARTS = frozenset({"length_edge", "width_edge"})
+
 
 @dataclass(frozen=True)
 class QualityCheck:
@@ -150,11 +160,21 @@ def check_semantic_anchor_specificity(plan, program) -> QualityCheck:
 
 
 def check_dimension_anchor_specificity(plan, program) -> QualityCheck:
+    # Identify a dimension callout by its typed target part -- the same
+    # `length_edge`/`width_edge` parts the rendered-quality probe selects on
+    # (`app/render/dynamic_render_worker.py`) -- not by a ref-name convention
+    # no compiled program follows. A dimension relation is specific when it
+    # names both the edge part AND which of the two same-named edges (its
+    # index); the compiler already enforces this for any normally-compiled
+    # program (`compiler.py`'s `_validate_target`), but this check is the
+    # last static gate before a candidate reaches rendering, so it must not
+    # pass a relation that lost its index some other way (e.g. a refinement
+    # that edits `program.relations` directly).
     for relation_index, relation in enumerate(program.relations):
-        if "dimension" in relation.ref and relation.target.part != "edge":
+        if relation.target.part in DIMENSION_TARGET_PARTS and relation.target.index is None:
             return _failed(
                 "dimension_anchor_mismatch", f"relations[{relation_index}].target",
-                "dimension labels must attach to a rectangle edge anchor",
+                "dimension labels must attach to a specific length/width edge, not the whole rectangle",
             )
     return _passed("dimension_anchor_mismatch", "relations")
 

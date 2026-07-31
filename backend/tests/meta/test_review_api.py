@@ -612,24 +612,45 @@ def test_update_fixture_confirming_unchanged_params_preserves_approval_evidence(
 
 
 def test_update_fixture_reordered_or_reformatted_params_count_as_unchanged(client, pending_v3_draft):
-    """Params that differ only in JSON key order (or, equivalently, numeric
-    formatting like 9 vs 9.0) must not masquerade as a real change -- the
-    comparison must be over parsed values, not the raw JSON string."""
+    """Params that differ only in JSON key order, or in numeric formatting
+    (9 vs 9.0), must not masquerade as a real change -- the comparison must
+    be over parsed values, not the raw JSON string. Both cases are actually
+    exercised here, not just asserted by name: reordering is handled by
+    ``json.loads`` producing a plain dict (key order is not part of dict
+    equality); the numeric-format case is load-bearing on two distinct
+    mechanisms working together -- pydantic's lax float-to-int coercion
+    surviving ``params_cls.model_validate`` (``review_api.py``, which runs
+    BEFORE the params comparison, so a rejected float would 422 rather than
+    ever reach the unchanged-params branch) and then ``3 == 3.0`` in the
+    dict comparison itself."""
     draft_id = pending_v3_draft.id
     before = client.get(f"/meta/drafts/{draft_id}").json()
     fixture = before["fixtures"][0]
+    assert fixture["params"] == {"a": 3, "b": 5, "c": 9}
 
-    response = client.post(
+    reordered = client.post(
         f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
         json={"params": {"c": 9, "a": 3, "b": 5}, "expected_result": {"answer": "9"}},
     )
-    assert response.status_code == 200
-    assert response.json()["structural_check_passed"] is True
+    assert reordered.status_code == 200
+    assert reordered.json()["structural_check_passed"] is True
 
-    after = client.get(f"/meta/drafts/{draft_id}").json()
-    assert after["validation_report"] == before["validation_report"]
-    assert after["quality_report"] == before["quality_report"]
-    assert after["preview_url"] == before["preview_url"]
+    after_reorder = client.get(f"/meta/drafts/{draft_id}").json()
+    assert after_reorder["validation_report"] == before["validation_report"]
+    assert after_reorder["quality_report"] == before["quality_report"]
+    assert after_reorder["preview_url"] == before["preview_url"]
+
+    reformatted = client.post(
+        f"/meta/drafts/{draft_id}/fixtures/{fixture['id']}",
+        json={"params": {"a": 3.0, "b": 5, "c": 9}, "expected_result": {"answer": "9"}},
+    )
+    assert reformatted.status_code == 200, reformatted.json()
+    assert reformatted.json()["structural_check_passed"] is True
+
+    after_reformat = client.get(f"/meta/drafts/{draft_id}").json()
+    assert after_reformat["validation_report"] == before["validation_report"]
+    assert after_reformat["quality_report"] == before["quality_report"]
+    assert after_reformat["preview_url"] == before["preview_url"]
 
 
 def test_update_fixture_changed_params_still_invalidates_approval_evidence(client, pending_v3_draft):
