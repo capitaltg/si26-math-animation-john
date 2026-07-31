@@ -85,7 +85,7 @@ class DraftDetailOut(BaseModel):
     guard_document: dict
     answer_expression: dict
     teaching_plan: dict
-    scene_program: dict | None
+    timeline: list[dict]
     quality_report: dict | None
     classifier_bullet: str
     artifact_hash: str
@@ -157,13 +157,14 @@ def _fixture_out(session, fixture: TemplateDraftFixture) -> FixtureOut:
 def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
     fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
     preview_url = f"/meta/preview/{draft.preview_artifact_hash}" if draft.preview_artifact_hash else None
+    timeline = json.loads(draft.scene_program_json).get("timeline", []) if draft.scene_program_json else []
     return DraftDetailOut(
         id=draft.id, fingerprint_key=draft.fingerprint_key, revision=draft.revision,
         status=draft.status, params_document=json.loads(draft.params_document_json),
         guard_document=json.loads(draft.guard_document_json),
         answer_expression=json.loads(draft.answer_expression_json),
         teaching_plan=json.loads(draft.teaching_plan_json),
-        scene_program=json.loads(draft.scene_program_json) if draft.scene_program_json else None,
+        timeline=timeline,
         quality_report=json.loads(draft.quality_report_json) if draft.quality_report_json else None,
         classifier_bullet=draft.classifier_bullet, artifact_hash=draft.artifact_hash,
         validation_report=json.loads(draft.validation_report_json) if draft.validation_report_json else None,
@@ -187,12 +188,17 @@ def _generation_job_out(job: GenerationJob) -> GenerationJobOut:
 @router.get(
     "/drafts", response_model=list[DraftSummaryOut], dependencies=[Depends(require_reviewer_token)]
 )
-def list_drafts(status: str | None = None):
+def list_drafts():
+    # Invalid, failed, or already-decided candidates must never leak into the
+    # reviewer's list -- this always returns pending_review drafts only,
+    # regardless of any `status` a caller might pass in the query string.
     with meta_session() as session:
-        query = session.query(TemplateDraft)
-        if status is not None:
-            query = query.filter(TemplateDraft.status == status)
-        rows = query.order_by(TemplateDraft.created_at.desc()).all()
+        rows = (
+            session.query(TemplateDraft)
+            .filter(TemplateDraft.status == DRAFT_PENDING_REVIEW)
+            .order_by(TemplateDraft.created_at.desc())
+            .all()
+        )
         return [_draft_summary(row) for row in rows]
 
 
@@ -200,9 +206,14 @@ def list_drafts(status: str | None = None):
     "/drafts/{draft_id}", response_model=DraftDetailOut, dependencies=[Depends(require_reviewer_token)]
 )
 def get_draft(draft_id: str):
+    # A draft ID is proof the candidate is already approvable, subject only to
+    # explicit human math confirmation. Once a draft leaves pending_review
+    # (approved, rejected, superseded, or never reached review), direct access
+    # 404s exactly like an unknown draft -- no endpoint in this API reads a
+    # decided draft by id, so there is no carve-out to make here.
     with meta_session() as session:
         draft = session.get(TemplateDraft, draft_id)
-        if draft is None:
+        if draft is None or draft.status != DRAFT_PENDING_REVIEW:
             raise HTTPException(status_code=404, detail=f"Unknown draft {draft_id}")
         return _draft_detail(session, draft)
 

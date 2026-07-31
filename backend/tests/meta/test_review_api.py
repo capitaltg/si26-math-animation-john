@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,14 +15,21 @@ from app.meta.approval import (
     RevokedConflictError,
     TemplateNameConflictError,
 )
+from app.meta.artifacts import store_artifact
 from app.meta.draft_generation import DraftProposal, ProposedFixture
-from app.meta.drafts import create_generated_draft
-from app.meta.dsl.animation import AnimationDocument
+from app.meta.drafts import persist_reviewable_draft
 from app.meta.dsl.expression import FieldRefNode
 from app.meta.dsl.guard import GuardDocument, PositivePredicate
 from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
 from app.meta.generation_pipeline import run_generation_job
+from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.quality import validate_static_quality
+from app.meta.validation import FixtureCheckResult
+from app.meta.validation_pipeline import ValidatedCandidate
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 
@@ -79,42 +86,9 @@ def _now():
     return datetime(2026, 7, 28, tzinfo=timezone.utc)
 
 
-def _proposal_dict(observation_id="obs-1"):
-    proposal = DraftProposal(
-        params_document=ParamsDocument(
-            params_version=1,
-            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
-        ),
-        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
-        answer_expression=FieldRefNode(field="n"),
-        animation_document=AnimationDocument(animation_version=2, root={"kind": "sequence", "steps": [
-            {
-                "kind": "expression_label",
-                "ref": "n_label",
-                "expression": {"node": "field_ref", "field": "n"},
-                "prefix": "Answer: ",
-                "role": "answer",
-            },
-            {"kind": "appear", "target_ref": "n_label"},
-            {"kind": "wait", "seconds": 1},
-        ]}),
-        classifier_bullet="use for X",
-        fixtures=[
-            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
-            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
-        ],
-    )
-    import json
-    return json.loads(proposal.model_dump_json())
-
-
 def _sample_fingerprint_json():
-    # The brief's test sketch used the literal placeholder "{}" here, but
     # run_generation_job parses job.fingerprint_json into a real Fingerprint
-    # (all 7 fields required, extra="forbid") before the propose step even
-    # runs, so "{}" fails ValidationError unconditionally -- independent of
-    # what's being mocked. Use a valid Fingerprint payload instead (same fix
-    # applied in tests/meta/test_generation_pipeline.py).
+    # (all 7 fields required, extra="forbid"), so it must be a valid payload.
     return Fingerprint(
         fingerprint_version=1,
         operation_family="compare",
@@ -126,21 +100,227 @@ def _sample_fingerprint_json():
     ).model_dump_json()
 
 
-def _seed_pending_review_draft():
+# ------------------------------------------------------------- v3 seeding
+#
+# There is no v2 `create_generated_draft` any more: persisting a reviewable
+# draft in v3 requires a full `ValidatedCandidate` (a real compiled teaching
+# plan/scene program plus passing validation and quality reports). These
+# helpers build one directly -- real `compile_teaching_plan` and
+# `validate_static_quality` calls, a real on-disk preview artifact via
+# `store_artifact` (so `/meta/preview/{hash}` has something to serve) -- and
+# hand `persist_reviewable_draft` the result, exactly like
+# `test_review_api_v3.py`'s `_seed_passing_draft` does. This exercises the
+# review API itself without paying for Bedrock or a real subprocess render.
+
+
+def _plan(variation_seed="review-api"):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "State a whole number result.",
+        "primary_visual": {"kind": "label", "ref": "n_label", "text": "value"},
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "n_label"}],
+             "intent": "show the value"},
+            {"id": "focus", "kind": "focus", "targets": [{"visual_ref": "n_label"}],
+             "intent": "focus on the value"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "n_label"}],
+             "intent": "state the result"},
+        ],
+        "variation_seed": variation_seed,
+    })
+
+
+def _proposal(observation_id="obs-1"):
+    return DraftProposal(
+        params_document=ParamsDocument(
+            params_version=1,
+            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
+        ),
+        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))]),
+        answer_expression=FieldRefNode(field="n"),
+        teaching_plan_document=_plan(),
+        classifier_bullet="use for X",
+        fixtures=[
+            ProposedFixture(kind="positive", expected_outcome="accept", observation_id=observation_id, params={"n": 5}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}),
+        ],
+    )
+
+
+def _candidate(proposal, *, artifact_root):
+    scene_program = compile_teaching_plan(
+        proposal.teaching_plan_document,
+        proposal.answer_expression,
+        frozenset(field.name for field in proposal.params_document.fields),
+        CompileContext(concept_family="review_api_test", grade_band="K-2"),
+    )
+    quality_payload = validate_static_quality(proposal.teaching_plan_document, scene_program).model_payload()
+    artifact_hash = f"sha256:{uuid4().hex}"
+    quality_payload["artifact_hash"] = artifact_hash
+    preview_hash = store_artifact(artifact_root, b"fake preview bytes for review-api tests")
+    fixture_results = [
+        FixtureCheckResult(
+            f"fixture-{index}", True,
+            "accepted" if fixture.kind == "positive" else "rejected",
+            frozenset() if fixture.kind == "positive" else frozenset({0}),
+        )
+        for index, fixture in enumerate(proposal.fixtures)
+    ]
+    return ValidatedCandidate(
+        proposal=proposal,
+        scene_program=scene_program,
+        validation_report={
+            "passed": True,
+            "fixture_results": [],
+            "preview_ok": True,
+            "preview_artifact_hash": preview_hash,
+            "artifact_hash": artifact_hash,
+            "compiler_version": DSL_COMPILER_VERSION,
+            "renderer_version": DYNAMIC_RENDERER_VERSION,
+            "negative_predicate_coverage": [0],
+        },
+        quality_report=quality_payload,
+        preview_artifact_hash=preview_hash,
+        fixture_results=fixture_results,
+    )
+
+
+def _seed_pending_review_draft(observation_id="obs-1", draft_id=None):
     with db.meta_session() as session:
         obs = models.FallbackObservation(
-            id="obs-1", candidate_id="cand-1", source_excerpt="there are 5 apples",
+            id=observation_id, candidate_id="cand-1", source_excerpt="there are 5 apples",
+            grade_level=2, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        )
+        session.add(obs)
+        session.flush()
+        job = models.GenerationJob(
+            id=f"job-{observation_id}", fingerprint_key="k1", fingerprint_version=1,
+            fingerprint_json=_sample_fingerprint_json(),
+            trigger_observation_ids=json.dumps([observation_id]),
+            status=models.JOB_SUCCEEDED, created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+        session.flush()
+        proposal = _proposal(observation_id)
+        candidate = _candidate(proposal, artifact_root=get_settings().meta_artifact_root)
+        return persist_reviewable_draft(
+            session, new_id=draft_id or uuid4().hex, job=job, candidate=candidate, now=_now(),
+        )
+
+
+# A teaching plan with realistic beat text, used only by the v3 review-evidence
+# test (Step 1 of the brief): the first beat's id must be "reveal_values" so
+# `timeline[0].beat_id` proves the compiled timeline -- not just the teaching
+# plan -- made it through to the review payload.
+def _evidence_plan():
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare three numbers to find the largest.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [
+                {"node": "field_ref", "field": "a"},
+                {"node": "field_ref", "field": "b"},
+                {"node": "field_ref", "field": "c"},
+            ],
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "focus_largest", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 2}],
+             "intent": "focus on the largest value"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "values"}],
+             "intent": "state the largest value"},
+        ],
+        "variation_seed": "review-evidence",
+    })
+
+
+def _evidence_proposal():
+    return DraftProposal(
+        params_document=ParamsDocument(
+            params_version=1,
+            fields=[
+                IntegerFieldSpec(name="a", label="A", description="", minimum=1, maximum=10),
+                IntegerFieldSpec(name="b", label="B", description="", minimum=1, maximum=10),
+                IntegerFieldSpec(name="c", label="C", description="", minimum=1, maximum=10),
+            ],
+        ),
+        guard_document=GuardDocument(guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="a"))]),
+        answer_expression=FieldRefNode(field="c"),
+        teaching_plan_document=_evidence_plan(),
+        classifier_bullet="use for comparing three numbers",
+        fixtures=[
+            ProposedFixture(kind="positive", expected_outcome="accept", observation_id="obs-evidence", params={"a": 3, "b": 5, "c": 9}),
+            ProposedFixture(kind="negative", expected_outcome="reject", params={"a": -1, "b": 5, "c": 9}),
+        ],
+    )
+
+
+@pytest.fixture
+def pending_v3_draft(client):
+    with db.meta_session() as session:
+        obs = models.FallbackObservation(
+            id="obs-evidence", candidate_id="cand-evidence", source_excerpt="3, 5, and 9",
+            grade_level=3, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+        )
+        session.add(obs)
+        session.flush()
+        job = models.GenerationJob(
+            id="job-evidence", fingerprint_key="k-evidence", fingerprint_version=1,
+            fingerprint_json=_sample_fingerprint_json(), trigger_observation_ids=json.dumps(["obs-evidence"]),
+            status=models.JOB_SUCCEEDED, created_at=_now(), updated_at=_now(),
+        )
+        session.add(job)
+        session.flush()
+        proposal = _evidence_proposal()
+        candidate = _candidate(proposal, artifact_root=get_settings().meta_artifact_root)
+        return persist_reviewable_draft(
+            session, new_id="draft-evidence", job=job, candidate=candidate, now=_now(),
+        )
+
+
+@pytest.fixture
+def failed_private_job(client, monkeypatch):
+    """A generation attempt that never becomes a draft: every retry fails
+    validation, so the job is marked needs-manual and no `TemplateDraft` row
+    is ever created -- the failure stays entirely private. Named for the
+    brief's Step 1 test, which proves this can never leak into the reviewer's
+    pending-review list."""
+    with db.meta_session() as session:
+        obs = models.FallbackObservation(
+            id="obs-failed", candidate_id="cand-failed", source_excerpt="ambiguous shape",
             grade_level=2, observation_kind="unsupported_shape", excluded=False, created_at=_now(),
         )
         session.add(obs)
         session.flush()
         jobs.evaluate_and_enqueue(
-            session, fingerprint_key="k1", fingerprint_version=1, fingerprint_json=_sample_fingerprint_json(),
-            trigger_observation_ids=[obs.id], threshold=0, new_id="job-1", now=_now(),
+            session, fingerprint_key="k-failed", fingerprint_version=1,
+            fingerprint_json=_sample_fingerprint_json(), trigger_observation_ids=[obs.id],
+            threshold=0, new_id="job-failed", now=_now(),
         )
-    with patch("app.meta.draft_generation.call_with_tool") as mock_call:
-        mock_call.return_value = ("propose_template_draft", _proposal_dict())
-        return run_generation_job(owner="worker-1")
+
+    failure = V3Failure(
+        code="serial_simple_reveal", path="timeline", expected="together",
+        observed="stagger", hint="reveal values together",
+    )
+    monkeypatch.setattr(
+        "app.meta.generation_pipeline.propose_template_draft",
+        lambda *args, **kwargs: _proposal(),
+    )
+
+    def _always_fails(*args, **kwargs):
+        raise V3ValidationError(failure)
+
+    monkeypatch.setattr("app.meta.generation_pipeline.validate_candidate", _always_fails)
+
+    assert run_generation_job(owner="worker-1") is None
+    with db.meta_session() as session:
+        assert session.query(models.TemplateDraft).count() == 0
+    return "job-failed"
 
 
 def _seed_approvable_draft(
@@ -157,7 +337,10 @@ def _seed_approvable_draft(
     """Seed a draft with enough real, confirmed fixtures and a passing report
     to satisfy every ``approve_draft_service`` precondition by default, with
     knobs to violate exactly one precondition at a time (mirrors
-    ``tests/meta/test_approval.py``'s ``_seed_draft``)."""
+    ``tests/meta/test_approval.py``'s ``_seed_draft``). Built directly from
+    real DSL document models and TemplateDraft/TemplateDraftFixture rows,
+    not via a draft-creation pipeline helper -- the v2 `create_generated_draft`
+    this used to call is gone in v3."""
     with db.meta_session() as session:
         job = models.GenerationJob(
             id=f"job-{draft_id}", fingerprint_key=fingerprint_key, fingerprint_version=1,
@@ -166,48 +349,61 @@ def _seed_approvable_draft(
         )
         session.add(job)
 
-        fixtures = []
         for i in range(positive_count):
-            obs_id = f"obs-{draft_id}-{i}"
             session.add(models.FallbackObservation(
-                id=obs_id, candidate_id=f"cand-{draft_id}-{i}",
+                id=f"obs-{draft_id}-{i}", candidate_id=f"cand-{draft_id}-{i}",
                 source_excerpt="there are 5 apples", grade_level=2,
                 observation_kind="unsupported_shape", excluded=False, created_at=_now(),
             ))
-            fixtures.append(ProposedFixture(
-                kind="positive", expected_outcome="accept", observation_id=obs_id, params={"n": 5},
-            ))
-        fixtures.append(ProposedFixture(kind="negative", expected_outcome="reject", params={"n": -1}))
         session.flush()
 
-        proposal = DraftProposal(
-            params_document=ParamsDocument(
-                params_version=1,
-                fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
-            ),
-            guard_document=GuardDocument(
-                guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
-            ),
-            answer_expression=FieldRefNode(field="n"),
-            animation_document=AnimationDocument(root={"kind": "sequence", "steps": [
-            {"kind": "label", "ref": "n_label", "text": "n"},
-            {"kind": "appear", "target_ref": "n_label"},
-            {"kind": "wait", "seconds": 1},
-        ]}),
-            classifier_bullet="use for X",
-            fixtures=fixtures,
+        params_document = ParamsDocument(
+            params_version=1,
+            fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
         )
-        draft = create_generated_draft(session, new_id=draft_id, job=job, proposal=proposal, now=_now())
+        guard_document = GuardDocument(
+            guard_version=1, predicates=[PositivePredicate(value=FieldRefNode(field="n"))],
+        )
+        answer_expression = FieldRefNode(field="n")
+        plan = _plan(variation_seed=f"approve-{draft_id}")
+        scene_program = compile_teaching_plan(
+            plan, answer_expression, frozenset({"n"}),
+            CompileContext(concept_family="review_api_approve", grade_band="K-2"),
+        )
+        artifact_hash = f"sha256:{draft_id}"
 
-        for fx in session.query(models.TemplateDraftFixture).filter_by(draft_id=draft.id).all():
-            if fx.kind == "positive":
-                if set_expected_result:
-                    fx.expected_result_json = json.dumps({"answer": "5"})
-                fx.structural_check_passed = True
-            else:
-                fx.structural_check_passed = True
+        draft = models.TemplateDraft(
+            id=draft_id, job_id=job.id, fingerprint_key=fingerprint_key, fingerprint_version=1,
+            fingerprint_json="{}", revision=1,
+            params_document_json=params_document.model_dump_json(),
+            guard_document_json=guard_document.model_dump_json(),
+            answer_expression_json=answer_expression.model_dump_json(),
+            teaching_plan_json=plan.model_dump_json(),
+            scene_program_json=scene_program.model_dump_json(),
+            classifier_bullet="use for X",
+            dsl_schema_versions_json=json.dumps({"params": 1, "guard": 1, "teaching_plan": 3, "scene": 3}),
+            artifact_hash=artifact_hash,
+            status=status,
+            created_at=_now(), updated_at=_now(),
+        )
+        session.add(draft)
+        session.flush()
 
-        draft.status = status
+        for i in range(positive_count):
+            session.add(models.TemplateDraftFixture(
+                id=f"{draft_id}-fixture-pos-{i}", draft_id=draft_id,
+                observation_id=f"obs-{draft_id}-{i}", kind="positive", expected_outcome="accept",
+                generation_method="proposed", params_json=json.dumps({"n": 5}),
+                expected_result_json=json.dumps({"answer": "5"}) if set_expected_result else None,
+                structural_check_passed=True, created_at=_now(),
+            ))
+        session.add(models.TemplateDraftFixture(
+            id=f"{draft_id}-fixture-neg", draft_id=draft_id, observation_id=None,
+            kind="negative", expected_outcome="reject", generation_method="proposed",
+            params_json=json.dumps({"n": -1}), expected_result_json=None,
+            structural_check_passed=True, created_at=_now(),
+        ))
+
         draft.preview_artifact_hash = "preview-hash"
         cov = coverage if coverage is not None else [0]
         report = {
@@ -216,14 +412,18 @@ def _seed_approvable_draft(
             "fixture_results": [],
             "preview_ok": passed,
             "preview_error": None,
-            "artifact_hash": report_hash if report_hash is not None else draft.artifact_hash,
+            "artifact_hash": report_hash if report_hash is not None else artifact_hash,
             "compiler_version": DSL_COMPILER_VERSION,
             "renderer_version": DYNAMIC_RENDERER_VERSION,
             "negative_predicate_coverage": cov,
         }
         draft.validation_report_json = json.dumps(report)
+        draft.quality_report_json = json.dumps({"passed": passed, "checks": [], "artifact_hash": artifact_hash})
         session.flush()
         return draft.id
+
+
+# --------------------------------------------------------------- list/detail
 
 
 def test_list_drafts_filters_by_status(client):
@@ -231,6 +431,23 @@ def test_list_drafts_filters_by_status(client):
     resp = client.get("/meta/drafts", params={"status": "pending_review"})
     assert resp.status_code == 200
     assert [d["id"] for d in resp.json()] == [draft.id]
+
+
+def test_list_returns_only_pending_review(client, failed_private_job):
+    rows = client.get("/meta/drafts?status=pending_review").json()
+    assert rows == []
+
+
+def test_list_never_leaks_non_pending_drafts_regardless_of_status_query(client):
+    """The reviewer list must never contain private/failed candidates no
+    matter what `status` value a caller passes."""
+    pending = _seed_pending_review_draft()
+    _seed_approvable_draft(draft_id="draft-approved-x", fingerprint_key="k-approved-x", status=models.DRAFT_APPROVED)
+    _seed_approvable_draft(draft_id="draft-rejected-x", fingerprint_key="k-rejected-x", status=models.DRAFT_REJECTED)
+
+    for query in ({"status": "approved"}, {"status": "rejected"}, {}):
+        rows = client.get("/meta/drafts", params=query).json()
+        assert [row["id"] for row in rows] == [pending.id]
 
 
 def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch):
@@ -247,11 +464,36 @@ def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch)
     assert body["required_fixture_count"] == 1
 
 
+def test_draft_detail_returns_v3_review_evidence(client, pending_v3_draft):
+    detail = client.get(f"/meta/drafts/{pending_v3_draft.id}").json()
+    assert detail["teaching_plan"]["plan_version"] == 3
+    assert detail["timeline"][0]["beat_id"] == "reveal_values"
+    assert detail["quality_report"]["passed"] is True
+    assert "animation_document" not in detail
+
+
+@pytest.mark.parametrize(
+    "status",
+    [models.DRAFT_APPROVED, models.DRAFT_REJECTED, models.DRAFT_GENERATED, models.DRAFT_SUPERSEDED],
+)
+def test_get_draft_404s_for_any_non_pending_status(client, status):
+    """A draft ID is proof the candidate is already approvable -- once it
+    leaves pending_review (approved, rejected, superseded, or never reached
+    review), direct access must 404 like an unknown draft. No audit endpoint
+    in this codebase reads an approved draft by id, so there is no carve-out."""
+    draft_id = _seed_approvable_draft(draft_id=f"draft-{status}", fingerprint_key=f"k-{status}", status=status)
+    resp = client.get(f"/meta/drafts/{draft_id}")
+    assert resp.status_code == 404
+
+
 def test_get_preview_serves_stored_artifact(client):
     draft = _seed_pending_review_draft()
     resp = client.get(f"/meta/preview/{draft.preview_artifact_hash}")
     assert resp.status_code == 200
     assert len(resp.content) > 0
+
+
+# ----------------------------------------------------------- fixture edits
 
 
 def test_update_fixture_params_and_expected_result(client):
@@ -317,29 +559,6 @@ def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
                 {"node": "field_ref", "field": "n"},
             ],
         })
-        stored_draft.animation_document_json = json.dumps({
-            "animation_version": 2,
-            "root": {
-                "kind": "sequence",
-                "steps": [
-                    {
-                        "kind": "expression_label",
-                        "ref": "n_label",
-                        "expression": {
-                            "node": "divide",
-                            "operands": [
-                                {"node": "literal", "value": 1},
-                                {"node": "field_ref", "field": "n"},
-                            ],
-                        },
-                        "prefix": "Answer: ",
-                        "role": "answer",
-                    },
-                    {"kind": "appear", "target_ref": "n_label"},
-                    {"kind": "wait", "seconds": 1},
-                ],
-            },
-        })
 
     fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
     response = client.post(
@@ -351,29 +570,6 @@ def test_update_fixture_rejects_unevaluable_params_without_persisting(client):
     fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
     assert fixture["params"] == {"n": 5}
     assert fixture["expected_result"] is None
-
-
-def test_update_fixture_revalidates_and_refreshes_preview(client):
-    draft = _seed_pending_review_draft()
-    fixture_id = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]["id"]
-    with db.meta_session() as session:
-        obs = session.get(models.FallbackObservation, "obs-1")
-        obs.source_excerpt = "there are 5 or 6 apples"
-
-    with patch("app.meta.validation_pipeline.render_and_store_preview") as mock_render:
-        mock_render.return_value = "hash-after-edit"
-        response = client.post(
-            f"/meta/drafts/{draft.id}/fixtures/{fixture_id}",
-            json={"params": {"n": 6}, "expected_result": {"answer": "6"}},
-        )
-
-    assert response.status_code == 200
-    assert mock_render.called
-    detail = client.get(f"/meta/drafts/{draft.id}").json()
-    assert detail["status"] == "pending_review"
-    assert detail["preview_url"] == "/meta/preview/hash-after-edit"
-    assert detail["validation_report"]["artifact_hash"] == draft.artifact_hash
-    assert detail["validation_report"]["passed"] is True
 
 
 def test_update_fixture_rejects_edit_on_approved_draft_without_mutation(client):
@@ -389,18 +585,31 @@ def test_update_fixture_rejects_edit_on_approved_draft_without_mutation(client):
     )
 
     assert response.status_code == 409
-    fixture = client.get(f"/meta/drafts/{draft.id}").json()["fixtures"][0]
-    assert fixture["params"] == {"n": 5}
-    assert fixture["expected_result"] is None
+    # The draft is no longer pending_review, so GET must now 404 it (the
+    # reviewer never sees non-pending drafts) -- check the no-mutation claim
+    # against the database directly rather than through the review API.
+    assert client.get(f"/meta/drafts/{draft.id}").status_code == 404
     with db.meta_session() as session:
+        fixture = session.get(models.TemplateDraftFixture, fixture_id)
+        assert json.loads(fixture.params_json) == {"n": 5}
+        assert fixture.expected_result_json is None
         stored = session.get(models.TemplateDraft, draft.id)
         assert stored.status == models.DRAFT_APPROVED
 
 
-@patch("app.meta.draft_generation.call_with_tool")
-def test_reject_draft_creates_new_revision(mock_call, client):
+# --------------------------------------------------------------- reject flow
+
+
+def test_reject_draft_creates_new_revision(client, monkeypatch):
     draft = _seed_pending_review_draft()
-    mock_call.return_value = ("propose_template_draft", _proposal_dict())
+    monkeypatch.setattr(
+        "app.meta.generation_pipeline.propose_template_draft",
+        lambda *args, **kwargs: _proposal(),
+    )
+    monkeypatch.setattr(
+        "app.meta.generation_pipeline.validate_candidate",
+        lambda *args, **kwargs: _candidate(_proposal(), artifact_root=get_settings().meta_artifact_root),
+    )
     resp = client.post(f"/meta/drafts/{draft.id}/reject", json={"feedback": "too loose"})
     assert resp.status_code == 200
     body = resp.json()
@@ -408,10 +617,13 @@ def test_reject_draft_creates_new_revision(mock_call, client):
     assert body["new_draft"]["revision"] == 2
 
 
-@patch("app.meta.draft_generation.call_with_tool")
-def test_reject_draft_restores_pending_review_when_refinement_fails(mock_call, client):
+def test_reject_draft_restores_pending_review_when_refinement_fails(client, monkeypatch):
     draft = _seed_pending_review_draft()
-    mock_call.side_effect = RuntimeError("bedrock unavailable")
+
+    def _bedrock_unavailable(*args, **kwargs):
+        raise RuntimeError("bedrock unavailable")
+
+    monkeypatch.setattr("app.meta.generation_pipeline.propose_template_draft", _bedrock_unavailable)
 
     resp = client.post(f"/meta/drafts/{draft.id}/reject", json={"feedback": "too loose"})
 
@@ -422,6 +634,9 @@ def test_reject_draft_restores_pending_review_when_refinement_fails(mock_call, c
         assert original.status == models.DRAFT_PENDING_REVIEW
         assert original.reviewer_feedback == "too loose"
         assert session.query(models.TemplateReview).filter_by(draft_id=draft.id).count() == 1
+
+
+# ------------------------------------------------------------------ approve
 
 
 def test_approve_disabled_returns_409_before_checking_preconditions(client):
@@ -525,6 +740,8 @@ def test_approve_template_name_collision_returns_409(approval_client):
     (ApprovalConflictError, 409),
 ])
 def test_approve_maps_each_service_exception_to_http_status(exc_cls, expected_status, approval_client):
+    from unittest.mock import patch
+
     with patch("app.meta.review_api.approve_draft_service", side_effect=exc_cls("boom")):
         resp = approval_client.post(
             "/meta/drafts/any-id/approve",

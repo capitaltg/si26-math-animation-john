@@ -53,6 +53,58 @@ function fixtureStatusColor(fixture) {
   return '#c00'
 }
 
+// The reviewer never sees a raw quality-check code, path, or detail string --
+// only a human-readable category, and only once every check in that category
+// has passed (the quality checklist shown here is compact and pass-only; a
+// draft that failed any check never reaches pending_review in the first
+// place, so there is nothing to explain). This map is the one place the
+// code-to-label grouping lives; do not scatter it into the JSX below.
+const QUALITY_CHECK_CATEGORIES = [
+  {
+    label: 'Pacing',
+    codes: new Set([
+      'timeline_duration', 'timeline_over_budget', 'timeline_duration_out_of_bounds',
+      'serial_simple_reveal', 'conclusion_hold_too_short', 'unexplained_idle_time',
+      'premature_answer_emphasis', 'static_process_visual',
+    ]),
+  },
+  {
+    label: 'Anchor alignment',
+    codes: new Set(['collection_anchor_for_item', 'dimension_anchor_mismatch', 'callout_collision']),
+  },
+]
+
+function passingQualityCategoryLabels(qualityReport) {
+  const checks = qualityReport?.checks ?? []
+  return QUALITY_CHECK_CATEGORIES.filter(({ codes }) => {
+    const matching = checks.filter((check) => codes.has(check.code))
+    return matching.length > 0 && matching.every((check) => check.passed)
+  }).map(({ label }) => label)
+}
+
+function capitalize(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1)
+}
+
+// Brief-specified format: capitalized beat kind, a middle-dot separator with
+// spaces, then the beat's intent verbatim -- e.g. "Reveal · show the ordered
+// values together".
+function formatBeat(beat) {
+  return `${capitalize(beat.kind)} · ${beat.intent}`
+}
+
+// The API exposes the compiled timeline (each timed action's at_seconds/
+// duration_seconds) rather than a separate total-duration field, so the
+// panel derives the scene's total compiled duration from it directly.
+function totalTimelineSeconds(timeline) {
+  return timeline.reduce((max, entry) => Math.max(max, entry.at_seconds + entry.duration_seconds), 0)
+}
+
+// Trim trailing zeros: 8 seconds, not 8.0 seconds; 7.5 seconds, not 7.50.
+function formatSeconds(seconds) {
+  return `${Number(seconds.toFixed(2))} seconds`
+}
+
 export default function MetaReviewPanel() {
   const [drafts, setDrafts] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -170,16 +222,13 @@ export default function MetaReviewPanel() {
     setLoading(true)
     setError(null)
     try {
-      const responses = await Promise.all([
-        fetch('/meta/drafts?status=pending_review', { headers: authHeaders() }),
-        fetch('/meta/drafts?status=failed_validation', { headers: authHeaders() }),
-      ])
-      const draftLists = await Promise.all(responses.map(async (resp) => {
-        const data = await responseJson(resp)
-        if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load drafts'))
-        return data
-      }))
-      setDrafts([...new Map(draftLists.flat().map((draft) => [draft.id, draft])).values()])
+      // Invalid or already-decided candidates never leak into this list --
+      // the review API only ever returns pending_review drafts, so this is
+      // the only status worth requesting.
+      const resp = await fetch('/meta/drafts?status=pending_review', { headers: authHeaders() })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load drafts'))
+      setDrafts(data)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -307,6 +356,8 @@ export default function MetaReviewPanel() {
   const positiveFixtures = selected ? selected.fixtures.filter((f) => f.kind === 'positive') : []
   const guardFixtures = selected ? selected.fixtures.filter((f) => f.kind !== 'positive') : []
   const validationPassed = selected?.validation_report?.passed === true
+  const passingQualityLabels = passingQualityCategoryLabels(selected?.quality_report)
+  const totalDurationSeconds = selected ? totalTimelineSeconds(selected.timeline) : 0
   const canApprove = Boolean(
     selected
     && selected.status === 'pending_review'
@@ -358,6 +409,25 @@ export default function MetaReviewPanel() {
           <button onClick={returnToList}>Back to list</button>
           <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
           <p>{selected.classifier_bullet}</p>
+
+          <section>
+            <h3>Teaching plan</h3>
+            <p>{selected.teaching_plan.learning_objective}</p>
+            <ol>
+              {selected.teaching_plan.beats.map((beat) => (
+                <li key={beat.id}>{formatBeat(beat)}</li>
+              ))}
+            </ol>
+            <p>Total compiled duration: <strong>{formatSeconds(totalDurationSeconds)}</strong></p>
+            {passingQualityLabels.length > 0 && (
+              <ul>
+                {passingQualityLabels.map((label) => (
+                  <li key={label} style={{ color: '#1a7f37' }}>{label} passed</li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           {previewSrc && (
             <img
               src={previewSrc}

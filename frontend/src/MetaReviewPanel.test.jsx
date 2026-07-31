@@ -24,7 +24,18 @@ const draftDetail = {
   params_document: { params_version: 1, fields: [] },
   guard_document: { guard_version: 1, predicates: [] },
   answer_expression: { node: 'literal', value: 1 },
-  animation_document: { animation_version: 1, root: { kind: 'label', text: 'x' } },
+  teaching_plan: {
+    plan_version: 3,
+    learning_objective: 'Show a fraction of a whole.',
+    beats: [
+      { id: 'reveal', kind: 'reveal', intent: 'show the whole and its parts' },
+      { id: 'conclude', kind: 'conclude', intent: 'state the fraction shown' },
+    ],
+  },
+  timeline: [
+    { at_seconds: 0, duration_seconds: 6, beat_id: 'reveal' },
+  ],
+  quality_report: { passed: true, checks: [] },
   classifier_bullet: 'use for fraction-of-whole bars',
   artifact_hash: 'sha256:abc',
   validation_report: { passed: true },
@@ -41,13 +52,61 @@ const draftDetail = {
   reviewer_feedback: null,
 }
 
+// A draft whose teaching plan/timeline/quality-report evidence exercises the
+// v3 review panels: a realistic beat, an adaptive compiled duration, and a
+// quality report whose checks span both label-mapped categories (Pacing,
+// Anchor alignment).
+const v3DraftDetail = {
+  ...draftDetail,
+  teaching_plan: {
+    plan_version: 3,
+    learning_objective: 'Compare three numbers to find the largest.',
+    beats: [
+      { id: 'reveal_values', kind: 'reveal', intent: 'show the ordered values together' },
+      { id: 'focus_largest', kind: 'focus', intent: 'focus on the largest value' },
+      { id: 'conclude', kind: 'conclude', intent: 'state the largest value' },
+    ],
+  },
+  timeline: [
+    { at_seconds: 0, duration_seconds: 7.5, beat_id: 'reveal_values' },
+  ],
+  quality_report: {
+    passed: true,
+    checks: [
+      { code: 'timeline_duration', passed: true, path: 'total_duration_seconds', detail: 'passed' },
+      { code: 'serial_simple_reveal', passed: true, path: 'timeline', detail: 'passed' },
+      { code: 'premature_answer_emphasis', passed: true, path: 'visuals.evaluated_answer', detail: 'passed' },
+      { code: 'conclusion_hold_too_short', passed: true, path: 'timeline', detail: 'passed' },
+      { code: 'unexplained_idle_time', passed: true, path: 'timeline', detail: 'passed' },
+      { code: 'static_process_visual', passed: true, path: 'strategy', detail: 'passed' },
+      { code: 'collection_anchor_for_item', passed: true, path: 'relations', detail: 'passed' },
+      { code: 'dimension_anchor_mismatch', passed: true, path: 'relations', detail: 'passed' },
+      { code: 'callout_collision', passed: true, path: 'timeline', detail: 'passed' },
+    ],
+  },
+}
+
+function installV3FetchMock() {
+  const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [draftSummary] }
+    }
+    if (url === '/meta/drafts/draft-1') {
+      return { ok: true, json: async () => v3DraftDetail }
+    }
+    if (url === v3DraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 function installFetchMock({ fixtureResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
-    }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
     }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => draftDetail }
@@ -101,9 +160,6 @@ function installApprovableFetchMock({ approveResponse } = {}) {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
-    }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => approvableDraftDetail }
     }
@@ -131,26 +187,15 @@ it('lists pending drafts and opens one for review', async () => {
   expect(screen.getByText(/5 apples/)).not.toBeNull()
 })
 
-it('lists failed-validation drafts for repair', async () => {
-  const failedValidationDraft = {
-    ...draftSummary,
-    id: 'draft-2',
-    fingerprint_key: 'needs-repair',
-    status: 'failed_validation',
-  }
-  vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') {
-      return { ok: true, json: async () => [draftSummary] }
-    }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [failedValidationDraft] }
-    }
-    throw new Error(`Unexpected fetch: ${url}`)
-  }))
-
+it('shows teaching beats, adaptive duration, and passing quality evidence', async () => {
+  installV3FetchMock()
   render(<MetaReviewPanel />)
-
-  await waitFor(() => expect(screen.getByText('needs-repair')).not.toBeNull())
+  fireEvent.click(await screen.findByText('Review'))
+  expect(await screen.findByRole('heading', { name: 'Teaching plan' })).not.toBeNull()
+  expect(screen.getByText('Reveal · show the ordered values together')).not.toBeNull()
+  expect(screen.getByText('7.5 seconds')).not.toBeNull()
+  expect(screen.getByText('Pacing passed')).not.toBeNull()
+  expect(screen.getByText('Anchor alignment passed')).not.toBeNull()
 })
 
 it('submits reject feedback and returns to the list', async () => {
@@ -199,7 +244,6 @@ it('retries loading drafts once a valid token is entered after an unauthenticate
         return { ok: false, status: 401, json: async () => ({ detail: 'Invalid or missing reviewer token' }) }
       }
       if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
-      if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -214,10 +258,13 @@ it('retries loading drafts once a valid token is entered after an unauthenticate
   await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
 })
 
-it('explains why a failed-validation draft cannot be approved', async () => {
+it('explains why a draft with a failing validation report cannot be approved', async () => {
+  // The draft stays pending_review -- only pending_review drafts are ever
+  // fetchable at all (Task 12's privacy rule) -- but its most recent
+  // validation report has not passed yet, so Approve must stay blocked with
+  // an explanation.
   const failedDraftDetail = {
     ...draftDetail,
-    status: 'failed_validation',
     guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
     validation_report: {
       passed: false,
@@ -227,7 +274,6 @@ it('explains why a failed-validation draft cannot be approved', async () => {
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
     if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
-    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failedDraftDetail }
     if (url === failedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     throw new Error(`Unexpected fetch: ${url}`)
@@ -257,7 +303,6 @@ it('labels a passing boundary fixture as accepting, not as a rejection guard cas
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
     if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
-    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => boundaryDraftDetail }
     if (url === boundaryDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     throw new Error(`Unexpected fetch: ${url}`)
@@ -331,9 +376,6 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
-    }
     if (url === '/meta/drafts/draft-1') {
       draftDetailCalls += 1
       return { ok: true, json: async () => (draftDetailCalls === 1 ? draftDetail : reloadedDetail) }
@@ -393,7 +435,6 @@ it('counts duplicate fixtures from one observation only once', async () => {
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
     if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
-    if (url === '/meta/drafts?status=failed_validation') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => duplicateDraftDetail }
     if (url === duplicateDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -467,9 +508,6 @@ it('revokes the previous preview blob URL when a fresh preview replaces it', asy
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
-    }
     if (url === '/meta/drafts/draft-1') {
       draftDetailCallCount += 1
       return { ok: true, json: async () => (draftDetailCallCount === 1 ? draftDetail : reloadedDetail) }
@@ -511,9 +549,6 @@ it('discards an out-of-order preview resolution and revokes its now-stale blob U
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
-    }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
     }
     if (url === '/meta/drafts/draft-1') {
       draftDetailCallCount += 1
@@ -608,9 +643,6 @@ it('revokes a preview blob URL created by a fetch that resolves after the compon
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
-    }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => draftDetail }
     }
@@ -645,9 +677,6 @@ it('revokes a preview blob URL whose fetch was still in flight when Back to list
   const fetchMock = vi.fn(async (url) => {
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
-    }
-    if (url === '/meta/drafts?status=failed_validation') {
-      return { ok: true, json: async () => [] }
     }
     if (url === '/meta/drafts/draft-1') {
       return { ok: true, json: async () => draftDetail }
