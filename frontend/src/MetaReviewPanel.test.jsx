@@ -445,6 +445,39 @@ it('explains why a draft with a failing validation report cannot be approved', a
   expect(screen.getByText('1 of 2 guard predicates (#1) have no guard case proving they correctly reject bad input.')).not.toBeNull()
 })
 
+it('tells a reviewer whose fixture edit cleared the validation evidence to reject and refine', async () => {
+  // The reachable no-evidence shape: editing a fixture's params nulls the
+  // whole validation_report (review_api.update_fixture), leaving a
+  // pending_review draft with no report at all -- not a failing one. Nothing
+  // failed here, and no endpoint re-validates an existing draft, so the copy
+  // must point at reject-and-refine rather than at a validation error.
+  const clearedDraftDetail = {
+    ...draftDetail,
+    guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
+    validation_report: null,
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => clearedDraftDetail }
+    if (url === clearedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
+  fireEvent.click(screen.getByText('Review'))
+
+  await waitFor(() =>
+    expect(
+      screen.getByText("Your fixture edit cleared this draft's validation evidence, so it can't be approved."),
+    ).not.toBeNull(),
+  )
+  // The failure-specific details belong to the other branch -- a cleared
+  // report has no guard coverage to report a shortfall against.
+  expect(screen.queryByText(/have no guard case proving/)).toBeNull()
+  expect(screen.queryByText("This draft failed automatic validation and can't be approved yet.")).toBeNull()
+})
+
 it('labels a passing boundary fixture as accepting, not as a rejection guard case', async () => {
   const boundaryDraftDetail = {
     ...draftDetail,

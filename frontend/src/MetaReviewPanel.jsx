@@ -431,26 +431,38 @@ export default function MetaReviewPanel() {
           {!validationPassed && (
             <div style={{ border: '1px solid #c00', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0', background: '#fff5f5' }}>
               <strong style={{ color: '#c00' }}>
-                This draft failed automatic validation and can't be approved yet.
+                {selected.validation_report
+                  ? "This draft failed automatic validation and can't be approved yet."
+                  : "Your fixture edit cleared this draft's validation evidence, so it can't be approved."}
               </strong>
-              {selected.validation_report?.compile_error && (
-                <p>Compile error: {selected.validation_report.compile_error}</p>
-              )}
-              {selected.validation_report?.preview_error && (
-                <p>Preview error: {selected.validation_report.preview_error}</p>
-              )}
-              {missingPredicateIndexes.length > 0 && (
+              {selected.validation_report ? (
+                <>
+                  {selected.validation_report.compile_error && (
+                    <p>Compile error: {selected.validation_report.compile_error}</p>
+                  )}
+                  {selected.validation_report.preview_error && (
+                    <p>Preview error: {selected.validation_report.preview_error}</p>
+                  )}
+                  {missingPredicateIndexes.length > 0 && (
+                    <p>
+                      {missingPredicateIndexes.length} of {predicateCount} guard predicates
+                      (#{missingPredicateIndexes.join(', #')}) have no guard case proving they
+                      correctly reject bad input.
+                    </p>
+                  )}
+                  <p>
+                    Guard cases are system-generated and not editable here — use
+                    "Reject and request refinement" below so the worker can regenerate
+                    with fixes.
+                  </p>
+                </>
+              ) : (
                 <p>
-                  {missingPredicateIndexes.length} of {predicateCount} guard predicates
-                  (#{missingPredicateIndexes.join(', #')}) have no guard case proving they
-                  correctly reject bad input.
+                  Validation cannot be re-run on an existing draft — use "Reject and
+                  request refinement" below so the worker regenerates one that covers
+                  your corrected fixture.
                 </p>
               )}
-              <p>
-                Guard cases are system-generated and not editable here — use
-                "Reject and request refinement" below so the worker can regenerate
-                with fixes.
-              </p>
             </div>
           )}
           <h3>Fixtures to verify ({qualifyingFixtureCount} / {requiredFixtureCount})</h3>
