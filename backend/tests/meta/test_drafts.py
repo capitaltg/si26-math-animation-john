@@ -155,6 +155,7 @@ def test_persistence_rejects_fixture_result_with_unknown_identity(session, valid
             now=_now(),
         )
 
+    assert session.query(models.TemplateDraft).count() == 0
     assert session.query(models.TemplateDraftFixture).count() == 0
 
 

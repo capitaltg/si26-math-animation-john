@@ -1,6 +1,5 @@
 import hmac
 import json
-from datetime import datetime, timezone
 from fractions import Fraction
 from math import isfinite
 
@@ -12,9 +11,9 @@ from app.config import get_settings
 from app.meta.artifacts import artifact_path
 from app.meta.db import meta_session
 from app.meta.models import (
-    DRAFT_FAILED_VALIDATION,
     DRAFT_PENDING_REVIEW,
     FallbackObservation,
+    GenerationJob,
     TemplateDraft,
     TemplateDraftFixture,
 )
@@ -32,15 +31,14 @@ from app.meta.review_actions import (
     DraftRefinementFailedError,
     reject_and_refine,
 )
-from app.meta.dsl.animation import AnimationDocument
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.expression import ExpressionNode, compile_expression
 from app.meta.dsl.guard import GuardDocument
 from app.meta.dsl.params import ParamsDocument
+from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.validation import compile_draft_documents
-from app.meta.validation_pipeline import persist_validation
 
-_FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW, DRAFT_FAILED_VALIDATION}
+_FIXTURE_EDITABLE_STATUSES = {DRAFT_PENDING_REVIEW}
 
 router = APIRouter(prefix="/meta")
 
@@ -85,7 +83,9 @@ class DraftDetailOut(BaseModel):
     params_document: dict
     guard_document: dict
     answer_expression: dict
-    animation_document: dict
+    teaching_plan: dict
+    scene_program: dict | None
+    quality_report: dict | None
     classifier_bullet: str
     artifact_hash: str
     validation_report: dict | None
@@ -93,6 +93,14 @@ class DraftDetailOut(BaseModel):
     fixtures: list[FixtureOut]
     required_fixture_count: int
     reviewer_feedback: str | None
+
+
+class GenerationJobOut(BaseModel):
+    id: str
+    fingerprint_key: str
+    status: str
+    attempt: int
+    error_summary: str | None
 
 
 class RejectRequest(BaseModel):
@@ -153,13 +161,25 @@ def _draft_detail(session, draft: TemplateDraft) -> DraftDetailOut:
         status=draft.status, params_document=json.loads(draft.params_document_json),
         guard_document=json.loads(draft.guard_document_json),
         answer_expression=json.loads(draft.answer_expression_json),
-        animation_document=json.loads(draft.animation_document_json),
+        teaching_plan=json.loads(draft.teaching_plan_json),
+        scene_program=json.loads(draft.scene_program_json) if draft.scene_program_json else None,
+        quality_report=json.loads(draft.quality_report_json) if draft.quality_report_json else None,
         classifier_bullet=draft.classifier_bullet, artifact_hash=draft.artifact_hash,
         validation_report=json.loads(draft.validation_report_json) if draft.validation_report_json else None,
         preview_url=preview_url,
         fixtures=[_fixture_out(session, fixture) for fixture in fixtures],
         required_fixture_count=get_settings().meta_required_fixture_count,
         reviewer_feedback=draft.reviewer_feedback,
+    )
+
+
+def _generation_job_out(job: GenerationJob) -> GenerationJobOut:
+    return GenerationJobOut(
+        id=job.id,
+        fingerprint_key=job.fingerprint_key,
+        status=job.status,
+        attempt=job.attempt,
+        error_summary=job.error_summary,
     )
 
 
@@ -184,6 +204,17 @@ def get_draft(draft_id: str):
         if draft is None:
             raise HTTPException(status_code=404, detail=f"Unknown draft {draft_id}")
         return _draft_detail(session, draft)
+
+
+@router.get(
+    "/jobs/{job_id}", response_model=GenerationJobOut, dependencies=[Depends(require_reviewer_token)]
+)
+def get_generation_job(job_id: str):
+    with meta_session() as session:
+        job = session.get(GenerationJob, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Unknown generation job {job_id}")
+        return _generation_job_out(job)
 
 
 @router.get("/preview/{artifact_hash}", dependencies=[Depends(require_reviewer_token)])
@@ -228,12 +259,14 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
         answer_expression = TypeAdapter(ExpressionNode).validate_python(
             json.loads(draft.answer_expression_json)
         )
-        animation_document = AnimationDocument.model_validate(json.loads(draft.animation_document_json))
+        teaching_plan_document = TeachingPlanDocument.model_validate(
+            json.loads(draft.teaching_plan_json)
+        )
         compiled = compile_draft_documents(
             params_document,
             guard_document,
             answer_expression,
-            animation_document,
+            teaching_plan_document,
         )
         try:
             params = compiled.params_cls.model_validate(request.params)
@@ -255,20 +288,6 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
 
         fixture.params_json = json.dumps(request.params)
         fixture.expected_result_json = json.dumps({"answer": str(computed_answer)})
-        session.flush()
-
-        draft_fixtures = session.query(TemplateDraftFixture).filter_by(draft_id=draft.id).all()
-        observation_ids = {f.observation_id for f in draft_fixtures if f.observation_id}
-        observations_by_id = {
-            observation.id: observation
-            for observation in session.query(FallbackObservation)
-            .filter(FallbackObservation.id.in_(observation_ids))
-            .all()
-        }
-        persist_validation(
-            session, draft, observations_by_id, datetime.now(timezone.utc),
-            get_settings().meta_artifact_root,
-        )
         session.flush()
 
         return _fixture_out(session, fixture)

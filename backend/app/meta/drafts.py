@@ -38,6 +38,7 @@ def persist_reviewable_draft(
         raise ValueError("candidate must contain passing validation and quality reports")
 
     proposal = candidate.proposal
+    _require_matching_fixture_result_ids(proposal.fixtures, candidate.fixture_results)
     dsl_versions = {
         "params_version": proposal.params_document.params_version,
         "guard_version": proposal.guard_document.guard_version,
@@ -88,10 +89,7 @@ def persist_candidate_fixtures(
     fixture_results,
     now: datetime,
 ) -> None:
-    expected_ids = [f"fixture-{index}" for index, _ in enumerate(proposal_fixtures)]
-    actual_ids = [result.fixture_id for result in fixture_results]
-    if actual_ids != expected_ids:
-        raise ValueError("fixture result ids must match proposal fixture ids")
+    _require_matching_fixture_result_ids(proposal_fixtures, fixture_results)
 
     for index, (fixture, result) in enumerate(zip(proposal_fixtures, fixture_results)):
         session.add(TemplateDraftFixture(
@@ -106,6 +104,13 @@ def persist_candidate_fixtures(
             structural_check_detail=result.detail,
             created_at=now,
         ))
+
+
+def _require_matching_fixture_result_ids(proposal_fixtures, fixture_results) -> None:
+    expected_ids = [f"fixture-{index}" for index, _ in enumerate(proposal_fixtures)]
+    actual_ids = [result.fixture_id for result in fixture_results]
+    if actual_ids != expected_ids:
+        raise ValueError("fixture result ids must match proposal fixture ids")
 
 
 def record_review(

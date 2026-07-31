@@ -174,6 +174,7 @@ def test_generate_and_validate_revision_retries_structured_candidate_failure(mon
 
 def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monkeypatch, engine):
     from app.meta.generation_pipeline import run_generation_job
+    from fastapi.testclient import TestClient
 
     _seed_job_and_observation()
     failure = V3Failure(
@@ -192,14 +193,45 @@ def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monke
 
     assert run_generation_job(owner="worker-1") is None
 
+    monkeypatch.setenv("META_REVIEWER_TOKEN", "test-token")
+    get_settings.cache_clear()
     with db.meta_session() as session:
-        job = session.get(models.GenerationJob, "job-1")
-        reviewer_visible = json.dumps({"job": {"error_summary": job.error_summary}})
-        assert job.status == models.JOB_NEEDS_MANUAL
-        assert job.error_summary == "automatic_generation_needs_manual_authoring"
+        session.add(models.TemplateDraft(
+            id="draft-review",
+            job_id="job-1",
+            fingerprint_key="k1",
+            fingerprint_version=1,
+            fingerprint_json=_fingerprint().model_dump_json(),
+            revision=1,
+            params_document_json="{}",
+            guard_document_json="{}",
+            answer_expression_json="{}",
+            teaching_plan_json='{"plan_version": 3}',
+            scene_program_json='{"scene_version": 3}',
+            quality_report_json='{"passed": true}',
+            classifier_bullet="Use for review payload coverage.",
+            dsl_schema_versions_json="{}",
+            artifact_hash="sha256:review",
+            status=models.DRAFT_PENDING_REVIEW,
+            validation_report_json='{"passed": true}',
+            created_at=_now(),
+            updated_at=_now(),
+        ))
+    from app.main import create_app
+    client = TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
+
+    job_response = client.get("/meta/jobs/job-1")
+    draft_response = client.get("/meta/drafts/draft-review")
+
+    assert job_response.status_code == 200
+    assert draft_response.status_code == 200
+    assert job_response.json()["status"] == models.JOB_NEEDS_MANUAL
+    assert job_response.json()["error_summary"] == "automatic_generation_needs_manual_authoring"
+    assert draft_response.json()["teaching_plan"] == {"plan_version": 3}
+    for payload in (job_response.json(), draft_response.json()):
+        reviewer_visible = json.dumps(payload)
         assert "meta-template generation exhausted automatic validation retries" not in reviewer_visible
         assert "traceback" not in reviewer_visible.lower()
-        assert session.query(models.TemplateDraft).count() == 0
 
 
 def test_run_generation_job_returns_none_when_nothing_queued(engine):
