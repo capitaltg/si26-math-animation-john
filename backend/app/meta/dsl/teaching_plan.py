@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.v3_common import (
     MAX_PLAN_BEATS, MAX_SIMPLE_STAGGER_SECONDS, MIN_PLAN_BEATS,
-    AnchorRef, GeneratedText, StyleRole, TargetRef,
+    AnchorRef, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 
 
@@ -22,7 +22,7 @@ class RectangleMeasurementVisual(BaseModel):
     ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     length: ExpressionNode
     width: ExpressionNode
-    unit: GeneratedText = Field(default="", max_length=20)
+    unit: ProseText = Field(default="", max_length=20)
 
 
 class NumberLineVisual(BaseModel):
@@ -69,7 +69,7 @@ class LabelVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["label"] = "label"
     ref: GeneratedText
-    text: GeneratedText = Field(min_length=1, max_length=80)
+    text: ProseText = Field(min_length=1, max_length=80)
 
 
 SemanticVisualSpec = Annotated[
@@ -118,7 +118,7 @@ class CalloutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["callout"] = "callout"
     target: AnchorRef
-    text: GeneratedText = Field(min_length=1, max_length=80)
+    text: ProseText = Field(min_length=1, max_length=80)
 
 
 class DrawRequest(BaseModel):
@@ -155,14 +155,14 @@ class TeachingBeat(BaseModel):
     id: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     kind: Literal["orient", "reveal", "organize", "focus", "derive", "conclude"]
     targets: list[TargetRef] = Field(min_length=1, max_length=8)
-    intent: GeneratedText = Field(min_length=1, max_length=240)
+    intent: ProseText = Field(min_length=1, max_length=240)
     custom_actions: list[RequestedAction] = Field(default_factory=list, max_length=8)
 
 
 class TeachingPlanDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_version: Literal[3] = 3
-    learning_objective: GeneratedText = Field(min_length=1, max_length=300)
+    learning_objective: ProseText = Field(min_length=1, max_length=300)
     primary_visual: SemanticVisualSpec
     supporting_visuals: list[SemanticVisualSpec] = Field(default_factory=list, max_length=4)
     strategy: Literal[

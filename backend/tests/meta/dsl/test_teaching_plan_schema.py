@@ -89,14 +89,20 @@ def _plan_with_generated_text(field_name, value):
     "position=(1, 2, 0)",
     "color=#ff8800",
     "easing=custom_curve",
-    "Circle()",
-    "x = 1",
     "BLUE",
     "point=(x, y)",
 ])
 def test_every_generated_text_field_rejects_renderer_controls(field_name, bad_text):
     with pytest.raises(ValidationError):
         TeachingPlanDocument.model_validate(_plan_with_generated_text(field_name, bad_text))
+
+
+@pytest.mark.parametrize("bad_text", ["Circle()", "x = 1"])
+def test_identifier_fields_reject_bare_calls_and_assignments(bad_text):
+    # Prose fields deliberately allow these -- "Area (square units)" and
+    # "P = 2 x (length + width)" are math wording, not renderer controls.
+    with pytest.raises(ValidationError):
+        TeachingPlanDocument.model_validate(_plan_with_generated_text("variation_seed", bad_text))
 
 
 def test_generated_text_accepts_legitimate_natural_language():

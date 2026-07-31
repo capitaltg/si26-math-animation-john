@@ -9,7 +9,7 @@ from app.meta.dsl.teaching_plan import (
 )
 from app.meta.dsl.v3_common import (
     MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MIN_ACTION_SECONDS, MIN_SCENE_SECONDS,
-    AnchorRef, GeneratedText, StyleRole, TargetRef,
+    AnchorRef, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 
 
@@ -27,7 +27,7 @@ class RectangleProgramVisual(BaseModel):
     ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     length: ExpressionNode
     width: ExpressionNode
-    unit: GeneratedText = Field(default="", max_length=20)
+    unit: ProseText = Field(default="", max_length=20)
     initial_role: StyleRole = "structure"
 
 
@@ -36,8 +36,8 @@ class AnswerProgramVisual(BaseModel):
     kind: Literal["answer_expression"] = "answer_expression"
     ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     expression: ExpressionNode
-    prefix: GeneratedText = ""
-    suffix: GeneratedText = ""
+    prefix: ProseText = ""
+    suffix: ProseText = ""
     initial_role: Literal["neutral"] = "neutral"
 
 
@@ -81,7 +81,7 @@ class CalloutRelation(BaseModel):
     kind: Literal["callout"] = "callout"
     ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     target: AnchorRef
-    text: GeneratedText = Field(min_length=1, max_length=80)
+    text: ProseText = Field(min_length=1, max_length=80)
 
 
 Relation = CalloutRelation
