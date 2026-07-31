@@ -10,13 +10,16 @@ from app.meta.dsl.v3_common import (
 from app.meta.v3.errors import V3Failure, V3ValidationError
 
 # Semantic parts that name a rectangle's length/width dimension edges (see
-# `app/meta/v3/rectangle_measurement.py`). Shared with
-# `app/render/dynamic_render_worker.py`'s rendered-quality probe so the two
-# quality gates agree on what counts as a dimension anchor -- a compiled
-# relation ref never contains the substring "dimension" (the beat expander
-# names callout relations `callout_{beat}_{action}` or `median_callout`; see
-# `app/meta/v3/beat_expander.py`), so identification must key off the
-# relation's typed target part instead of the free-form ref string.
+# `app/meta/v3/rectangle_measurement.py`). Used by
+# `app/render/dynamic_render_worker.py`'s rendered-quality probe to key its
+# observed `dimension_anchor_checks`/`declared_dimension_anchors` evidence --
+# a compiled relation ref never contains the substring "dimension" (the beat
+# expander names callout relations `callout_{beat}_{action}` or
+# `median_callout`; see `app/meta/v3/beat_expander.py`), so identification
+# must key off the relation's typed target part instead of the free-form ref
+# string. `check_dimension_anchor_specificity` below identifies a *candidate*
+# dimension callout more broadly, by the target visual's kind rather than
+# this specific part set -- see that function's docstring.
 DIMENSION_TARGET_PARTS = frozenset({"length_edge", "width_edge"})
 
 
@@ -160,21 +163,31 @@ def check_semantic_anchor_specificity(plan, program) -> QualityCheck:
 
 
 def check_dimension_anchor_specificity(plan, program) -> QualityCheck:
-    # Identify a dimension callout by its typed target part -- the same
-    # `length_edge`/`width_edge` parts the rendered-quality probe selects on
-    # (`app/render/dynamic_render_worker.py`) -- not by a ref-name convention
-    # no compiled program follows. A dimension relation is specific when it
-    # names both the edge part AND which of the two same-named edges (its
-    # index); the compiler already enforces this for any normally-compiled
-    # program (`compiler.py`'s `_validate_target`), but this check is the
-    # last static gate before a candidate reaches rendering, so it must not
-    # pass a relation that lost its index some other way (e.g. a refinement
-    # that edits `program.relations` directly).
+    # A compiled ref carries no "this is a dimension callout" marker (the beat
+    # expander names callout relations `callout_{beat}_{action}` or
+    # `median_callout`; see `app/meta/v3/beat_expander.py`), and the callout's
+    # free-form text is untrusted generated content, not a reliable signal
+    # either. So identify a candidate dimension callout by what IS trustworthy
+    # and typed: any callout relation whose target names a
+    # `rectangle_measurement` visual. Such a relation must name a specific
+    # part AND index (e.g. the `length_edge`/`width_edge` alias parts the
+    # rendered-quality probe selects on in `app/render/dynamic_render_worker.py`,
+    # or a plain numbered `edge`/`vertex`) -- `compiler.py`'s `_validate_target`
+    # returns immediately for a target with no `part` at all
+    # (`_validate_callout_anchor` only restricts `ordered_values` items, never
+    # `rectangle_measurement`), so a callout can compile cleanly while naming
+    # the whole rectangle instead of one of its edges. That candidate is
+    # rejected here, at the quality gate where the failure is reportable as
+    # structured evidence, not by loosening the compiler's schema.
+    visual_kind_by_ref = {visual.ref: visual.kind for visual in program.visuals}
     for relation_index, relation in enumerate(program.relations):
-        if relation.target.part in DIMENSION_TARGET_PARTS and relation.target.index is None:
+        target = relation.target
+        if visual_kind_by_ref.get(target.visual_ref) != "rectangle_measurement":
+            continue
+        if target.part is None or target.index is None:
             return _failed(
                 "dimension_anchor_mismatch", f"relations[{relation_index}].target",
-                "dimension labels must attach to a specific length/width edge, not the whole rectangle",
+                "a callout on a rectangle must attach to a specific edge, not the whole rectangle",
             )
     return _passed("dimension_anchor_mismatch", "relations")
 

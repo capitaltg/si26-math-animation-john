@@ -178,6 +178,41 @@ def test_quality_mutations_fail(valid_program, mutation, expected_code):
     assert expected_code in [check.code for check in report.checks if not check.passed]
 
 
+def test_callout_on_whole_rectangle_with_no_part_fails_dimension_anchor_specificity():
+    """Controller ruling: a callout relation targeting a rectangle_measurement
+    visual must name a specific part. This compiles a callout with NO `part`
+    at all through the REAL compiler (not a hand-mutated relation) --
+    `compiler.py`'s `_validate_target` returns immediately when
+    `target.part is None`, and `_validate_callout_anchor` only restricts
+    `ordered_values` items, never `rectangle_measurement` -- so this is the
+    actual shape the compiler accepts today. Before this fix, such a callout
+    was never even considered a dimension relation (selection required
+    `target.part in DIMENSION_TARGET_PARTS`, which `None` never satisfies),
+    so a label mislabeled onto the whole rectangle passed every gate."""
+    plan_data = _perimeter_plan().model_dump()
+    plan_data["beats"][1]["custom_actions"] = [
+        {"kind": "callout", "text": "the rectangle", "target": {
+            "visual_ref": "rectangle", "anchor": "center",
+        }},
+    ]
+    plan = TeachingPlanDocument.model_validate(plan_data)
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+    # Confirm the compiler really did accept the whole-rectangle callout with
+    # no part -- this is not a hypothetical, it is what compile_teaching_plan
+    # produces for this plan today.
+    relation = next(r for r in program.relations if r.target.visual_ref == "rectangle")
+    assert relation.target.part is None
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    assert "dimension_anchor_mismatch" in [check.code for check in report.checks if not check.passed]
+
+
 def _perimeter_plan_with_dimension_callouts():
     # A real teaching plan whose derive beat requests "callout" custom
     # actions on the declared "length_edge"/"width_edge" semantic parts (see
