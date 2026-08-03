@@ -42,7 +42,7 @@ def test_default_registry_measures_literal_visuals_with_finite_root_and_child_an
     kind, strategy, values, child_part
 ):
     visual = default_visual_registry().measure(
-        SimpleNamespace(kind=kind, ref=kind), values, LiteralTextMeasurer(), strategy=strategy
+        SimpleNamespace(kind=kind, ref=kind, initial_role="neutral"), values, LiteralTextMeasurer(), strategy=strategy
     )
 
     assert all(isfinite(value) for value in (visual.bounds.left, visual.bounds.right, visual.bounds.bottom, visual.bounds.top))
@@ -53,7 +53,7 @@ def test_default_registry_measures_literal_visuals_with_finite_root_and_child_an
 
 def test_default_registry_keeps_seven_value_median_inside_safe_frame():
     visual = default_visual_registry().measure(
-        SimpleNamespace(kind="ordered_values", ref="values"),
+        SimpleNamespace(kind="ordered_values", ref="values", initial_role="neutral"),
         {"values": ["3", "5", "6", "8", "9", "12", "15"]},
         SceneTextMeasurer(),
         strategy="pair_elimination",

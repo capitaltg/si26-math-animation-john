@@ -20,6 +20,7 @@ def test_median_item_anchor_uses_eight_bounds_not_row_center():
         values=["3", "5", "6", "8", "9", "12", "15"],
         measurer=LiteralTextMeasurer(),
         gap=8,
+        initial_role="neutral",
     )
     item_bottom = visual.anchor(part="item", index=3, name="bottom")
     row_bottom = visual.anchor(part=None, index=None, name="bottom")
@@ -51,6 +52,14 @@ def test_measured_geometry_rejects_mutation_and_defensively_copies_inputs():
         visual.paths["trace"].append(Point(2, 2))
     with pytest.raises(FrozenInstanceError):
         visual.bounds = Bounds(0, 20, -5, 5)
+
+
+def test_measured_payload_carries_the_declared_initial_role():
+    measured = measure_ordered_values(
+        ref="values", values=["3", "5", "8"], measurer=LiteralTextMeasurer(),
+        gap=0.45, initial_role="structure",
+    )
+    assert measured.payload["initial_role"] == "structure"
 
 
 def test_visual_registry_rejects_duplicate_kinds():

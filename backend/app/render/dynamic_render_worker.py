@@ -10,7 +10,7 @@ from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.manim_measurer import ManimTextMeasurer
 from app.meta.v3.quality import DIMENSION_TARGET_PARTS
-from app.meta.v3.renderer import render_resolved_scene
+from app.meta.v3.renderer import _initial_role, render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
 
 VALID_MODES = {"full", "thumbnail", "probe"}
@@ -292,7 +292,12 @@ def _declared_state_events(resolved) -> list[dict]:
             for target in action.targets:
                 visual = resolved.visual(target.ref.visual_ref)
                 if target.ref.part is None:
-                    declared.extend({"target": f"{target.ref.visual_ref}.{part}[{index}]", "role": "neutral"}
+                    # The visual's own initial role, not a literal `neutral`: a
+                    # collection that starts `structure` is never observed at
+                    # `neutral`, and `check_state_order` compares declared
+                    # against observed.
+                    role = _initial_role(target.ref.visual_ref, visual.measured.payload)
+                    declared.extend({"target": f"{target.ref.visual_ref}.{part}[{index}]", "role": role}
                                     for part, index in visual.measured.parts if part == "item")
         elif action.action.kind == "set_role" and action.action.role == "focus":
             declared.extend({"target": _target_label(target.ref), "role": action.action.role} for target in action.targets)

@@ -272,7 +272,10 @@ def _measure_label(*, spec, values, measurer):
 
 
 def _measure_ordered_values(*, spec, values, measurer):
-    return measure_ordered_values(ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45)
+    return measure_ordered_values(
+        ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45,
+        initial_role=spec.initial_role,
+    )
 
 
 def _measure_rectangle(*, spec, values, measurer):

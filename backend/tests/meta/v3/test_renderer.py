@@ -138,6 +138,13 @@ def test_coincident_non_reveal_actions_share_timeline_duration(resolved_median_s
     assert scene.wait_calls == pytest.approx([1.0, 0.5, 1.25])
 
 
+def test_declared_initial_role_overrides_the_payload_shape_derivation():
+    from app.meta.v3.renderer import _initial_role
+
+    assert _initial_role("values", {"values": (1, 2, 3)}) == "neutral"
+    assert _initial_role("values", {"values": (1, 2, 3), "initial_role": "structure"}) == "structure"
+
+
 def test_manim_text_measurer_uses_the_renderer_font_table():
     measured = ManimTextMeasurer().measure("42", "math_value")
     text = Text("42", font_size=FONT_SIZES["math_value"])
@@ -210,7 +217,7 @@ def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
     declarations are actually backed by geometry the renderer can find.
     """
     measured = default_visual_registry().measure(
-        SimpleNamespace(kind=kind, ref=kind), _MEASURABLE_VALUES[kind], ManimTextMeasurer(),
+        SimpleNamespace(kind=kind, ref=kind, initial_role="neutral"), _MEASURABLE_VALUES[kind], ManimTextMeasurer(),
     )
     _root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
 

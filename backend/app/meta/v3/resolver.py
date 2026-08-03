@@ -288,7 +288,7 @@ def _action_target_items(action, index):
 
 
 def _evaluated_spec(visual):
-    return SimpleNamespace(kind=visual.kind, ref=visual.ref)
+    return SimpleNamespace(kind=visual.kind, ref=visual.ref, initial_role=visual.initial_role)
 
 
 def _format_value(value):
