@@ -421,3 +421,269 @@ def test_timeline_entries_fit_the_declared_total_duration(median_plan, answer, c
         and entry.at_seconds + entry.duration_seconds <= program.total_duration_seconds
         for entry in program.timeline
     )
+
+
+def test_unknown_semantic_part_hint_names_every_legal_part(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][2]["targets"] = [{"visual_ref": "rectangle", "part": "top", "index": 0}]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_semantic_part"
+    assert failure.hint == (
+        "choose a declared semantic part: edge, length_edge, vertex, width_edge"
+    )
+
+
+def test_unknown_semantic_part_hint_says_so_when_the_visual_exposes_none(
+    compile_context,
+):
+    raw = {
+        "plan_version": 3,
+        "learning_objective": "A label exposes no semantic parts.",
+        "primary_visual": {"kind": "label", "ref": "caption", "text": "hello"},
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_caption", "kind": "reveal",
+             "targets": [{"visual_ref": "caption"}], "intent": "show the caption"},
+            {"id": "focus_caption", "kind": "focus",
+             "targets": [{"visual_ref": "caption", "part": "text", "index": 0}],
+             "intent": "point at the caption text"},
+            {"id": "state_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "caption"}], "intent": "state the answer"},
+        ],
+        "variation_seed": "label-parts",
+    }
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), FieldRefNode(field="value"),
+            frozenset({"value"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_semantic_part"
+    assert failure.hint == "this visual exposes no semantic parts"
+
+
+def test_incompatible_strategy_hint_names_the_strategies_the_kind_supports(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["strategy"] = "boundary_trace"
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_strategy"
+    assert failure.hint == (
+        "select a compatible strategy: group_reveal, pair_elimination, short_stagger"
+    )
+
+
+def test_unknown_visual_ref_hint_names_the_declared_visuals(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "middle"}]
+    raw["beats"][0]["targets"] = [{"visual_ref": "missing"}]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_visual_ref"
+    assert failure.hint == (
+        "reference the primary or a supporting visual: caption, values"
+    )
+
+
+def test_unknown_declared_path_hint_names_the_declared_paths(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "rectangle.diagonal"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_declared_path"
+    assert failure.hint == "use a declared semantic path: perimeter"
+
+
+def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "values.outline"}
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_declared_path"
+    assert failure.hint == "this visual exposes no semantic paths"
+
+
+def test_unknown_visual_ref_hint_names_the_declared_visuals_from_a_path_ref(
+    perimeter_plan, compile_context,
+):
+    # `_validate_path_ref` raises unknown_visual_ref independently of
+    # `_validate_target` -- the visual_ref prefix of a path_ref string, not a
+    # beat or custom-action target. Task 4 enumerated the target-ref site;
+    # this pins the path-ref site to the same treatment.
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "missing.perimeter"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_visual_ref"
+    assert failure.hint == "reference the primary or a supporting visual: rectangle"
+
+
+def test_incompatible_transform_hint_names_the_compatible_kinds(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "same area"}]
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "transform",
+        "source": {"visual_ref": "rectangle"},
+        "target": {"visual_ref": "caption"},
+    }]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_transform_target"
+    assert failure.hint == (
+        "transform between whole visuals of a compatible kind: rectangle_measurement"
+    )
+
+
+def test_incompatible_transform_hint_says_so_when_the_source_kind_cannot_transform(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "median callout"}]
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "transform",
+        "source": {"visual_ref": "values"},
+        "target": {"visual_ref": "caption"},
+    }]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_transform_target"
+    assert failure.hint == "this visual kind cannot be transformed"
+
+
+def test_incompatible_callout_anchor_hint_names_the_permitted_anchors(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][2]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "top"},
+        "text": "middle value",
+    }]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_callout_anchor"
+    assert failure.hint == "attach item callouts to a permitted anchor: bottom"
+
+
+def test_incompatible_draw_hint_names_the_drawable_kinds(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "draw", "target": {"visual_ref": "values"}}
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_draw_target"
+    assert failure.hint == (
+        "draw a whole visual of a drawable kind: rectangle_measurement"
+    )
+
+
+def test_incompatible_move_hint_names_the_movable_kinds(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "move",
+        "target": {"visual_ref": "rectangle", "part": "edge", "index": 0},
+        "path_ref": "rectangle.perimeter",
+    }]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_move_target"
+    assert failure.hint == (
+        "move a whole visual of a movable kind: rectangle_measurement"
+    )

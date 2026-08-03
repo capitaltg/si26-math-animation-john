@@ -41,6 +41,7 @@ _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
 _DRAWABLE_TARGETS = {"rectangle_measurement": {None}}
 _MOVABLE_TARGETS = {"rectangle_measurement": {None}}
 _TRANSFORM_COMPATIBILITY = {"rectangle_measurement": {"rectangle_measurement"}}
+_ITEM_CALLOUT_ANCHORS = {"bottom"}
 
 
 def compile_teaching_plan(plan, answer_expression, known_fields, context):
@@ -110,13 +111,13 @@ def validate_target_refs(plan):
                 spec = _validate_target(action.target, specs, f"{path}.target")
                 _validate_compatible_target(
                     action.target, spec, _DRAWABLE_TARGETS, "incompatible_draw_target", path,
-                    "a drawable whole visual", "draw a declared rectangle outline",
+                    "a drawable whole visual", "draw a whole visual of a drawable kind",
                 )
             elif action.kind == "move":
                 spec = _validate_target(action.target, specs, f"{path}.target")
                 _validate_compatible_target(
                     action.target, spec, _MOVABLE_TARGETS, "incompatible_move_target", path,
-                    "a movable whole visual", "move a declared rectangle visual",
+                    "a movable whole visual", "move a whole visual of a movable kind",
                 )
             elif action.kind == "transform":
                 source = _validate_target(action.source, specs, f"{path}.source")
@@ -130,7 +131,12 @@ def validate_target_refs(plan):
                     _fail(
                         "incompatible_transform_target", path,
                         "compatible whole source and target visuals",
-                        f"{source.kind}:{target.kind}", "transform between compatible declared visuals",
+                        f"{source.kind}:{target.kind}",
+                        _enumerate_legal(
+                            compatible_kinds,
+                            "transform between whole visuals of a compatible kind",
+                            "this visual kind cannot be transformed",
+                        ),
                     )
             elif action.kind == "callout":
                 spec = _validate_target(action.target, specs, f"{path}.target")
@@ -151,7 +157,11 @@ def validate_strategy_compatibility(plan):
     if plan.strategy not in supported:
         _fail(
             "incompatible_strategy", "strategy", "a strategy supported by the visual kind",
-            f"{plan.strategy}:{plan.primary_visual.kind}", "select a compatible strategy",
+            f"{plan.strategy}:{plan.primary_visual.kind}",
+            _enumerate_legal(
+                supported, "select a compatible strategy",
+                "this visual kind supports no strategies",
+            ),
         )
     if plan.strategy == "pair_elimination" and len(plan.primary_visual.values) % 2 == 0:
         _fail(
@@ -179,7 +189,11 @@ def _validate_target(target, specs, path):
     except KeyError:
         _fail(
             "unknown_visual_ref", f"{path}.visual_ref", "a visual declared by the plan",
-            target.visual_ref, "reference the primary or a supporting visual",
+            target.visual_ref,
+            _enumerate_legal(
+                specs, "reference the primary or a supporting visual",
+                "the plan declares no visuals",
+            ),
         )
     if target.part is None:
         return spec
@@ -187,7 +201,11 @@ def _validate_target(target, specs, path):
     if target.part not in parts:
         _fail(
             "unknown_semantic_part", f"{path}.part", "a part exposed by the visual",
-            f"{spec.kind}.{target.part}", "choose a declared semantic part",
+            f"{spec.kind}.{target.part}",
+            _enumerate_legal(
+                parts, "choose a declared semantic part",
+                "this visual exposes no semantic parts",
+            ),
         )
     if target.index is None:
         _fail(
@@ -215,30 +233,45 @@ def _validate_path_ref(path_ref, specs, path):
     except KeyError:
         _fail(
             "unknown_visual_ref", path, "a visual declared by the plan", visual_ref,
-            "reference the primary or a supporting visual",
+            _enumerate_legal(
+                specs, "reference the primary or a supporting visual",
+                "the plan declares no visuals",
+            ),
         )
-    if name not in _DECLARED_PATHS.get(spec.kind, set()):
+    declared = _DECLARED_PATHS.get(spec.kind, set())
+    if name not in declared:
         _fail(
             "unknown_declared_path", path, "a path exposed by the visual", path_ref,
-            "use a declared semantic path",
+            _enumerate_legal(
+                declared, "use a declared semantic path",
+                "this visual exposes no semantic paths",
+            ),
         )
     return spec
 
 
-def _validate_compatible_target(target, spec, compatible_targets, code, path, expected, hint):
+def _validate_compatible_target(target, spec, compatible_targets, code, path, expected, prefix):
     compatible_parts = compatible_targets.get(spec.kind, set())
     if target.part not in compatible_parts:
         _fail(
-            code, f"{path}.target", expected, f"{spec.kind}.{target.part}", hint,
+            code, f"{path}.target", expected, f"{spec.kind}.{target.part}",
+            _enumerate_legal(compatible_targets, prefix, "no visual kind supports this action"),
         )
 
 
 def _validate_callout_anchor(target, spec, path):
-    if spec.kind == "ordered_values" and target.part == "item" and target.anchor != "bottom":
+    if (
+        spec.kind == "ordered_values"
+        and target.part == "item"
+        and target.anchor not in _ITEM_CALLOUT_ANCHORS
+    ):
         _fail(
             "incompatible_callout_anchor", f"{path}.target.anchor",
             "the bottom anchor of an ordered-value item", target.anchor,
-            "attach item callouts to the declared item bottom anchor",
+            _enumerate_legal(
+                _ITEM_CALLOUT_ANCHORS, "attach item callouts to a permitted anchor",
+                "this part accepts no callout anchors",
+            ),
         )
 
 
@@ -253,6 +286,12 @@ def _literal_product(left, right):
     if left_value is None or right_value is None:
         return None
     return left_value * right_value
+
+
+def _enumerate_legal(values, prefix, empty):
+    if not values:
+        return empty
+    return f"{prefix}: {', '.join(sorted(values))}"
 
 
 def _fail(code, path, expected, observed, hint):

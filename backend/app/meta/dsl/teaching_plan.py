@@ -167,7 +167,7 @@ class TeachingPlanDocument(BaseModel):
     supporting_visuals: list[SemanticVisualSpec] = Field(default_factory=list, max_length=4)
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
-        "partition", "regroup", "magnitude_comparison", "representation_transform",
+        "partition", "regroup", "magnitude_comparison",
     ]
     beats: list[TeachingBeat] = Field(min_length=MIN_PLAN_BEATS, max_length=MAX_PLAN_BEATS)
     variation_seed: GeneratedText = Field(min_length=1, max_length=64)
