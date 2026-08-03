@@ -111,13 +111,13 @@ def validate_target_refs(plan):
                 spec = _validate_target(action.target, specs, f"{path}.target")
                 _validate_compatible_target(
                     action.target, spec, _DRAWABLE_TARGETS, "incompatible_draw_target", path,
-                    "a drawable whole visual", "draw a declared rectangle outline",
+                    "a drawable whole visual", "draw a whole visual of a drawable kind",
                 )
             elif action.kind == "move":
                 spec = _validate_target(action.target, specs, f"{path}.target")
                 _validate_compatible_target(
                     action.target, spec, _MOVABLE_TARGETS, "incompatible_move_target", path,
-                    "a movable whole visual", "move a declared rectangle visual",
+                    "a movable whole visual", "move a whole visual of a movable kind",
                 )
             elif action.kind == "transform":
                 source = _validate_target(action.source, specs, f"{path}.source")
@@ -250,11 +250,12 @@ def _validate_path_ref(path_ref, specs, path):
     return spec
 
 
-def _validate_compatible_target(target, spec, compatible_targets, code, path, expected, hint):
+def _validate_compatible_target(target, spec, compatible_targets, code, path, expected, prefix):
     compatible_parts = compatible_targets.get(spec.kind, set())
     if target.part not in compatible_parts:
         _fail(
-            code, f"{path}.target", expected, f"{spec.kind}.{target.part}", hint,
+            code, f"{path}.target", expected, f"{spec.kind}.{target.part}",
+            _enumerate_legal(compatible_targets, prefix, "no visual kind supports this action"),
         )
 
 

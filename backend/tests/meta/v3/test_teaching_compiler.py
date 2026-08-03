@@ -620,3 +620,48 @@ def test_incompatible_callout_anchor_hint_names_the_permitted_anchors(
     failure = exc_info.value.failure
     assert failure.code == "incompatible_callout_anchor"
     assert failure.hint == "attach item callouts to a permitted anchor: bottom"
+
+
+def test_incompatible_draw_hint_names_the_drawable_kinds(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "draw", "target": {"visual_ref": "values"}}
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_draw_target"
+    assert failure.hint == (
+        "draw a whole visual of a drawable kind: rectangle_measurement"
+    )
+
+
+def test_incompatible_move_hint_names_the_movable_kinds(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "move",
+        "target": {"visual_ref": "rectangle", "part": "edge", "index": 0},
+        "path_ref": "rectangle.perimeter",
+    }]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_move_target"
+    assert failure.hint == (
+        "move a whole visual of a movable kind: rectangle_measurement"
+    )
