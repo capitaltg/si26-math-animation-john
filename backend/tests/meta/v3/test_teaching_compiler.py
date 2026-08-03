@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.expression import AddNode, FieldRefNode, LiteralNode, MultiplyNode
 from app.meta.dsl.scene_program import (
     DrawAction, MoveAction, RevealAction, SetRoleAction, TransformAction,
 )
@@ -76,6 +76,64 @@ def perimeter_plan():
 
 
 @pytest.fixture
+def published_perimeter_plan():
+    """The shape of the `perimeter` plan actually published to the demo database.
+
+    Two beats name the rectangle, the `organize` beat names a supporting label
+    instead of the rectangle, the `reveal` beat declares its own perimeter
+    trace, and the `conclude` beat names a second label. Every one of those is
+    legal per the plan schema, and each exposed a distinct expander defect.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find the perimeter of a rectangle by doubling the sum of its sides.",
+        "primary_visual": {
+            "kind": "rectangle_measurement",
+            "ref": "rect",
+            "length": _field("length"),
+            "width": _field("width"),
+            "unit": "cm",
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "formula_label", "text": "P = 2 x (length + width)"},
+            {"kind": "label", "ref": "answer_label", "text": "Perimeter = 2 x (l + w)"},
+        ],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rect"}],
+             "intent": "show the rectangle with both dimensions"},
+            {"id": "reveal_perimeter", "kind": "reveal", "targets": [{"visual_ref": "rect"}],
+             "intent": "trace the boundary to show what perimeter means",
+             "custom_actions": [{"kind": "trace", "path_ref": "rect.perimeter"}]},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "introduce the perimeter formula"},
+            {"id": "derive", "kind": "derive",
+             "targets": [{"visual_ref": "rect"}, {"visual_ref": "formula_label"}],
+             "intent": "substitute the given length and width into the formula"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "answer_label"}],
+             "intent": "state the final perimeter"},
+        ],
+        "variation_seed": "published-perimeter",
+    })
+
+
+@pytest.fixture
+def perimeter_answer():
+    return MultiplyNode(operands=[
+        LiteralNode(value=2),
+        AddNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+    ])
+
+
+def _reveals_of(program, visual_ref):
+    return [
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == visual_ref for target in entry.action.targets)
+    ]
+
+
+@pytest.fixture
 def answer():
     return FieldRefNode(field="v4")
 
@@ -124,6 +182,98 @@ def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context)
     )
     assert trace < answer_reveal
     assert program.timeline[trace].action.path_ref == "rectangle.perimeter"
+
+
+def test_a_visual_named_by_two_beats_is_revealed_once(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    assert len(_reveals_of(program, "rect")) == 1
+
+
+def test_a_beat_reveals_the_target_it_names(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """The `organize` beat names `formula_label`, so compiling must reveal it.
+
+    The expander's `boundary_trace` branch replaced the beat's own actions with
+    a perimeter trace, so the label the beat named got no action at all and only
+    became visible as a side effect of a later `set_role` -- appearing abruptly,
+    with no fade, four seconds in.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    reveals = _reveals_of(program, "formula_label")
+    assert len(reveals) == 1
+    assert reveals[0].beat_id == "organize"
+
+
+def test_boundary_trace_does_not_duplicate_a_trace_the_plan_declares(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    traces = [entry for entry in program.timeline if entry.action.kind == "trace"]
+    assert [entry.action.path_ref for entry in traces] == ["rect.perimeter"]
+
+
+def test_a_beat_does_not_restate_a_role_the_target_already_holds(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """Every `set_role` must actually change the target's role.
+
+    The renderer plays each one as a colour `Transform`, so re-asserting a role
+    the target already holds animates a recolour from a colour to itself -- a
+    visible mid-lesson flicker that teaches nothing. The rectangle starts
+    `structure`, and `derive` used to re-assert `structure` on it.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    role = next(
+        visual.initial_role for visual in program.visuals if visual.ref == "rect"
+    )
+    for entry in program.timeline:
+        if entry.action.kind != "set_role" or entry.action.target.visual_ref != "rect":
+            continue
+        assert entry.action.role != role, (
+            f"beat {entry.beat_id} restates role {role!r} the rectangle already holds"
+        )
+        role = entry.action.role
+
+
+def test_every_beat_produces_an_observable_state_change(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """`docs/meta-template-dsl-v3-design.md`: "every beat produces an observable
+    state change".
+
+    `derive` used to fall through to `set_role ... "structure"` on targets that
+    already held `structure`, so the beat's whole allocation was a recolour from
+    a colour to itself. Suppressing that no-op leaves the beat empty, which is
+    idle time the spec forbids -- the beat needs a real state change, and the
+    spec permits `focus` during `derive`.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    assert {entry.beat_id for entry in program.timeline} == {
+        beat.id for beat in published_perimeter_plan.beats
+    }
 
 
 def test_pair_elimination_dims_outer_items_before_focusing_middle(

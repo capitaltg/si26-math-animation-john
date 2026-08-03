@@ -62,6 +62,8 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_semantic_anchor_specificity(plan, program),
         check_dimension_anchor_specificity(plan, program),
         check_salience(program),
+        check_repeated_reveal(program),
+        check_unused_visual(program),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
 
@@ -230,6 +232,48 @@ def check_salience(program) -> QualityCheck:
             return _failed("callout_collision", "relations", "multiple callouts share one anchor")
         anchors[key] = relation.ref
     return _passed("callout_collision", "timeline")
+
+
+def check_repeated_reveal(program) -> QualityCheck:
+    # Revealing an already-revealed target fades the same mobject in a second
+    # time, which reads as the visual being drawn twice. The beat expander used
+    # to emit one `reveal` per `orient`/`reveal` beat with no record of what was
+    # already revealed, so two beats naming one visual produced two fade-ins.
+    revealed = set()
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "reveal":
+            continue
+        for target in entry.action.targets:
+            key = (target.visual_ref, target.part, target.index)
+            if key in revealed:
+                return _failed(
+                    "repeated_reveal", f"timeline[{index}].action.targets",
+                    "a target may only be revealed once",
+                )
+            revealed.add(key)
+    return _passed("repeated_reveal", "timeline")
+
+
+def check_unused_visual(program) -> QualityCheck:
+    # Nothing adds a visual to the manim scene except an animation that names
+    # it, so a visual absent from the whole timeline never becomes visible --
+    # while still consuming layout space, shrinking everything else to make
+    # room for something the viewer never sees. Count every way a visual can be
+    # named: action targets, a `trace`/`move` path it owns, and callout anchors.
+    used = set()
+    for entry in program.timeline:
+        used.update(target.visual_ref for target in _targets(entry.action))
+        path_ref = getattr(entry.action, "path_ref", None)
+        if path_ref:
+            used.add(path_ref.partition(".")[0])
+    used.update(relation.target.visual_ref for relation in program.relations)
+    for index, visual in enumerate(program.visuals):
+        if visual.ref not in used:
+            return _failed(
+                "unused_visual", f"visuals[{index}].ref",
+                "every declared visual must be named by a timeline action",
+            )
+    return _passed("unused_visual", "visuals")
 
 
 def _targets(action):

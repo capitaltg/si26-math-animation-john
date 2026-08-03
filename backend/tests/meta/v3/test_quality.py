@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import CalloutRelation
+from app.meta.dsl.scene_program import CalloutRelation, LabelProgramVisual
 from app.meta.dsl.teaching_plan import (
     OrderedValuesVisual,
     TeachingBeat,
@@ -160,6 +160,23 @@ def apply_literal_test_mutation(candidate, mutation):
         return Candidate(candidate.plan, program.model_copy(update={"relations": [*program.relations, duplicate]}))
     if mutation == "extend_to_13_seconds":
         return Candidate(candidate.plan, program.model_copy(update={"total_duration_seconds": 13.0}))
+    if mutation == "repeat_reveal":
+        # Two beats naming the same visual compiled to two `reveal` actions on
+        # it, so the rendered scene faded the same mobject in twice. Duplicate
+        # the entry in place (same instant, same duration) so only the repeat
+        # itself is under test, not a timing side effect.
+        first_reveal = next(entry for entry in program.timeline if entry.action.kind == "reveal")
+        return Candidate(candidate.plan, program.model_copy(update={
+            "timeline": [*program.timeline, first_reveal.model_copy()],
+        }))
+    if mutation == "declare_unused_visual":
+        # A visual no timeline action ever names is never added to the manim
+        # scene, yet still claims layout width -- so it silently shrinks every
+        # other visual to make room for nothing.
+        unused = LabelProgramVisual(ref="unused_label", text="never animated")
+        return Candidate(candidate.plan, program.model_copy(update={
+            "visuals": [*program.visuals, unused],
+        }))
     raise AssertionError(f"unknown mutation {mutation}")
 
 
@@ -173,6 +190,8 @@ def apply_literal_test_mutation(candidate, mutation):
     ("detach_dimension_label", "dimension_anchor_mismatch"),
     ("overlap_callout", "callout_collision"),
     ("extend_to_13_seconds", "timeline_over_budget"),
+    ("repeat_reveal", "repeated_reveal"),
+    ("declare_unused_visual", "unused_visual"),
 ])
 def test_quality_mutations_fail(valid_program, mutation, expected_code):
     broken = apply_literal_test_mutation(valid_program, mutation)
