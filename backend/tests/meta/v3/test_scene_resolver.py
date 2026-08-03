@@ -190,7 +190,10 @@ def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
     scale = (primary.bounds.top - primary.bounds.bottom) / 3
 
     assert scale < 1
-    assert primary.bounds.left - supporting.bounds.right == pytest.approx(original_gap * scale)
+    # Width 7 exceeds the side budget beside a width-2 primary (6.6 - 1 - 0.45 =
+    # 5.15), so this support takes a full-width row of its own. The gap under
+    # test is therefore the vertical one; it must still scale with the visuals.
+    assert supporting.bounds.bottom - primary.bounds.top == pytest.approx(original_gap * scale)
     for visual in (primary, supporting, conclusion):
         assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
         assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
@@ -222,17 +225,31 @@ def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
 
 
 def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
+    # Width 8 exceeds the side budget beside a width-2 primary (5.15) and takes a
+    # row of its own; the width-5 and width-2 supports sit beside. The scale must
+    # come from the same split that placement uses -- if the fit assumed one
+    # arrangement and placement produced another, the bounds below escape the
+    # safe frame.
     placed = place_vertical_lesson([
-        _measured_visual("primary", 0.2, width=0.2),
-        _measured_visual("support_0", 0.2, width=0.2),
-        _measured_visual("support_1", 0.2, width=1),
-        _measured_visual("support_2", 0.2, width=0.2),
-        _measured_visual("support_3", 0.2, width=7),
+        _measured_visual("primary", 3, width=2),
+        _measured_visual("support_beside_0", 3, width=5),
+        _measured_visual("support_beside_1", 3, width=2),
+        _measured_visual("support_stacked", 3, width=8),
         _measured_visual("evaluated_answer", 0.6),
     ])
+    by_ref = {visual.measured.ref: visual for visual in placed}
 
-    scale = (placed[0].bounds.right - placed[0].bounds.left) / 0.2
-    assert scale == pytest.approx(0.74576, abs=1e-5)
+    # Vertical binds: the primary's band (3) plus the stacked row (3) and the gap
+    # between them (0.45) is 6.45 against the 6.0-high instructional frame.
+    scale = (placed[0].bounds.top - placed[0].bounds.bottom) / 3
+    assert scale == pytest.approx(6.0 / 6.45, abs=1e-5)
+    # The split itself, which is this test's subject.
+    primary_band = by_ref["primary"].bounds
+    for ref in ("support_beside_0", "support_beside_1"):
+        beside = by_ref[ref].bounds
+        assert beside.bottom == pytest.approx(primary_band.bottom)
+        assert beside.right <= primary_band.left or beside.left >= primary_band.right
+    assert by_ref["support_stacked"].bounds.bottom >= primary_band.top
     for visual in placed:
         assert visual.bounds.left >= SAFE_FRAME.left - 1e-9
         assert visual.bounds.right <= SAFE_FRAME.right + 1e-9

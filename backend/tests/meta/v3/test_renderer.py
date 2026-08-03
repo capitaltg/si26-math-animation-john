@@ -224,10 +224,13 @@ def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
 def _scaled_down_lesson_plan():
     """A rectangle plus a label wide enough that layout must scale the lesson down.
 
-    `place_vertical_lesson` fits the primary visual and its side labels inside
-    `SAFE_FRAME` by scaling every measured bound uniformly. The renderer then
-    rebuilt label text from the payload at a fixed font size, so only the text
-    escaped that scale.
+    `place_vertical_lesson` fits the lesson inside `SAFE_FRAME` by scaling every
+    measured bound uniformly. The renderer then rebuilt label text from the
+    payload at a fixed font size, so only the text escaped that scale.
+
+    The label is long enough (13.85 units) to exceed even the full 13.2-unit
+    width of a stacked row, which is what forces a scale below 1 now that a wide
+    supporting label no longer has to squeeze in beside the primary.
     """
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
@@ -238,7 +241,7 @@ def _scaled_down_lesson_plan():
             "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
         },
         "supporting_visuals": [
-            {"kind": "label", "ref": "formula_label", "text": "P = 2 x (length + width)"},
+            {"kind": "label", "ref": "formula_label", "text": "Perimeter equals two times the length plus the width of the rectangle"},
         ],
         "strategy": "boundary_trace",
         "beats": [
@@ -275,7 +278,7 @@ def test_label_text_is_rendered_at_the_scale_layout_assigned_it():
     resolved = resolve_scene(program, {"length": 8, "width": 3}, ManimTextMeasurer())
     placed = resolved.visual("formula_label").bounds
     unscaled_width, _height = ManimTextMeasurer().measure(
-        "P = 2 x (length + width)", "label",
+        "Perimeter equals two times the length plus the width of the rectangle", "label",
     )
     reserved_width = placed.right - placed.left
     assert reserved_width < unscaled_width, "this lesson must be scaled down to be a test"

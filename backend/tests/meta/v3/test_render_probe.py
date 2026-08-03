@@ -200,35 +200,35 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
 
 
 def _overcrowded_program():
-    """Two measured rectangles plus a label: more content than SAFE_FRAME fits.
+    """Three measured rectangles: more than SAFE_FRAME can hold.
 
-    `place_vertical_lesson` raises `below_minimum_text_scale` while resolving,
-    which happens inside the probe subprocess -- before any frame is drawn.
+    Each rectangle's measured box is 6.58 x 2.71 (shape plus dimension labels),
+    far too wide to sit beside another, so all three take full-width rows --
+    9.03 units of height against the 6.0-high instructional frame.
+    `place_vertical_lesson` raises `below_minimum_text_scale` at 0.67 while
+    resolving, before any frame is drawn.
     """
-    plan = TeachingPlanDocument.model_validate({
-        "plan_version": 3,
-        "learning_objective": "Compare the perimeters of two rectangles.",
-        "primary_visual": {
-            "kind": "rectangle_measurement", "ref": "first",
+    def rectangle(ref):
+        return {
+            "kind": "rectangle_measurement", "ref": ref,
             "length": {"node": "field_ref", "field": "length"},
             "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
-        },
-        "supporting_visuals": [
-            {"kind": "rectangle_measurement", "ref": "second",
-             "length": {"node": "field_ref", "field": "length"},
-             "width": {"node": "field_ref", "field": "width"}, "unit": "cm"},
-            {"kind": "label", "ref": "formula_label",
-             "text": "P = 2 x (length + width) for each rectangle"},
-        ],
+        }
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare the perimeters of three rectangles.",
+        "primary_visual": rectangle("first"),
+        "supporting_visuals": [rectangle("second"), rectangle("third")],
         "strategy": "boundary_trace",
         "beats": [
             {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "first"}],
              "intent": "show the first rectangle"},
             {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "second"}],
-             "intent": "show the second rectangle beside it"},
-            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "show the second rectangle"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "third"}],
              "intent": "apply the perimeter formula to each"},
-            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "formula_label"}],
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "first"}],
              "intent": "state the perimeter"},
         ],
         "variation_seed": "overcrowded-probe",
