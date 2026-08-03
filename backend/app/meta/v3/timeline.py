@@ -36,7 +36,8 @@ def schedule_beats(expanded_beats):
         # A sequential slot must be at least the document minimum.  If there
         # are more actions than slots, split them into concurrent batches.
         slot_count = 1 if _contains_answer_reveal(actions) else min(
-            len(actions), max(1, int(beat_seconds / MIN_ACTION_SECONDS)),
+            len(actions),
+            beat.slot_count or max(1, int(beat_seconds / MIN_ACTION_SECONDS)),
         )
         slot_seconds = beat_seconds / slot_count
         duration_seconds = min(MAX_ACTION_SECONDS, max(MIN_ACTION_SECONDS, slot_seconds))

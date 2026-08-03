@@ -316,23 +316,38 @@ def test_every_beat_produces_an_observable_state_change(
     }
 
 
-def test_pair_elimination_dims_outer_items_before_focusing_middle(
+def test_pair_elimination_dims_pairs_outside_in_before_focusing_the_middle(
     median_plan, answer, compile_context,
 ):
     program = compile_teaching_plan(
         median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
     )
-    actions = [entry.action for entry in program.timeline]
-    focus_index = next(
-        index for index, action in enumerate(actions)
-        if action.kind == "set_role" and action.target.index == 3 and action.role == "focus"
-    )
-    excluded = [
-        (index, action.target.index) for index, action in enumerate(actions)
-        if action.kind == "set_role" and action.role == "constraint"
+    dimmed = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "neutral"
     ]
-    assert all(index < focus_index for index, _ in excluded)
-    assert {item for _, item in excluded} == {0, 1, 2, 4, 5, 6}
+    assert [entry.action.target.index for entry in dimmed] == [0, 6, 1, 5, 2, 4]
+
+    focus, = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+    ]
+    assert focus.action.target.index == 3
+    assert all(entry.at_seconds < focus.at_seconds for entry in dimmed)
+
+
+def test_pair_elimination_dims_both_partners_at_one_instant(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    by_start = {}
+    for entry in program.timeline:
+        if entry.action.kind == "set_role" and entry.action.role == "neutral":
+            by_start.setdefault(entry.at_seconds, []).append(entry.action.target.index)
+
+    assert sorted(sorted(pair) for pair in by_start.values()) == [[0, 6], [1, 5], [2, 4]]
 
 
 def test_focus_target_creates_item_specific_median_callout(median_plan, answer, compile_context):

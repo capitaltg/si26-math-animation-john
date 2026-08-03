@@ -16,6 +16,7 @@ class ExpandedBeat:
     actions: list[ProgramAction]
     minimum_seconds: float
     weight: float
+    slot_count: int | None = None
 
 
 _PROGRAM_VISUALS = {
@@ -83,6 +84,7 @@ class BeatExpander:
                 actions=actions,
                 minimum_seconds=minimum_seconds,
                 weight=weight,
+                slot_count=self._slot_count(plan, beat, actions),
             ))
         return visuals, relations, expanded
 
@@ -99,6 +101,19 @@ class BeatExpander:
             # leaves. Born `neutral`, every dim is a grey-to-grey transform.
             initial_role = "structure"
         return program_type.model_validate({**spec.model_dump(), "initial_role": initial_role})
+
+    @staticmethod
+    def _slot_count(plan, beat, actions):
+        """One slot per pair, so both partners recolour at the same instant.
+
+        `timeline.schedule_beats` otherwise derives slots from the action count
+        and plays six recolours in sequence, which reads as a left-to-right wave
+        rather than as pairing. Derived from `len(actions)` rather than from the
+        value count so a suppressed no-op cannot leave an empty slot.
+        """
+        if plan.strategy != "pair_elimination" or beat.kind != "organize" or not actions:
+            return None
+        return -(-len(actions) // 2)
 
     def _standard_actions(
         self, plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
@@ -174,16 +189,18 @@ class BeatExpander:
             return []  # `_reveal_unrevealed` has already staged the reveal
 
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
+            # Iterate pairs, not indices. The middle item is never reached, so
+            # the old `if index == middle: continue` guard goes with the loop it
+            # guarded -- and emitting a pair adjacently is what lets the
+            # timeline batch both partners into one slot.
             count = len(plan.primary_visual.values)
-            middle = count // 2
             actions = []
-            for index in range(count):
-                if index == middle:
-                    continue
-                actions.extend(self._role_change(
-                    TargetRef(visual_ref=plan.primary_visual.ref, part="item", index=index),
-                    "constraint", current_roles,
-                ))
+            for offset in range(count // 2):
+                for index in (offset, count - 1 - offset):
+                    actions.extend(self._role_change(
+                        TargetRef(visual_ref=plan.primary_visual.ref, part="item", index=index),
+                        "neutral", current_roles,
+                    ))
             return actions
 
         if beat.kind == "focus":
