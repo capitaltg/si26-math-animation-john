@@ -3,9 +3,12 @@ import subprocess
 import sys
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.resolver import resolve_scene
+from app.render.dynamic_render_worker import _declared_state_events, _state_events
 from app.render.full_render import BACKEND_ROOT
 
 # `test_render_and_store_preview_raises_on_subprocess_failure` used to live
@@ -112,6 +115,51 @@ def test_worker_probe_mode_writes_final_frame_and_manifest(tmp_path):
         for event in manifest["state_events"]
     )
     assert manifest["final_answer_visible"] is True
+
+
+class _UnusedMeasurer:
+    def measure(self, text, font_role):
+        raise AssertionError("object_set measurement never calls the text measurer")
+
+
+def test_declared_and_observed_reveal_roles_agree_for_a_visual_with_no_declared_role():
+    """`_declared_state_events` was fixed to read a visual's actual initial
+    role instead of a literal `"neutral"`; `_state_events` -- the *observed*
+    half of `check_state_order`'s `declared <= observed` comparison -- must
+    read it the same way or the two sides drift apart the moment a revealed
+    collection isn't `neutral`. `object_set`'s payload carries no
+    `initial_role` key at all, so `_initial_role` falls back to the shape
+    derivation and returns `"structure"`: exactly the case that would have
+    stayed silently wrong (hardcoded `"neutral"` on the observed side) had
+    only the declared side been fixed.
+    """
+    program = SceneProgramDocument.model_validate({
+        "scene_version": 3,
+        "visuals": [{"kind": "object_set", "ref": "widgets", "count": {"node": "literal", "value": 3}}],
+        "timeline": [{
+            "at_seconds": 0.0, "duration_seconds": 1.0, "beat_id": "reveal_widgets",
+            "action": {"kind": "reveal", "targets": [{"visual_ref": "widgets"}]},
+        }],
+        "total_duration_seconds": 6.0,
+        "variation_seed": "state-event-agreement",
+        "style_recipe": {"palette": "ocean", "composition": "vertical_lesson", "motion_variant": "smooth"},
+    })
+    resolved = resolve_scene(program, {}, _UnusedMeasurer())
+
+    declared = _declared_state_events(resolved)
+    assert declared and {event["role"] for event in declared} == {"structure"}
+
+    render_events = [{
+        "kind": "reveal", "seconds": 0.0,
+        "targets": (("widgets", None, None),),
+        "visible_targets": (("widgets", None, None),),
+    }]
+    observed = _state_events(render_events, resolved)
+
+    declared_pairs = {(event["target"], event["role"]) for event in declared}
+    observed_pairs = {(event["target"], event["role"]) for event in observed}
+    assert declared_pairs <= observed_pairs
+    assert {event["role"] for event in observed} == {"structure"}
 
 
 def _perimeter_plan_with_dimension_callouts():

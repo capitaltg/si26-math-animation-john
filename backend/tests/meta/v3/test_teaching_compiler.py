@@ -160,10 +160,60 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
     )
     conclusion_index = next(
         index for index, action in enumerate(actions)
-        if action.kind == "reveal" and action.targets[0].visual_ref == "evaluated_answer"
+        if action.kind == "show_relation" and action.relation_ref == "median_callout"
     )
     assert focus_index < conclusion_index
     assert 6 <= program.total_duration_seconds <= 12
+
+
+def test_pair_elimination_rejects_an_answer_that_is_not_the_middle_value(
+    median_plan, compile_context,
+):
+    with pytest.raises(V3ValidationError, match="pair_elimination_answer_must_be_middle_value"):
+        compile_teaching_plan(
+            median_plan, FieldRefNode(field="v1"),
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+
+def test_pair_elimination_program_names_the_median_as_its_answer_anchor(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert program.answer_anchor.model_dump() == {
+        "visual_ref": "values", "part": "item", "index": 3,
+    }
+
+
+def test_pair_elimination_values_are_born_structure(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    values, = [visual for visual in program.visuals if visual.ref == "values"]
+    assert values.initial_role == "structure"
+
+
+def test_other_strategies_leave_ordered_values_neutral(median_plan, answer, compile_context):
+    raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    values, = [visual for visual in program.visuals if visual.ref == "values"]
+    assert values.initial_role == "neutral"
+
+
+def test_other_strategies_declare_no_answer_anchor(perimeter_plan, compile_context):
+    program = compile_teaching_plan(
+        perimeter_plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        compile_context,
+    )
+    assert program.answer_anchor is None
 
 
 def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context):
@@ -276,26 +326,154 @@ def test_every_beat_produces_an_observable_state_change(
     }
 
 
-def test_pair_elimination_dims_outer_items_before_focusing_middle(
+def test_pair_elimination_dims_pairs_outside_in_before_focusing_the_middle(
     median_plan, answer, compile_context,
 ):
     program = compile_teaching_plan(
         median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
     )
-    actions = [entry.action for entry in program.timeline]
-    focus_index = next(
-        index for index, action in enumerate(actions)
-        if action.kind == "set_role" and action.target.index == 3 and action.role == "focus"
-    )
-    excluded = [
-        (index, action.target.index) for index, action in enumerate(actions)
-        if action.kind == "set_role" and action.role == "constraint"
+    dimmed = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "neutral"
     ]
-    assert all(index < focus_index for index, _ in excluded)
-    assert {item for _, item in excluded} == {0, 1, 2, 4, 5, 6}
+    assert [entry.action.target.index for entry in dimmed] == [0, 6, 1, 5, 2, 4]
+
+    focus, = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+    ]
+    assert focus.action.target.index == 3
+    assert all(entry.at_seconds < focus.at_seconds for entry in dimmed)
 
 
-def test_focus_target_creates_item_specific_median_callout(median_plan, answer, compile_context):
+def test_pair_elimination_dims_both_partners_at_one_instant(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    by_start = {}
+    for entry in program.timeline:
+        if entry.action.kind == "set_role" and entry.action.role == "neutral":
+            by_start.setdefault(entry.at_seconds, []).append(entry.action.target.index)
+
+    assert sorted(sorted(pair) for pair in by_start.values()) == [[0, 6], [1, 5], [2, 4]]
+
+
+def test_each_pair_step_is_long_enough_to_read(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    dimmed = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "neutral"
+    ]
+    assert all(entry.duration_seconds >= 1.3 for entry in dimmed)
+    assert program.total_duration_seconds <= 12
+
+
+def test_a_fifteen_value_elimination_still_fits_the_scene_budget(answer, compile_context):
+    raw = {
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{i}") for i in range(1, 16)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 7}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 7}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "median-fifteen",
+    }
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), FieldRefNode(field="v8"),
+        frozenset({f"v{i}" for i in range(1, 16)}), compile_context,
+    )
+    assert 6 <= program.total_duration_seconds <= 12
+
+
+def test_pair_elimination_declares_no_answer_card(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+
+
+def test_the_conclusion_names_the_median_and_recolours_nothing(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+
+    assert [entry.action.kind for entry in conclusion] == ["show_relation"]
+    assert conclusion[0].action.relation_ref == "median_callout"
+    assert conclusion[0].duration_seconds >= 1.5
+
+
+def test_a_multi_action_conclusion_co_starts_its_actions_and_holds_the_floor(
+    median_plan, answer, compile_context,
+):
+    """The conclusion holds everything it does at one instant, card or no card.
+
+    This used to fall out of the answer card: `timeline.schedule_beats` forced a
+    single slot for any beat containing a `reveal` of `evaluated_answer`. A
+    `pair_elimination` lesson declares no such card, so a conclusion with more
+    than one action was split into sequential slots of `beat_seconds / N` -- two
+    actions here held 0.9868s each -- while `quality.check_conclusion_hold`
+    requires EVERY final-beat action to clear `MIN_CONCLUSION_HOLD_SECONDS`
+    individually. `schedule_beats` now keys the single slot on the last beat that
+    acts, which is the same beat that check reads off `timeline[-1].beat_id`.
+    """
+    raw = median_plan.model_dump()
+    raw["beats"][3]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 0, "anchor": "bottom"},
+        "text": "eliminated",
+    }]
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+
+    assert len(conclusion) == 2, "this plan must compile to a multi-action conclusion"
+    assert {entry.at_seconds for entry in conclusion} == {conclusion[0].at_seconds}
+    assert all(entry.duration_seconds >= 1.5 for entry in conclusion)
+
+
+def test_a_plan_supplied_callout_replaces_the_generated_one(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][3]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "bottom"},
+        "text": "This is the median - the middle value!",
+    }]
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert [relation.text for relation in program.relations] == [
+        "This is the median - the middle value!",
+    ]
+
+
+def test_the_conclusion_creates_an_item_specific_median_callout(
+    median_plan, answer, compile_context,
+):
     program = compile_teaching_plan(
         median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
     )
@@ -308,9 +486,12 @@ def test_focus_target_creates_item_specific_median_callout(median_plan, answer, 
     }]
 
 
-def test_answer_visual_is_revealed_only_by_the_conclusion(median_plan, answer, compile_context):
+def test_answer_visual_is_revealed_only_by_the_conclusion(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
     program = compile_teaching_plan(
-        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
     )
 
     answer_entries = [
@@ -318,17 +499,26 @@ def test_answer_visual_is_revealed_only_by_the_conclusion(median_plan, answer, c
         if entry.action.kind == "reveal" and entry.action.targets[0].visual_ref == "evaluated_answer"
     ]
     assert len(answer_entries) == 1
-    assert answer_entries[0].beat_id == "show_answer"
+    assert answer_entries[0].beat_id == "conclude"
 
 
 def test_conclusion_reveal_and_role_hold_together_for_at_least_one_and_a_half_seconds(
-    median_plan, answer, compile_context,
+    published_perimeter_plan, perimeter_answer, compile_context,
 ):
-    program = compile_teaching_plan(
-        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
-    )
-    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+    """The answer card's reveal and its `conclusion` recolour must land together.
 
+    Asserted on a lesson that still draws an answer card: `pair_elimination`
+    names one of the collection's own values instead, so its conclusion is a
+    single `show_relation` with nothing to co-ordinate (see
+    `test_the_conclusion_names_the_median_and_recolours_nothing`).
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == "conclude"]
+
+    assert {entry.action.kind for entry in conclusion_entries} == {"reveal", "set_role"}
     assert {entry.at_seconds for entry in conclusion_entries} == {conclusion_entries[0].at_seconds}
     assert all(entry.duration_seconds >= 1.5 for entry in conclusion_entries)
 
@@ -337,6 +527,7 @@ def test_custom_actions_lower_to_typed_program_actions_and_restore_prior_role(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
     raw["beats"][2]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 3}},
@@ -363,6 +554,7 @@ def test_nested_dim_restores_the_role_before_the_first_dim(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
     raw["beats"][2]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
@@ -409,6 +601,7 @@ def test_compiler_rejects_unknown_visual_and_out_of_range_item_targets(
         )
 
     out_of_range = median_plan.model_dump()
+    out_of_range["strategy"] = "short_stagger"
     out_of_range["beats"][2]["targets"][0]["index"] = 7
     with pytest.raises(V3ValidationError, match="target_index_out_of_range"):
         compile_teaching_plan(
@@ -493,6 +686,10 @@ def test_custom_draw_and_move_reject_incompatible_visual_targets(
 ):
     if action_request["kind"] == "draw":
         raw = median_plan.model_dump()
+        # short_stagger, not pair_elimination: the organize beat under test rejects
+        # every custom action for pair_elimination now, and this test's subject
+        # (draw/target compatibility) is strategy-independent.
+        raw["strategy"] = "short_stagger"
         known_fields, expression = frozenset({f"v{i}" for i in range(1, 8)}), answer
     else:
         raw = perimeter_plan.model_dump()
@@ -532,10 +729,20 @@ def test_scheduler_batches_dense_same_beat_actions_without_exceeding_budget():
     ]
     timeline, total = schedule_beats([
         ExpandedBeat(beat_id="dense", actions=actions, minimum_seconds=0.15, weight=1.0),
+        # A trailing beat, so `dense` is not the conclusion. The conclusion holds
+        # all its actions at one instant by design, which would collapse the dense
+        # beat to a single batch and make the batching under test here vacuous.
+        ExpandedBeat(
+            beat_id="conclude",
+            actions=[SetRoleAction(target=TargetRef(visual_ref="values"), role="conclusion")],
+            minimum_seconds=1.5,
+            weight=1.5,
+        ),
     ])
 
-    starts = {entry.at_seconds for entry in timeline}
-    assert len(starts) < len(timeline)
+    dense = [entry for entry in timeline if entry.beat_id == "dense"]
+    starts = {entry.at_seconds for entry in dense}
+    assert 1 < len(starts) < len(dense)
     assert all(entry.at_seconds + entry.duration_seconds <= total for entry in timeline)
 
 
@@ -727,6 +934,10 @@ def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (declared-path hints) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["beats"][1]["custom_actions"] = [
         {"kind": "trace", "path_ref": "values.outline"}
     ]
@@ -795,6 +1006,10 @@ def test_incompatible_transform_hint_says_so_when_the_source_kind_cannot_transfo
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (transform target compatibility) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "median callout"}]
     raw["beats"][1]["custom_actions"] = [{
         "kind": "transform",
@@ -838,6 +1053,10 @@ def test_incompatible_draw_hint_names_the_drawable_kinds(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (draw target compatibility) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["beats"][1]["custom_actions"] = [
         {"kind": "draw", "target": {"visual_ref": "values"}}
     ]
@@ -960,6 +1179,10 @@ def test_an_organize_beat_on_an_already_structural_visual_still_acts(compile_con
 
 
 def _plan_with_custom_reveals(custom_actions):
+    # short_stagger, not pair_elimination: this fixture puts custom actions on
+    # the organize beat, which pair_elimination now rejects outright (its
+    # organize beat is staged entirely by the compiler). The reveal-tracking
+    # behaviour under test here is strategy-independent.
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
@@ -967,7 +1190,7 @@ def _plan_with_custom_reveals(custom_actions):
             "kind": "ordered_values", "ref": "values",
             "values": [_field(f"v{i}") for i in range(1, 8)],
         },
-        "strategy": "pair_elimination",
+        "strategy": "short_stagger",
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},

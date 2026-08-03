@@ -208,6 +208,18 @@ def _build_visual(placed, palette: str):
 
 
 def _initial_role(ref: str, payload) -> str:
+    """The role a visual is drawn in before any `set_role` plays.
+
+    The program declares this per visual, but this function used to re-derive it
+    from the payload's shape and return `neutral` for every collection. The two
+    agreed only by coincidence, so a program that declared anything else
+    compiled role changes the renderer then played as a colour-to-itself
+    transform. Prefer what the program said; keep the shape derivation for the
+    kinds that do not carry one.
+    """
+    declared = payload.get("initial_role") if isinstance(payload, dict) else None
+    if declared is not None:
+        return declared
     if ref == "evaluated_answer" or "values" in payload or "text" in payload:
         return "neutral"
     return "structure"

@@ -13,6 +13,10 @@ from app.meta.v3.render_probe import (
 )
 
 
+def _failure_codes(manifest) -> set[str]:
+    return {check.code for check in validate_rendered_quality(manifest).checks if not check.passed}
+
+
 @pytest.fixture
 def valid_manifest():
     return {
@@ -59,6 +63,7 @@ def valid_manifest():
             {"target": "values.item[3]", "role": "focus"},
         ],
         "final_answer_visible": True,
+        "answer_anchor": None,
         "derivation_visible": True,
     }
 
@@ -111,9 +116,16 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
     elif mutation == "collision":
         manifest["visual_bounds"] = {**valid_manifest["visual_bounds"], "unrelated": [420, 225, 482, 260]}
     elif mutation == "state_order":
+        # `values.item[3]` is `valid_manifest`'s answer anchor (see the median
+        # callout and its bounds elsewhere in the fixture); a sibling item
+        # receiving focus alongside it is what the check rejects now that it is
+        # keyed on the declared anchor rather than a hardcoded neutral-before-
+        # focus ordering on the item itself.
+        manifest["answer_anchor"] = "values.item[3]"
         manifest["state_events"] = [
-            {"seconds": 1.0, "target": "values.item[3]", "role": "focus"},
-            {"seconds": 2.0, "target": "values.item[3]", "role": "neutral"},
+            {"seconds": 1.0, "target": "values.item[3]", "role": "neutral"},
+            {"seconds": 2.0, "target": "values.item[3]", "role": "focus"},
+            {"seconds": 3.0, "target": "values.item[0]", "role": "focus"},
         ]
     elif mutation == "path":
         manifest["declared_path_events"] = ["rectangle.perimeter"]
@@ -132,8 +144,48 @@ def test_rendered_quality_accepts_complete_manifest(valid_manifest):
     assert validate_rendered_quality(valid_manifest).passed is True
 
 
+def test_state_order_rejects_a_sibling_that_also_receives_focus(valid_manifest):
+    valid_manifest["answer_anchor"] = "values.item[3]"
+    valid_manifest["state_events"] = [
+        {"seconds": 1.0, "target": "values.item[0]", "role": "neutral", "state_applied": True},
+        {"seconds": 2.0, "target": "values.item[0]", "role": "focus", "state_applied": True},
+        {"seconds": 3.0, "target": "values.item[3]", "role": "focus", "state_applied": True},
+    ]
+    valid_manifest["declared_state_events"] = []
+    assert _failure_codes(valid_manifest) == {"state_order_invalid"}
+
+
+def test_state_order_rejects_focus_before_the_others_are_dismissed(valid_manifest):
+    valid_manifest["answer_anchor"] = "values.item[3]"
+    valid_manifest["state_events"] = [
+        {"seconds": 1.0, "target": "values.item[3]", "role": "focus", "state_applied": True},
+        {"seconds": 2.0, "target": "values.item[0]", "role": "neutral", "state_applied": True},
+    ]
+    valid_manifest["declared_state_events"] = []
+    assert _failure_codes(valid_manifest) == {"state_order_invalid"}
+
+
+def test_state_order_accepts_the_answer_item_focused_last(valid_manifest):
+    valid_manifest["answer_anchor"] = "values.item[3]"
+    valid_manifest["state_events"] = [
+        {"seconds": 1.0, "target": "values.item[0]", "role": "neutral", "state_applied": True},
+        {"seconds": 2.0, "target": "values.item[6]", "role": "neutral", "state_applied": True},
+        {"seconds": 3.0, "target": "values.item[3]", "role": "focus", "state_applied": True},
+    ]
+    valid_manifest["declared_state_events"] = []
+    assert "state_order_invalid" not in _failure_codes(valid_manifest)
+
+
+def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
+    valid_manifest["answer_anchor"] = None
+    valid_manifest["state_events"] = []
+    valid_manifest["declared_state_events"] = []
+    assert "state_order_invalid" not in _failure_codes(valid_manifest)
+
+
 @pytest.mark.parametrize("field", [
     "relations", "state_events", "path_events", "dimension_anchor_checks", "final_answer_visible",
+    "answer_anchor",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
     del valid_manifest[field]

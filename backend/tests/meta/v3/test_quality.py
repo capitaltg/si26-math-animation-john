@@ -95,11 +95,20 @@ def apply_literal_test_mutation(candidate, mutation):
         ]
         return Candidate(candidate.plan, program.model_copy(update={"timeline": timeline}))
     if mutation == "initial_answer_focus":
+        # Mutated on the perimeter lesson: the median's answer is one of its own
+        # values, so its program declares no `evaluated_answer` card to give a
+        # premature role to.
+        plan = _perimeter_plan()
+        perimeter = _compile(
+            plan,
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+            {"length", "width"},
+        )
         visuals = [
             visual.model_copy(update={"initial_role": "focus"}) if visual.ref == "evaluated_answer" else visual
-            for visual in program.visuals
+            for visual in perimeter.visuals
         ]
-        return Candidate(candidate.plan, program.model_copy(update={"visuals": visuals}))
+        return Candidate(plan, perimeter.model_copy(update={"visuals": visuals}))
     if mutation == "row_anchor_for_item":
         relation = program.relations[0]
         row_target = relation.target.model_copy(update={"part": None, "index": None, "anchor": "center"})
@@ -206,7 +215,13 @@ def _mid_scene_conclude_plan_data():
     """The median plan with a SECOND `conclude` beat inserted before the beat
     that derives the answer -- so the evaluated answer is revealed and given
     its `conclusion` role at 1.3s of a 6.5s scene, 20% in, before the `focus`
-    beat that is supposed to derive it."""
+    beat that is supposed to derive it.
+
+    `group_reveal` rather than `pair_elimination`: what is under test is when
+    the `evaluated_answer` card may be revealed, and a `pair_elimination` plan
+    declares no such card -- its answer is one of the collection's own values.
+    The strategy is otherwise immaterial here; this plan has no `organize` beat,
+    so it compiles to the same 6.5s timeline either way."""
     return {
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
@@ -214,7 +229,7 @@ def _mid_scene_conclude_plan_data():
             "kind": "ordered_values", "ref": "values",
             "values": [_field(f"v{index}") for index in range(1, 8)],
         },
-        "strategy": "pair_elimination",
+        "strategy": "group_reveal",
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},
@@ -361,7 +376,7 @@ def _median_plan_naming_two_different_items():
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},
-            {"id": "eliminate_smallest", "kind": "derive",
+            {"id": "eliminate_smallest", "kind": "organize",
              "targets": [{"visual_ref": "values", "part": "item", "index": 0}],
              "intent": "pair the smallest value off against the largest"},
             {"id": "focus_middle", "kind": "focus",
@@ -526,6 +541,38 @@ def test_a_callout_on_a_plain_vertex_is_still_accepted():
     report = validate_static_quality(plan, program)
 
     assert report.passed is True
+
+
+def test_a_multi_action_conclusion_without_an_answer_card_still_clears_the_hold_floor():
+    """`check_conclusion_hold`'s fallback must be satisfiable by real output.
+
+    The fallback holds EVERY action of the final beat to
+    `MIN_CONCLUSION_HOLD_SECONDS`, and a `pair_elimination` lesson declares no
+    `evaluated_answer` -- which used to be the only thing making
+    `timeline.schedule_beats` co-start a conclusion. Without that, this plan's
+    conclude beat (revealing a supporting label, then showing the median callout)
+    was split into two sequential 0.9868s slots and the gate rejected reachable
+    compiler output. The two halves of the fix have to agree on which beat the
+    conclusion is, so this asserts the gate against the compiler, not a mutation.
+    """
+    raw = _median_plan().model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "answer_label", "text": "the middle value is the median"},
+    ]
+    raw["beats"][3]["targets"] = [
+        {"visual_ref": "values", "part": "item", "index": 3},
+        {"visual_ref": "answer_label"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+    assert len(conclusion) == 2, "this plan must compile to a multi-action conclusion"
+    assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is True
+    assert [check.code for check in report.checks if not check.passed] == []
 
 
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):

@@ -75,6 +75,7 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "state_events": list,
         "declared_state_events": list,
         "final_answer_visible": bool,
+        "answer_anchor": (str, type(None)),
         "derivation_visible": bool,
     }
     for field, expected_type in required.items():
@@ -264,13 +265,34 @@ def check_state_order(manifest: dict) -> QualityCheck:
     declared = {(event.get("target"), event.get("role")) for event in manifest.get("declared_state_events", [])}
     if not declared <= observed:
         return _failed("rendered_state_mismatch", "state_events", "a declared semantic state was not rendered")
-    events = [event for event in manifest.get("state_events", []) if event.get("target") == "values.item[3]"]
-    if not events:
+
+    # Keyed on the program's declared answer anchor. The previous form named the
+    # literal target `values.item[3]`, which is the demo fixture's ref and not
+    # the published template's -- so on that template the check fell straight
+    # through its own "no events" escape and never ran. It also required the
+    # anchored item to pass through `neutral`, which is only true of a
+    # collection that starts `neutral`.
+    anchor = manifest.get("answer_anchor")
+    if anchor is None:
         return _passed("state_order_invalid", "state_events")
-    neutral = next((event for event in events if event.get("role") == "neutral"), None)
-    focus = next((event for event in events if event.get("role") == "focus"), None)
-    if neutral is None or focus is None or neutral.get("seconds", float("inf")) >= focus.get("seconds", float("-inf")):
-        return _failed("state_order_invalid", "state_events", "median item must be neutral before it receives focus")
+    events = manifest.get("state_events", [])
+    focus_seconds = [
+        event.get("seconds") for event in events
+        if event.get("target") == anchor and event.get("role") == "focus"
+    ]
+    if not focus_seconds:
+        return _failed("state_order_invalid", "state_events", "the answer target never receives focus")
+    collection = anchor.split(".", 1)[0]
+    siblings = [
+        event for event in events
+        if str(event.get("target", "")).startswith(f"{collection}.item[")
+        and event.get("target") != anchor
+    ]
+    if any(event.get("role") == "focus" for event in siblings):
+        return _failed("state_order_invalid", "state_events", "a value other than the answer receives focus")
+    dismissed = [event.get("seconds") for event in siblings if event.get("role") == "neutral"]
+    if dismissed and min(focus_seconds) < max(dismissed):
+        return _failed("state_order_invalid", "state_events", "the answer is focused before the other values are dismissed")
     return _passed("state_order_invalid", "state_events")
 
 

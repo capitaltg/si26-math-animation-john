@@ -10,7 +10,7 @@ from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.manim_measurer import ManimTextMeasurer
 from app.meta.v3.quality import DIMENSION_TARGET_PARTS
-from app.meta.v3.renderer import render_resolved_scene
+from app.meta.v3.renderer import _initial_role, render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
 
 VALID_MODES = {"full", "thumbnail", "probe"}
@@ -131,8 +131,7 @@ def _render_probe(
 
         def construct(self):
             self.rendered = render_resolved_scene(self, resolved)
-            answer = self.rendered.visuals.get("evaluated_answer")
-            self.final_answer_visible = answer is not None and _mobject_is_visible(self, answer)
+            self.final_answer_visible = _answer_visible(self, self.rendered, resolved)
             self._capture_completed_beats(force=True)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             self.camera.get_image().save(output_path)
@@ -257,6 +256,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),
         "final_answer_visible": scene.final_answer_visible,
+        "answer_anchor": _target_label(resolved.answer_anchor) if resolved.answer_anchor else None,
         "derivation_visible": bool(path_events) or any(event["role"] == "focus" for event in state_events),
     }
 
@@ -270,10 +270,17 @@ def _state_events(render_events, resolved) -> list[dict]:
                     continue
                 visual = resolved.visual(visual_ref)
                 if part is None:
+                    # Mirror `_declared_state_events`: the role the renderer
+                    # actually draws at build time (`_build_visual` ->
+                    # `_initial_role`, renderer.py:90-92), not a literal
+                    # `neutral`, or `check_state_order`'s declared/observed
+                    # comparison drifts out of agreement for any visual whose
+                    # declared role isn't `neutral`.
+                    role = _initial_role(visual_ref, visual.measured.payload)
                     events.extend({
                         "seconds": event["seconds"],
                         "target": f"{visual_ref}.{part_name}[{part_index}]",
-                        "role": "neutral",
+                        "role": role,
                     } for part_name, part_index in visual.measured.parts if part_name == "item")
         elif event["kind"] == "set_role" and event["state_applied"]:
             for target in event["targets"]:
@@ -292,7 +299,12 @@ def _declared_state_events(resolved) -> list[dict]:
             for target in action.targets:
                 visual = resolved.visual(target.ref.visual_ref)
                 if target.ref.part is None:
-                    declared.extend({"target": f"{target.ref.visual_ref}.{part}[{index}]", "role": "neutral"}
+                    # The visual's own initial role, not a literal `neutral`: a
+                    # collection that starts `structure` is never observed at
+                    # `neutral`, and `check_state_order` compares declared
+                    # against observed.
+                    role = _initial_role(target.ref.visual_ref, visual.measured.payload)
+                    declared.extend({"target": f"{target.ref.visual_ref}.{part}[{index}]", "role": role}
                                     for part, index in visual.measured.parts if part == "item")
         elif action.action.kind == "set_role" and action.action.role == "focus":
             declared.extend({"target": _target_label(target.ref), "role": action.action.role} for target in action.targets)
@@ -327,6 +339,21 @@ def _target_label_from_key(target) -> str:
 
 def _mobject_is_visible(scene, mobject) -> bool:
     return any(member is mobject for root in scene.mobjects for member in root.get_family())
+
+
+def _answer_visible(scene, rendered, resolved) -> bool:
+    """Whether the target carrying the answer survives to the final frame.
+
+    Keyed on the program's `answer_anchor` rather than on the literal ref
+    `evaluated_answer`, so a lesson whose answer is one of its own values can
+    still be held to the persistence guarantee.
+    """
+    anchor = resolved.answer_anchor
+    if anchor is None:
+        answer = rendered.visuals.get("evaluated_answer")
+        return answer is not None and _mobject_is_visible(scene, answer)
+    mobject = rendered.targets.get((anchor.visual_ref, anchor.part, anchor.index))
+    return mobject is not None and _mobject_is_visible(scene, mobject)
 
 
 def _mobject_has_color(mobject, expected) -> bool:

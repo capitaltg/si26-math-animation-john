@@ -3,7 +3,7 @@ from fractions import Fraction
 import pytest
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import ShowRelationAction, TimedAction
+from app.meta.dsl.scene_program import SceneProgramDocument, ShowRelationAction, TimedAction
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import AnchorRef, CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
@@ -109,6 +109,42 @@ def test_runtime_resolution_remeasures_new_values_and_keeps_callout_under_item(p
     assert first.relation("median_callout").target == first_target
     assert second.relation("median_callout").target == second_target
     assert first_target.x != second_target.x or first.visual("values").bounds != second.visual("values").bounds
+
+
+def test_resolve_scene_carries_a_declared_non_default_initial_role_through_ordered_values(measurer):
+    """Pins the production seam `resolve_scene` -> `_evaluated_spec` ->
+    `_measure_ordered_values` -> `measure_ordered_values`.
+
+    Every other `initial_role` test either hand-builds a `SimpleNamespace`
+    spec directly or exercises `ordered_values` through `compile_teaching_plan`,
+    which only ever assigns the kind's default (`"neutral"`) -- so a hardcoded
+    `initial_role="neutral"` in `_evaluated_spec`, or a future rebuild of the
+    evaluated spec that drops the field, would pass the whole suite while
+    making a `structure` declaration a silent no-op on screen. This builds a
+    `SceneProgramDocument` directly, the only way to declare a non-default
+    role, and checks it survives resolution.
+    """
+    program = SceneProgramDocument.model_validate({
+        "scene_version": 3,
+        "visuals": [{
+            "kind": "ordered_values", "ref": "values", "initial_role": "structure",
+            "values": [
+                {"node": "literal", "value": 3}, {"node": "literal", "value": 5},
+                {"node": "literal", "value": 8},
+            ],
+        }],
+        "timeline": [{
+            "at_seconds": 0.0, "duration_seconds": 1.0, "beat_id": "reveal_values",
+            "action": {"kind": "reveal", "targets": [{"visual_ref": "values"}]},
+        }],
+        "total_duration_seconds": 6.0,
+        "variation_seed": "resolver-initial-role",
+        "style_recipe": {"palette": "ocean", "composition": "vertical_lesson", "motion_variant": "smooth"},
+    })
+
+    resolved = resolve_scene(program, {}, measurer)
+
+    assert resolved.visual("values").measured.payload["initial_role"] == "structure"
 
 
 def test_trace_path_and_timeline_target_use_final_placed_geometry(perimeter_program, measurer):

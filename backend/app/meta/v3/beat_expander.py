@@ -16,6 +16,7 @@ class ExpandedBeat:
     actions: list[ProgramAction]
     minimum_seconds: float
     weight: float
+    slot_count: int | None = None
 
 
 _PROGRAM_VISUALS = {
@@ -38,14 +39,33 @@ _BEAT_TIMING = {
     "conclude": (1.5, 1.5),
 }
 
+#: Seconds per eliminated pair. Below roughly a second the two partners change
+#: colour faster than a learner can register that they were a pair.
+_SECONDS_PER_PAIR = 1.3
+#: `ordered_values` accepts up to 15 values (`dsl/limits.py`), and an uncapped
+#: seven-pair minimum overruns `MAX_SCENE_SECONDS` and raises
+#: `timeline_over_budget`. Capped, a long collection degrades to a faster pair
+#: step instead of failing to compile.
+_MAX_ELIMINATION_SECONDS = 6.0
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
         self.answer_expression = answer_expression
 
     def expand(self, plan):
-        visuals = [self._program_visual(spec) for spec in self._visual_specs(plan)]
-        visuals.append(AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression))
+        visuals = [
+            self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
+            for spec in self._visual_specs(plan)
+        ]
+        if plan.strategy != "pair_elimination":
+            # The answer is one of the collection's own values, already on
+            # screen. Suppressed at declaration rather than at reveal because
+            # `quality.check_unused_visual` fails any visual absent from the
+            # timeline.
+            visuals.append(
+                AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression)
+            )
         initial_roles = {visual.ref: visual.initial_role for visual in visuals}
         # Keyed by `_target_key`, not by bare ref, so a part-level lookup can
         # fall back to its whole visual's role -- the renderer initialises every
@@ -74,12 +94,13 @@ class BeatExpander:
                     previous_roles=previous_roles,
                     revealed=revealed,
                 ))
-            minimum_seconds, weight = _BEAT_TIMING[beat.kind]
+            minimum_seconds, weight = self._beat_timing(plan, beat)
             expanded.append(ExpandedBeat(
                 beat_id=beat.id,
                 actions=actions,
                 minimum_seconds=minimum_seconds,
                 weight=weight,
+                slot_count=self._slot_count(plan, beat, actions),
             ))
         return visuals, relations, expanded
 
@@ -88,9 +109,35 @@ class BeatExpander:
         return [plan.primary_visual, *plan.supporting_visuals]
 
     @staticmethod
-    def _program_visual(spec):
+    def _program_visual(spec, strategy, *, primary):
         program_type, initial_role = _PROGRAM_VISUALS[spec.kind]
+        if primary and spec.kind == "ordered_values" and strategy == "pair_elimination":
+            # Elimination has to read as "these are dismissed", which needs the
+            # items to start in a colour that dimming to `neutral` visibly
+            # leaves. Born `neutral`, every dim is a grey-to-grey transform.
+            initial_role = "structure"
         return program_type.model_validate({**spec.model_dump(), "initial_role": initial_role})
+
+    @staticmethod
+    def _beat_timing(plan, beat):
+        minimum_seconds, weight = _BEAT_TIMING[beat.kind]
+        if plan.strategy == "pair_elimination" and beat.kind == "organize":
+            pair_count = (len(plan.primary_visual.values) - 1) // 2
+            minimum_seconds = min(_SECONDS_PER_PAIR * pair_count, _MAX_ELIMINATION_SECONDS)
+        return minimum_seconds, weight
+
+    @staticmethod
+    def _slot_count(plan, beat, actions):
+        """One slot per pair, so both partners recolour at the same instant.
+
+        `timeline.schedule_beats` otherwise derives slots from the action count
+        and plays six recolours in sequence, which reads as a left-to-right wave
+        rather than as pairing. Derived from `len(actions)` rather than from the
+        value count so a suppressed no-op cannot leave an empty slot.
+        """
+        if plan.strategy != "pair_elimination" or beat.kind != "organize" or not actions:
+            return None
+        return -(-len(actions) // 2)
 
     def _standard_actions(
         self, plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
@@ -166,42 +213,22 @@ class BeatExpander:
             return []  # `_reveal_unrevealed` has already staged the reveal
 
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
+            # Iterate pairs, not indices. The middle item is never reached, so
+            # the old `if index == middle: continue` guard goes with the loop it
+            # guarded -- and emitting a pair adjacently is what lets the
+            # timeline batch both partners into one slot.
             count = len(plan.primary_visual.values)
-            middle = count // 2
             actions = []
-            for index in range(count):
-                if index == middle:
-                    continue
-                actions.extend(self._role_change(
-                    TargetRef(visual_ref=plan.primary_visual.ref, part="item", index=index),
-                    "constraint", current_roles,
-                ))
+            for offset in range(count // 2):
+                for index in (offset, count - 1 - offset):
+                    actions.extend(self._role_change(
+                        TargetRef(visual_ref=plan.primary_visual.ref, part="item", index=index),
+                        "neutral", current_roles,
+                    ))
             return actions
 
         if beat.kind == "focus":
-            actions = self._generic_role_change(beat, "focus", current_roles)
-            if plan.strategy == "pair_elimination":
-                middle = len(plan.primary_visual.values) // 2
-                for target in beat.targets:
-                    if (
-                        target.visual_ref == plan.primary_visual.ref
-                        and target.part == "item"
-                        and target.index == middle
-                        and not any(relation.ref == "median_callout" for relation in relations)
-                    ):
-                        relations.append(CalloutRelation(
-                            ref="median_callout",
-                            target={
-                                "visual_ref": target.visual_ref,
-                                "part": "item",
-                                "index": middle,
-                                "anchor": "bottom",
-                            },
-                            text="median",
-                        ))
-                        actions.append(ShowRelationAction(relation_ref="median_callout"))
-                        break
-            return actions
+            return self._generic_role_change(beat, "focus", current_roles)
 
         if beat.kind == "derive":
             # "map visible structure into a calculation or relationship" -- the
@@ -213,6 +240,8 @@ class BeatExpander:
             return self._generic_role_change(beat, "focus", current_roles)
 
         if beat.kind == "conclude":
+            if plan.strategy == "pair_elimination":
+                return self._median_callout(plan, beat, relations)
             answer_target = TargetRef(visual_ref="evaluated_answer")
             revealed.add(self._target_key(answer_target))
             return [
@@ -221,6 +250,31 @@ class BeatExpander:
             ]
 
         return self._generic_role_change(beat, "structure", current_roles)
+
+    def _median_callout(self, plan, beat, relations):
+        """Name the surviving middle value -- unless the plan already names it.
+
+        Two callouts on one anchor stack two labels in the same space, which
+        `quality.check_salience` rejects outright, so defer to the author's own
+        wording when there is any. Emitting no recolour here is deliberate: the
+        median changes colour exactly once, at the focus beat.
+        """
+        middle = len(plan.primary_visual.values) // 2
+        anchor = (plan.primary_visual.ref, "item", middle)
+        if any(
+            (action.target.visual_ref, action.target.part, action.target.index) == anchor
+            for action in beat.custom_actions if action.kind == "callout"
+        ):
+            return []
+        relations.append(CalloutRelation(
+            ref="median_callout",
+            target={
+                "visual_ref": plan.primary_visual.ref, "part": "item",
+                "index": middle, "anchor": "bottom",
+            },
+            text="median",
+        ))
+        return [ShowRelationAction(relation_ref="median_callout")]
 
     def _generic_role_change(self, beat, role, current_roles):
         """The kind's default role change, minus targets the beat details itself.

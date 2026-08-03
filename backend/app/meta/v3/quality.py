@@ -130,7 +130,11 @@ def check_conclusion_hold(program) -> QualityCheck:
         if _targets(entry.action) and any(target.visual_ref == "evaluated_answer" for target in _targets(entry.action))
     ]
     if not answer_entries:
-        return _passed("conclusion_hold_too_short", "timeline")
+        # A lesson whose answer is one of its own values declares no
+        # `evaluated_answer`, and passing vacuously here would leave its
+        # conclusion unheld. Hold the final beat's own actions to the floor.
+        final_beat_id = program.timeline[-1].beat_id
+        answer_entries = [entry for entry in program.timeline if entry.beat_id == final_beat_id]
     conclusion_end = max(entry.at_seconds + entry.duration_seconds for entry in answer_entries)
     shortest_conclusion_action = min(entry.duration_seconds for entry in answer_entries)
     if (

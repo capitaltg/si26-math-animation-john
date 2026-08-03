@@ -577,7 +577,18 @@ def rendered_perimeter(client, tmp_path):
 
 
 def _answer_text(resolved) -> str:
-    return resolved.visual("evaluated_answer").measured.payload["text"]
+    """The answer as the resolved scene states it, wherever the lesson puts it.
+
+    A lesson whose answer is one of its own values draws no `evaluated_answer`
+    card -- that would repeat a number already on screen -- and names the value
+    carrying it in the program's `answer_anchor` instead. Read the answer off
+    that anchor when there is one, so the re-resolution assertions below hold
+    both shapes of conclusion to the same contract.
+    """
+    anchor = resolved.answer_anchor
+    if anchor is None:
+        return resolved.visual("evaluated_answer").measured.payload["text"]
+    return resolved.visual(anchor.visual_ref).measured.payload["values"][anchor.index]
 
 
 def _geometry_signature(resolved, visual_ref: str):

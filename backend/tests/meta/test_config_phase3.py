@@ -34,9 +34,9 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # a newer one. This is the tripwire that keeps the next compiler/renderer
     # change from forgetting the bump.
     #
-    # 4 covers the array-item addressing wave: the compiler now takes field
-    # shapes rather than bare names, and the renderer draws rectangle dimensions,
-    # vertex anchors, object_set items, scale-aware label text, and stacked
-    # supporting rows.
-    assert DSL_COMPILER_VERSION == 4
-    assert DYNAMIC_RENDERER_VERSION == 4
+    # 5 covers the pair-elimination legibility wave: the compiler emits an
+    # outside-in dim to `neutral` from a collection born `structure`, drops the
+    # `evaluated_answer` visual in favour of `answer_anchor`, and the renderer
+    # builds each visual in its declared initial role.
+    assert DSL_COMPILER_VERSION == 5
+    assert DYNAMIC_RENDERER_VERSION == 5

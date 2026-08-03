@@ -207,3 +207,65 @@ class TeachingPlanDocument(BaseModel):
         if not any(beat.kind in {"focus", "derive"} for beat in self.beats[:-1]):
             raise ValueError("an explicit focus or derivation must precede conclude")
         return self
+
+    @model_validator(mode="after")
+    def require_pair_elimination_shape(self):
+        """`pair_elimination` is staged by the compiler, not written by the plan.
+
+        A plan that also hand-writes its elimination competes with the
+        compiler's own pass: both emit role changes into one beat, and the beat
+        plays as a frantic wave rather than as pairing. The strategy names a
+        choreography, so the plan supplies the collection and the beat
+        structure and the compiler supplies the staging.
+
+        The primary visual kind is not checked here --
+        `compiler.validate_strategy_compatibility` already rejects
+        `pair_elimination` on anything but `ordered_values`, and reaching for
+        `.values` on another kind would raise `AttributeError` instead of a
+        readable failure.
+        """
+        if self.strategy != "pair_elimination" or self.primary_visual.kind != "ordered_values":
+            return self
+
+        organize_positions = [
+            position for position, beat in enumerate(self.beats) if beat.kind == "organize"
+        ]
+        if len(organize_positions) != 1:
+            raise ValueError(
+                "pair_elimination needs exactly one organize beat, which is where the "
+                f"compiler stages the elimination; found {len(organize_positions)}"
+            )
+
+        organize_beat = self.beats[organize_positions[0]]
+        if organize_beat.custom_actions:
+            raise ValueError(
+                f"beat {organize_beat.id!r} is pair_elimination's organize beat, which the "
+                "compiler stages entirely on its own; move its custom actions to another beat"
+            )
+
+        middle = TargetRef(
+            visual_ref=self.primary_visual.ref,
+            part="item",
+            index=len(self.primary_visual.values) // 2,
+        )
+        if not any(
+            beat.kind == "focus" and beat.targets == [middle]
+            for beat in self.beats[organize_positions[0] + 1:]
+        ):
+            raise ValueError(
+                "pair_elimination needs a focus beat after the organize beat whose only "
+                f"target is the unpaired middle item {middle.visual_ref}.item[{middle.index}]"
+            )
+
+        for beat in self.beats:
+            for action in beat.custom_actions:
+                if (
+                    action.kind in {"dim", "emphasize", "restore"}
+                    and action.target.visual_ref == self.primary_visual.ref
+                ):
+                    raise ValueError(
+                        f"beat {beat.id!r} changes the role of the primary visual, whole or "
+                        "item; pair_elimination stages its own elimination, so remove the "
+                        "custom action"
+                    )
+        return self
