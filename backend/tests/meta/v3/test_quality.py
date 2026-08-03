@@ -552,3 +552,60 @@ def test_report_raises_first_structured_failure_without_candidate_contents(valid
 
     assert exc_info.value.failure.hint == "revise the teaching plan and regenerate the candidate"
     assert "v4" not in str(exc_info.value)
+
+
+def _plan_with_a_redundant_reveal_beat():
+    """A second `reveal` beat naming an already-revealed visual.
+
+    The expander reveals only what is not yet on screen, so this beat compiles to
+    no actions at all. It used to compile to a duplicate reveal -- the defect that
+    made the published lesson fade its rectangle in twice.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": _field("length"), "width": _field("width"), "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "second_look", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "look again at the same rectangle"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "map the boundary onto twice length plus width"},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "quality-redundant-reveal",
+    })
+
+
+def test_a_beat_that_produces_no_action_is_named_rather_than_reported_as_idle_time():
+    """The failure must name the beat at fault, not the gap it leaves behind.
+
+    An empty beat contributes no timeline entry, so the only symptom was
+    `unexplained_idle_time` at the index of the NEXT action -- naming neither the
+    beat nor the reason, which left the repair loop nothing to act on and burned
+    all three generation attempts.
+    """
+    plan = _plan_with_a_redundant_reveal_beat()
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+    assert "second_look" not in {entry.beat_id for entry in program.timeline}, (
+        "this plan must contain a beat that compiles to no actions"
+    )
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    failed = [check for check in report.checks if not check.passed]
+    assert failed[0].code == "beat_without_action", (
+        "the named cause must be reported before the idle-interval symptom"
+    )
+    assert "second_look" in failed[0].detail

@@ -57,6 +57,10 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_grouped_simple_reveals(plan, program),
         check_answer_timing(plan, program),
         check_conclusion_hold(program),
+        # Before the idle-interval check: an empty beat IS the cause of the gap,
+        # and `require_passed` reports the first failure, so the named cause has
+        # to come before the anonymous symptom.
+        check_every_beat_acts(plan, program),
         check_unexplained_idle_time(program),
         check_strategy_affordance(plan, program),
         check_semantic_anchor_specificity(plan, program),
@@ -135,6 +139,29 @@ def check_conclusion_hold(program) -> QualityCheck:
     ):
         return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 1.5 seconds")
     return _passed("conclusion_hold_too_short", "timeline")
+
+
+def check_every_beat_acts(plan, program) -> QualityCheck:
+    """Every beat must reach the timeline.
+
+    `docs/meta-template-dsl-v3-design.md`: "every beat produces an observable
+    state change". A beat that compiles to nothing -- a second `reveal` naming an
+    already-revealed visual, or a role change restating the role a target already
+    holds -- contributes no timeline entry at all, so the only symptom was
+    `unexplained_idle_time` at the index of the NEXT action. That named neither
+    the beat nor the reason, leaving the repair loop nothing to act on. Name the
+    beat instead.
+    """
+    acted = {entry.beat_id for entry in program.timeline}
+    for index, beat in enumerate(plan.beats):
+        if beat.id in acted:
+            continue
+        return _failed(
+            "beat_without_action", f"beats[{index}].id",
+            f"beat {beat.id!r} ({beat.kind}) produces no observable state change; "
+            "give it a target it changes, or drop it and let the neighbouring beats hold its time",
+        )
+    return _passed("beat_without_action", "beats")
 
 
 def check_unexplained_idle_time(program) -> QualityCheck:
