@@ -337,6 +337,7 @@ def test_custom_actions_lower_to_typed_program_actions_and_restore_prior_role(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
     raw["beats"][2]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 3}},
@@ -363,6 +364,7 @@ def test_nested_dim_restores_the_role_before_the_first_dim(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
     raw["beats"][2]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 3}},
@@ -409,6 +411,7 @@ def test_compiler_rejects_unknown_visual_and_out_of_range_item_targets(
         )
 
     out_of_range = median_plan.model_dump()
+    out_of_range["strategy"] = "short_stagger"
     out_of_range["beats"][2]["targets"][0]["index"] = 7
     with pytest.raises(V3ValidationError, match="target_index_out_of_range"):
         compile_teaching_plan(

@@ -111,3 +111,70 @@ def test_generated_text_accepts_legitimate_natural_language():
     raw["beats"][0]["intent"] = "Show the ordered values together before pairing them."
     plan = TeachingPlanDocument.model_validate(raw)
     assert plan.learning_objective.startswith("Explain")
+
+
+def test_pair_elimination_rejects_dim_on_a_primary_item():
+    plan = _median_plan()
+    plan["beats"][1]["custom_actions"] = [
+        {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 0}},
+    ]
+    with pytest.raises(ValidationError, match="dims or emphasizes an item"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_emphasize_on_a_primary_item():
+    plan = _median_plan()
+    plan["beats"][3]["custom_actions"] = [
+        {"kind": "emphasize",
+         "target": {"visual_ref": "values", "part": "item", "index": 3},
+         "role": "conclusion"},
+    ]
+    with pytest.raises(ValidationError, match="dims or emphasizes an item"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_a_second_organize_beat():
+    plan = _median_plan()
+    plan["beats"][0]["kind"] = "organize"
+    with pytest.raises(ValidationError, match="exactly one organize beat"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_a_plan_with_no_organize_beat():
+    plan = _median_plan()
+    plan["beats"][1]["kind"] = "derive"
+    with pytest.raises(ValidationError, match="exactly one organize beat"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_a_focus_beat_off_the_middle_item():
+    plan = _median_plan()
+    plan["beats"][2]["targets"] = [{"visual_ref": "values", "part": "item", "index": 2}]
+    with pytest.raises(ValidationError, match="unpaired middle item"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_a_focus_beat_before_the_organize_beat():
+    plan = _median_plan()
+    plan["beats"][1], plan["beats"][2] = plan["beats"][2], plan["beats"][1]
+    with pytest.raises(ValidationError, match="unpaired middle item"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_allows_a_callout_on_the_middle_item():
+    plan = _median_plan()
+    plan["beats"][3]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "bottom"},
+        "text": "This is the median - the middle value!",
+    }]
+    assert len(TeachingPlanDocument.model_validate(plan).beats[3].custom_actions) == 1
+
+
+def test_other_strategies_may_still_dim_collection_items():
+    plan = _median_plan()
+    plan["strategy"] = "short_stagger"
+    plan["beats"][1]["custom_actions"] = [
+        {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 0}},
+    ]
+    assert TeachingPlanDocument.model_validate(plan).strategy == "short_stagger"

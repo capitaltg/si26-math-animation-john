@@ -361,7 +361,7 @@ def _median_plan_naming_two_different_items():
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},
-            {"id": "eliminate_smallest", "kind": "derive",
+            {"id": "eliminate_smallest", "kind": "organize",
              "targets": [{"visual_ref": "values", "part": "item", "index": 0}],
              "intent": "pair the smallest value off against the largest"},
             {"id": "focus_middle", "kind": "focus",
