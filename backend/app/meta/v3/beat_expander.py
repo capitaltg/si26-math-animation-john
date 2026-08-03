@@ -39,6 +39,15 @@ _BEAT_TIMING = {
     "conclude": (1.5, 1.5),
 }
 
+#: Seconds per eliminated pair. Below roughly a second the two partners change
+#: colour faster than a learner can register that they were a pair.
+_SECONDS_PER_PAIR = 1.3
+#: `ordered_values` accepts up to 15 values (`dsl/limits.py`), and an uncapped
+#: seven-pair minimum overruns `MAX_SCENE_SECONDS` and raises
+#: `timeline_over_budget`. Capped, a long collection degrades to a faster pair
+#: step instead of failing to compile.
+_MAX_ELIMINATION_SECONDS = 6.0
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
@@ -78,7 +87,7 @@ class BeatExpander:
                     previous_roles=previous_roles,
                     revealed=revealed,
                 ))
-            minimum_seconds, weight = _BEAT_TIMING[beat.kind]
+            minimum_seconds, weight = self._beat_timing(plan, beat)
             expanded.append(ExpandedBeat(
                 beat_id=beat.id,
                 actions=actions,
@@ -101,6 +110,14 @@ class BeatExpander:
             # leaves. Born `neutral`, every dim is a grey-to-grey transform.
             initial_role = "structure"
         return program_type.model_validate({**spec.model_dump(), "initial_role": initial_role})
+
+    @staticmethod
+    def _beat_timing(plan, beat):
+        minimum_seconds, weight = _BEAT_TIMING[beat.kind]
+        if plan.strategy == "pair_elimination" and beat.kind == "organize":
+            pair_count = (len(plan.primary_visual.values) - 1) // 2
+            minimum_seconds = min(_SECONDS_PER_PAIR * pair_count, _MAX_ELIMINATION_SECONDS)
+        return minimum_seconds, weight
 
     @staticmethod
     def _slot_count(plan, beat, actions):

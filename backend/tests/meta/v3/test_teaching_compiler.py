@@ -350,6 +350,48 @@ def test_pair_elimination_dims_both_partners_at_one_instant(
     assert sorted(sorted(pair) for pair in by_start.values()) == [[0, 6], [1, 5], [2, 4]]
 
 
+def test_each_pair_step_is_long_enough_to_read(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    dimmed = [
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "neutral"
+    ]
+    assert all(entry.duration_seconds >= 1.3 for entry in dimmed)
+    assert program.total_duration_seconds <= 12
+
+
+def test_a_fifteen_value_elimination_still_fits_the_scene_budget(answer, compile_context):
+    raw = {
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{i}") for i in range(1, 16)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 7}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 7}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "median-fifteen",
+    }
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), FieldRefNode(field="v8"),
+        frozenset({f"v{i}" for i in range(1, 16)}), compile_context,
+    )
+    assert 6 <= program.total_duration_seconds <= 12
+
+
 def test_focus_target_creates_item_specific_median_callout(median_plan, answer, compile_context):
     program = compile_teaching_plan(
         median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
