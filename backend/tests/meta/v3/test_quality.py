@@ -555,11 +555,12 @@ def test_report_raises_first_structured_failure_without_candidate_contents(valid
 
 
 def _plan_with_a_redundant_reveal_beat():
-    """A second `reveal` beat naming an already-revealed visual.
+    """A `reveal` beat whose target is already revealed AND already in focus.
 
-    The expander reveals only what is not yet on screen, so this beat compiles to
-    no actions at all. It used to compile to a duplicate reveal -- the defect that
-    made the published lesson fade its rectangle in twice.
+    The expander reveals only what is not yet on screen, and falls back to moving
+    attention when a beat's kind has nothing left to do -- so a beat is only
+    genuinely empty once even that fallback is a no-op, which needs the target to
+    already hold `focus`. That is the case this gate exists for.
     """
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
@@ -572,10 +573,10 @@ def _plan_with_a_redundant_reveal_beat():
         "beats": [
             {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rectangle"}],
              "intent": "show the measured rectangle"},
+            {"id": "focus_boundary", "kind": "focus", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "attend to the whole boundary"},
             {"id": "second_look", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
              "intent": "look again at the same rectangle"},
-            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
-             "intent": "map the boundary onto twice length plus width"},
             {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
              "intent": "state the perimeter"},
         ],

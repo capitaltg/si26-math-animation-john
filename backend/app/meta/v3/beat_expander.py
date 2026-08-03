@@ -106,6 +106,31 @@ class BeatExpander:
         )
         if plan.strategy == "boundary_trace" and beat.id == boundary_trace_beat_id:
             actions.append(TraceAction(path_ref=f"{plan.primary_visual.ref}.perimeter"))
+        if not actions and not beat.custom_actions:
+            actions.extend(self._attention_fallback(beat, current_roles))
+        return actions
+
+    def _attention_fallback(self, beat, current_roles):
+        """Draw attention to the beat's targets when its kind had nothing left to do.
+
+        Two ordinary shapes leave a beat with no action once no-ops are
+        suppressed, and both are legitimate teaching:
+
+        - a `reveal` naming a part of an already-revealed visual. The part is
+          inside the group the reveal faded in (`_line_visual` puts marker dots
+          there), so fading it again changes nothing -- but "now point out the
+          endpoints" still has to show something.
+        - an `organize` whose target already holds `structure`, which every
+          structural primary visual does from the start.
+
+        Moving attention to the target is observable, is what both intents mean,
+        and needs no new action kind. A beat whose targets are ALL already in
+        focus really is redundant, and `quality.check_every_beat_acts` still
+        rejects it.
+        """
+        actions = []
+        for target in beat.targets:
+            actions.extend(self._role_change(target, "focus", current_roles))
         return actions
 
     def _reveal_unrevealed(self, plan, targets, revealed):

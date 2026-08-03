@@ -877,3 +877,83 @@ def test_incompatible_move_hint_names_the_movable_kinds(
     assert failure.hint == (
         "move a whole visual of a movable kind: rectangle_measurement"
     )
+
+
+def _reveal_parts_of_a_revealed_whole_plan():
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read the endpoints of a number line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [_field("a"), _field("b")],
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "reveal_ends", "kind": "reveal", "targets": [
+                {"visual_ref": "line", "part": "marker", "index": 0},
+                {"visual_ref": "line", "part": "marker", "index": 1},
+            ], "intent": "point out the two endpoints"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "measure the distance between them"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state the distance"},
+        ],
+        "variation_seed": "reveal-ends",
+    })
+
+
+def test_a_beat_naming_parts_already_on_screen_emphasizes_them(compile_context):
+    """A part of a revealed visual is already visible, so revealing it again is a
+    no-op -- but the beat still has to teach something.
+
+    `_line_visual` puts the marker dots inside the group the reveal fades in, so
+    `FadeIn` on one of them changes nothing. Suppressing that left the beat with
+    no actions at all, and a plan whose second beat says "now point out the
+    endpoints" -- entirely reasonable -- was rejected as `beat_without_action`.
+    """
+    plan = _reveal_parts_of_a_revealed_whole_plan()
+    program = compile_teaching_plan(
+        plan, FieldRefNode(field="a"), frozenset({"a", "b"}), compile_context,
+    )
+
+    beat_actions = [entry for entry in program.timeline if entry.beat_id == "reveal_ends"]
+    assert [entry.action.kind for entry in beat_actions] == ["set_role", "set_role"]
+    assert {entry.action.role for entry in beat_actions} == {"focus"}
+    assert {entry.action.target.index for entry in beat_actions} == {0, 1}
+
+
+def test_an_organize_beat_on_an_already_structural_visual_still_acts(compile_context):
+    """`organize` defaults to the `structure` role, which a grid already holds."""
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See multiplication as equal rows.",
+        "primary_visual": {
+            "kind": "grid", "ref": "array",
+            "rows": {"node": "literal", "value": 3},
+            "columns": {"node": "literal", "value": 4},
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+             "intent": "show the array"},
+            {"id": "focus_cell", "kind": "focus",
+             "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+             "intent": "look at a single cell"},
+            {"id": "organize_multiplication", "kind": "organize",
+             "targets": [{"visual_ref": "array"}],
+             "intent": "group the array into equal rows"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+             "intent": "state the product"},
+        ],
+        "variation_seed": "organize-grid",
+    })
+
+    program = compile_teaching_plan(
+        plan, FieldRefNode(field="a"), frozenset({"a"}), compile_context,
+    )
+
+    assert {entry.beat_id for entry in program.timeline} == {beat.id for beat in plan.beats}
