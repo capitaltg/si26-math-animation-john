@@ -177,6 +177,72 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
     assert any(call.kind == "trace" for call in scene.play_calls)
 
 
+def _scaled_down_lesson_plan():
+    """A rectangle plus a label wide enough that layout must scale the lesson down.
+
+    `place_vertical_lesson` fits the primary visual and its side labels inside
+    `SAFE_FRAME` by scaling every measured bound uniformly. The renderer then
+    rebuilt label text from the payload at a fixed font size, so only the text
+    escaped that scale.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find the perimeter of a rectangle from its two dimensions.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rect",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "formula_label", "text": "P = 2 x (length + width)"},
+        ],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rect"}],
+             "intent": "show the measured rectangle"},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "introduce the perimeter formula"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rect"}],
+             "intent": "substitute the two dimensions into the formula"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "scaled-down-lesson",
+    })
+
+
+def test_label_text_is_rendered_at_the_scale_layout_assigned_it():
+    """A label's rendered glyphs must fill exactly the box layout reserved for it.
+
+    Measured with the real `ManimTextMeasurer`, a label's measured size IS its
+    manim `Text` size, so after a uniform layout scale the rendered mobject must
+    match its placed bounds. It did not: the bounds were scaled and the `Text`
+    was rebuilt at `FONT_SIZES["label"]`, so the glyphs overran their reserved
+    box by 1/scale -- off the safe frame on one side and into the primary visual
+    on the other.
+    """
+    plan = _scaled_down_lesson_plan()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, ManimTextMeasurer())
+    placed = resolved.visual("formula_label").bounds
+    unscaled_width, _height = ManimTextMeasurer().measure(
+        "P = 2 x (length + width)", "label",
+    )
+    reserved_width = placed.right - placed.left
+    assert reserved_width < unscaled_width, "this lesson must be scaled down to be a test"
+
+    rendered = render_resolved_scene(RecordingScene(), resolved)
+
+    assert float(rendered.visuals["formula_label"].width) == pytest.approx(
+        reserved_width, abs=0.01,
+    )
+
+
 def _perimeter_plan_emphasizing_alias_edges():
     """A boundary_trace plan whose derive beat emphasizes the declared
     `length_edge`/`width_edge` semantic parts.

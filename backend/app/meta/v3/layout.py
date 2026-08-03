@@ -137,6 +137,7 @@ def _place_instructional(
     placed = [PlacedVisual(
         primary,
         Point(-primary.bounds.center.x, center_y - primary.bounds.center.y),
+        scale,
     )]
     placed.extend(_place_supporting_side(left, primary, center_y, -1, scale))
     placed.extend(_place_supporting_side(right, primary, center_y, 1, scale))
@@ -158,6 +159,7 @@ def _place_supporting_side(
         placed.append(PlacedVisual(
             item,
             Point(center_x - item.bounds.center.x, center_y - item.bounds.center.y),
+            scale,
         ))
         cursor += direction * (width + GAP * scale)
     return placed
@@ -175,6 +177,7 @@ def _place_centered_stack(
         placed.append(PlacedVisual(
             item,
             Point(-item.bounds.center.x, center_y - item.bounds.center.y),
+            scale,
         ))
         cursor -= height + GAP * scale
     return placed

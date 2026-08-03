@@ -73,6 +73,11 @@ class MeasuredVisual:
 class PlacedVisual:
     measured: MeasuredVisual
     offset: Point
+    # The uniform factor `place_vertical_lesson` already applied to `measured`.
+    # Geometry rebuilt from those bounds inherits the scale for free; anything
+    # reconstructed from the payload instead -- text, whose glyph size does not
+    # live in `bounds` -- has to be scaled by this explicitly.
+    scale: float = 1.0
 
     @property
     def bounds(self) -> Bounds:

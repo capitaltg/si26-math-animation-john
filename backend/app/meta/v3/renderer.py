@@ -119,7 +119,9 @@ def _build_visual(placed, palette: str):
 
     if "values" in payload:
         children = {
-            ("item", index): _text(value, "math_value", _center(part.bounds, placed.offset))
+            ("item", index): _text(
+                value, "math_value", _center(part.bounds, placed.offset), placed.scale,
+            )
             for (part_name, index), part in measured.parts.items()
             if part_name == "item"
             for value in (payload["values"][index],)
@@ -151,7 +153,7 @@ def _build_visual(placed, palette: str):
         }
         root.add(*edges.values())
     elif "text" in payload:
-        root, children = _text(payload["text"], "label", bounds.center), {}
+        root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "markers" in payload:
         root, children = _line_visual(bounds, measured, placed.offset, "marker")
     elif {"rows", "columns"} <= payload.keys():
@@ -177,8 +179,17 @@ def _initial_role(ref: str, payload) -> str:
     return "structure"
 
 
-def _text(text: str, font_role: str, center: Point):
+def _text(text: str, font_role: str, center: Point, scale: float = 1.0):
+    """Text at the size layout measured it, then reduced by layout's own factor.
+
+    Scaling the built mobject -- rather than asking for `FONT_SIZES[role] *
+    scale` -- reproduces exactly what layout computed: it measured the glyphs at
+    the base size and multiplied that measurement by `scale`. Re-rendering at a
+    smaller font size would re-run font metrics and land somewhere else.
+    """
     mobject = Text(text, font_size=FONT_SIZES[font_role])
+    if scale != 1.0:
+        mobject.scale(scale)
     mobject.move_to(_array(center))
     return mobject
 
