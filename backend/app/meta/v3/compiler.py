@@ -134,7 +134,7 @@ def validate_target_refs(plan):
                         f"{source.kind}:{target.kind}",
                         _enumerate_legal(
                             compatible_kinds,
-                            "transform between compatible declared visuals",
+                            "transform between whole visuals of a compatible kind",
                             "this visual kind cannot be transformed",
                         ),
                     )

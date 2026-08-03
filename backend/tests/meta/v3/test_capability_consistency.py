@@ -1,7 +1,7 @@
 """Static agreement checks between the v3 plan schema and the compiler
 capability tables.
 
-These tests compare *declarations*. They never execute the compiler, so
+These tests compare *declarations*. They never compile a plan, so
 agreement between two tables is not evidence that any combination of kind,
 strategy, and custom action compiles, measures, or renders. A green file means
 the declarations are mutually consistent and the known gaps are recorded.
@@ -32,13 +32,13 @@ def _declared_strategies():
 
 def test_every_declared_strategy_is_reachable():
     reachable = set().union(*_SUPPORTED_STRATEGIES.values())
-    assert _declared_strategies() - reachable == set()
+    assert _declared_strategies() == reachable
 
 
 def test_removed_strategy_is_rejected_at_schema_validation():
     assert "representation_transform" not in _declared_strategies()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="strategy"):
         TeachingPlanDocument.model_validate({
             "plan_version": 3,
             "learning_objective": "Unreachable strategies must not validate.",

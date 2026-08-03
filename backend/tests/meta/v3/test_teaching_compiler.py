@@ -597,8 +597,30 @@ def test_incompatible_transform_hint_names_the_compatible_kinds(
     failure = exc_info.value.failure
     assert failure.code == "incompatible_transform_target"
     assert failure.hint == (
-        "transform between compatible declared visuals: rectangle_measurement"
+        "transform between whole visuals of a compatible kind: rectangle_measurement"
     )
+
+
+def test_incompatible_transform_hint_says_so_when_the_source_kind_cannot_transform(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "median callout"}]
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "transform",
+        "source": {"visual_ref": "values"},
+        "target": {"visual_ref": "caption"},
+    }]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_transform_target"
+    assert failure.hint == "this visual kind cannot be transformed"
 
 
 def test_incompatible_callout_anchor_hint_names_the_permitted_anchors(
