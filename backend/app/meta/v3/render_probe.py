@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,8 @@ from app.render.full_render import BACKEND_ROOT, RENDER_TIMEOUT_SECONDS
 # dimensions. This keeps the same tolerance meaningful at every render quality.
 ANCHOR_TOLERANCE = 0.02
 _MIN_NON_BACKGROUND_PIXELS = 40
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -137,7 +140,15 @@ def run_probe_subprocess(request: ProbeRequest) -> ProbeOutput:
             ) from exc
 
         if result.returncode != 0:
-            raise _probe_failure(
+            # Reviewer-facing failures carry no generated content or paths (see
+            # this module's docstring), so the traceback goes to the operator log
+            # instead of into the failure. Without it a probe crash left three
+            # burnt generation attempts and no way to tell what broke.
+            logger.error(
+                "Probe renderer exited %s. stderr:\n%s",
+                result.returncode, _tail(result.stderr),
+            )
+            raise _structured_failure_from_probe(manifest_path) or _probe_failure(
                 "render_probe_failed", "render", "probe subprocess to complete successfully",
                 "probe renderer exited unsuccessfully", "regenerate the candidate and retry the preview",
             )
@@ -428,3 +439,23 @@ def _failed(code: str, path: str, detail: str) -> QualityCheck:
 
 def _probe_failure(code: str, path: str, expected: str, observed: str, hint: str) -> V3ValidationError:
     return V3ValidationError(V3Failure(code=code, path=path, expected=expected, observed=observed, hint=hint))
+
+
+def _structured_failure_from_probe(manifest_path: Path) -> V3ValidationError | None:
+    """The failure the worker rejected the candidate with, if it recorded one.
+
+    Keeps a `below_minimum_text_scale` (or any other structured rejection) raised
+    inside the subprocess reportable as itself, with its own actionable hint,
+    rather than flattened into an opaque `render_probe_failed`.
+    """
+    failure_path = manifest_path.with_suffix(".failure.json")
+    try:
+        payload = json.loads(failure_path.read_text())
+        return V3ValidationError(V3Failure(**payload))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+
+def _tail(stderr: str, limit: int = 4000) -> str:
+    stderr = (stderr or "").strip()
+    return stderr[-limit:] if len(stderr) > limit else stderr

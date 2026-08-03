@@ -7,7 +7,10 @@ from app.meta.dsl.v3_common import CompileContext
 from app.meta.preview_render import render_preview_and_probe
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
-from app.meta.v3.render_probe import validate_rendered_quality
+from app.meta.v3 import render_probe
+from app.meta.v3.render_probe import (
+    ProbeRequest, run_probe_subprocess, validate_rendered_quality,
+)
 
 
 @pytest.fixture
@@ -194,3 +197,77 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
 
     assert artifact_exists(tmp_path, artifact_hash)
     assert manifest["final_answer_visible"] is True
+
+
+def _overcrowded_program():
+    """Two measured rectangles plus a label: more content than SAFE_FRAME fits.
+
+    `place_vertical_lesson` raises `below_minimum_text_scale` while resolving,
+    which happens inside the probe subprocess -- before any frame is drawn.
+    """
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare the perimeters of two rectangles.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "first",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "supporting_visuals": [
+            {"kind": "rectangle_measurement", "ref": "second",
+             "length": {"node": "field_ref", "field": "length"},
+             "width": {"node": "field_ref", "field": "width"}, "unit": "cm"},
+            {"kind": "label", "ref": "formula_label",
+             "text": "P = 2 x (length + width) for each rectangle"},
+        ],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "first"}],
+             "intent": "show the first rectangle"},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "second"}],
+             "intent": "show the second rectangle beside it"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "apply the perimeter formula to each"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "overcrowded-probe",
+    })
+    return compile_teaching_plan(
+        plan, MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+
+def test_a_structured_failure_inside_the_probe_reaches_the_caller_intact():
+    """A structured rejection from the subprocess must not flatten to a crash.
+
+    Anything raising inside the probe was reported as `render_probe_failed`,
+    "probe renderer exited unsuccessfully", hint "regenerate the candidate" --
+    discarding the real code and its actionable hint, and leaving the retry loop
+    nothing to act on. The subprocess stderr was discarded too, so an operator
+    saw three burnt attempts and no traceback.
+    """
+    program = _overcrowded_program()
+    # Asserted by intercepting the module's own logger call, not via `caplog`:
+    # whether a record reaches a handler depends on global logging state that
+    # other imports mutate (manim installs a root handler; a `dictConfig`
+    # anywhere can set `Logger.disabled`, which `isEnabledFor` does not consult).
+    # That made the same assertion pass alone and fail in the full suite.
+    logged = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(render_probe.logger, "error", lambda *args: logged.append(args))
+        with pytest.raises(V3ValidationError) as exc_info:
+            run_probe_subprocess(ProbeRequest(
+                scene_program=program,
+                known_fields=["length", "width"],
+                field_values={"length": 8, "width": 3},
+            ))
+
+    failure = exc_info.value.failure
+    assert failure.code == "below_minimum_text_scale"
+    assert failure.hint == "reduce visual content so the lesson remains readable"
+    # And the operator gets the traceback the reviewer-facing failure omits.
+    assert logged, "a probe crash must log the subprocess stderr for the operator"
+    assert "below_minimum_text_scale" in " ".join(str(arg) for arg in logged[0])

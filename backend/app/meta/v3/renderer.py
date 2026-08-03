@@ -14,6 +14,7 @@ from manim import (
     Rectangle,
     Text,
     Transform,
+    VectorizedPoint,
     VGroup,
     VMobject,
 )
@@ -160,10 +161,23 @@ def _build_visual(placed, palette: str):
             )
             for part in ("length_label", "width_label")
         }
+        # `compiler._PART_CARDINALITY` accepts `vertex` as a rectangle target and
+        # the resolver resolves it, but nothing built a mobject for one, so any
+        # plan naming a vertex -- a callout at the corner a boundary walk starts
+        # from, say -- died with a KeyError inside `_target_mobject`. In the probe
+        # subprocess that surfaced only as `render_probe_failed`. A
+        # `VectorizedPoint` is an anchor with no visible geometry: it gives
+        # `_mobject_anchor` a position to read without drawing a corner marker.
+        vertices = {
+            ("vertex", index): VectorizedPoint(_array(_center(value.bounds, placed.offset)))
+            for (name, index), value in measured.parts.items()
+            if name == "vertex"
+        }
         children = {
             **{("edge", index): line for index, line in edges.items()},
             ("length_edge", 0): edges[0], ("length_edge", 1): edges[2],
             ("width_edge", 0): edges[3], ("width_edge", 1): edges[1],
+            **vertices,
             **dimension_labels,
         }
         root.add(*edges.values(), *dimension_labels.values())
@@ -180,7 +194,12 @@ def _build_visual(placed, palette: str):
     elif {"value", "maximum"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "segment")
     elif "count" in payload:
-        root, children = _parts_as_dots(measured, placed.offset, "item")
+        # `_parts_as_dots` returns the children dict alone, not a (root, children)
+        # pair -- unpacking it here consumed the dict's KEYS, so every
+        # `object_set` visual raised (or, at count == 2, silently bound two part
+        # keys to `root` and `children`). Mirror the `partition` branch instead.
+        children = _parts_as_dots(measured, placed.offset, "item")
+        root = VGroup(*children.values())
     else:
         raise ValueError(f"unsupported resolved visual {measured.ref}")
 

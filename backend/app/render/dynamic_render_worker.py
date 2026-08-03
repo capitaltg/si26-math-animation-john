@@ -1,8 +1,10 @@
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from app.meta.manim_primitives.style import resolve_semantic_style
+from app.meta.v3.errors import V3ValidationError
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.layout import SAFE_FRAME
@@ -20,10 +22,22 @@ def main() -> None:
         raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
 
     if mode == "probe":
-        _render_probe(
-            Path(program_path), Path(known_fields_path), Path(values_path),
-            Path(output_path_str), Path(scratch_dir_str),
-        )
+        try:
+            _render_probe(
+                Path(program_path), Path(known_fields_path), Path(values_path),
+                Path(output_path_str), Path(scratch_dir_str),
+            )
+        except V3ValidationError as exc:
+            # A structured rejection (`below_minimum_text_scale`, an unresolvable
+            # target ...) is actionable evidence with its own code and hint. Left
+            # to propagate it becomes a nonzero exit and nothing more, which the
+            # parent can only report as `render_probe_failed` / "regenerate the
+            # candidate". Hand the failure across the process boundary so it
+            # survives intact; the traceback still goes to stderr for the log.
+            Path(output_path_str).with_suffix(".failure.json").write_text(
+                json.dumps(asdict(exc.failure))
+            )
+            raise
         return
 
     del known_fields_path  # The stored scene program is already compiled against its field contract.

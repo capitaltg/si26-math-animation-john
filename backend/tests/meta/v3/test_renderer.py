@@ -1,4 +1,6 @@
 from dataclasses import dataclass, replace
+from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
 from manim import Line, Text
@@ -6,10 +8,12 @@ from manim import Line, Text
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
-from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.compiler import _PART_CARDINALITY, compile_teaching_plan
+from app.meta.v3.geometry import PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
-from app.meta.v3.renderer import render_resolved_scene
+from app.meta.v3.renderer import _build_visual, render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
+from app.meta.v3.visual_registry import default_visual_registry
 
 
 class LiteralTextMeasurer:
@@ -175,6 +179,46 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
 
     assert all(("rectangle", "edge", index) in rendered.targets for index in range(4))
     assert any(call.kind == "trace" for call in scene.play_calls)
+
+
+_MEASURABLE_VALUES = {
+    "ordered_values": {"values": ["3", "5", "8"]},
+    "rectangle_measurement": {"length": Fraction(8), "width": Fraction(3), "unit": "cm"},
+    "number_line": {"minimum": Fraction(0), "maximum": Fraction(10), "markers": [Fraction(4)]},
+    "grid": {"rows": 2, "columns": 3},
+    "partition": {"whole": Fraction(8), "parts": 4},
+    "bar": {"value": Fraction(3), "maximum": Fraction(5)},
+    "object_set": {"count": 6},
+    "label": {"text": "Answer"},
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_PART_CARDINALITY))
+def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
+    """A part the compiler accepts as a target must be renderable.
+
+    `compiler._PART_CARDINALITY` decides which semantic parts a plan may name,
+    `measure_rectangle` and friends give them geometry, and the resolver resolves
+    them -- but the renderer builds child mobjects independently, so a part
+    declared in all three and built by none crashes `_target_mobject` with a
+    KeyError. Inside the probe subprocess that surfaces only as
+    `render_probe_failed`, "probe renderer exited unsuccessfully", after three
+    burnt generation attempts.
+
+    `tests/meta/v3/test_capability_consistency.py` deliberately compares
+    declarations only ("never compile a plan"), so this is the check that the
+    declarations are actually backed by geometry the renderer can find.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind=kind, ref=kind), _MEASURABLE_VALUES[kind], ManimTextMeasurer(),
+    )
+    _root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+
+    targetable = {
+        key for key in measured.parts if key[0] in _PART_CARDINALITY[kind]
+    }
+    missing = sorted(targetable - set(children))
+    assert not missing, f"{kind} declares targetable parts the renderer never builds: {missing}"
 
 
 def _scaled_down_lesson_plan():
