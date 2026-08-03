@@ -166,6 +166,27 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
     assert 6 <= program.total_duration_seconds <= 12
 
 
+def test_pair_elimination_program_names_the_median_as_its_answer_anchor(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert program.answer_anchor.model_dump() == {
+        "visual_ref": "values", "part": "item", "index": 3,
+    }
+
+
+def test_other_strategies_declare_no_answer_anchor(perimeter_plan, compile_context):
+    program = compile_teaching_plan(
+        perimeter_plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        compile_context,
+    )
+    assert program.answer_anchor is None
+
+
 def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context):
     answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
     program = compile_teaching_plan(

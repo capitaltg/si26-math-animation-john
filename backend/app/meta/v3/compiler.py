@@ -2,6 +2,7 @@ from dataclasses import asdict
 
 from app.meta.dsl.expression import compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
+from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import expand_beats
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
@@ -74,6 +75,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
         total_duration_seconds=total,
         variation_seed=plan.variation_seed,
         style_recipe=StyleRecipeDocument(**asdict(recipe)),
+        answer_anchor=_answer_anchor(plan),
     )
 
 
@@ -177,6 +179,22 @@ def classify_content_density(visuals):
     if len(visuals) <= 4:
         return "medium"
     return "high"
+
+
+def _answer_anchor(plan):
+    """The on-screen target that IS the answer, when nothing else states it.
+
+    `pair_elimination` leaves the answer standing as the one unpaired item, so
+    the lesson draws no separate answer card and the rendered-quality probe has
+    to be told which target to hold to the final frame instead.
+    """
+    if plan.strategy != "pair_elimination":
+        return None
+    return TargetRef(
+        visual_ref=plan.primary_visual.ref,
+        part="item",
+        index=len(plan.primary_visual.values) // 2,
+    )
 
 
 def _visual_specs(plan):

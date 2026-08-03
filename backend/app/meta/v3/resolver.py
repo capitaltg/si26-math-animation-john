@@ -47,6 +47,7 @@ class ResolvedScene:
     timeline: list[ResolvedAction]
     total_duration_seconds: float
     style_recipe: StyleRecipeDocument
+    answer_anchor: TargetRef | None = None
 
     def visual(self, ref: str) -> PlacedVisual:
         return next(item for item in self.visuals if item.measured.ref == ref)
@@ -88,6 +89,7 @@ def resolve_scene(
         timeline=list(timeline),
         total_duration_seconds=program.total_duration_seconds,
         style_recipe=program.style_recipe,
+        answer_anchor=program.answer_anchor,
     )
 
 

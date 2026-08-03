@@ -166,6 +166,11 @@ class SceneProgramDocument(BaseModel):
     total_duration_seconds: float = Field(ge=MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS)
     variation_seed: GeneratedText = Field(min_length=1, max_length=64)
     style_recipe: StyleRecipeDocument
+    #: The target that carries the lesson's answer when no `evaluated_answer`
+    #: card is drawn. `None` means the answer is the card, as it is for every
+    #: strategy but `pair_elimination`. Optional with a default so stored
+    #: `scene_version` 3 programs deserialise unchanged.
+    answer_anchor: TargetRef | None = None
 
     @model_validator(mode="after")
     def timeline_actions_fit_scene_duration(self):
