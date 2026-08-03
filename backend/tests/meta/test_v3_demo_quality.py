@@ -42,12 +42,12 @@ def test_rendered_median_meets_v3_contract(rendered_median):
 
     # Load-bearing: every emphasized target's observed styling trajectory. The
     # median item starts structure (dimming its eliminated neighbours to neutral
-    # has to visibly leave it) before it is focused, and the evaluated answer
-    # only reaches its conclusion styling at the end.
+    # has to visibly leave it) before it is focused. It is the only emphasized
+    # target: the answer is one of the collection's own values, so the lesson
+    # draws no separate answer card to recolour at the end.
     assert report["state_order"] == [
         "values.item[3]:structure",
         "values.item[3]:focus",
-        "evaluated_answer:conclusion",
     ]
 
     # Load-bearing: the callout is anchored to the median item itself, not to the

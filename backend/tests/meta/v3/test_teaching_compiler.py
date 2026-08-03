@@ -160,7 +160,7 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
     )
     conclusion_index = next(
         index for index, action in enumerate(actions)
-        if action.kind == "reveal" and action.targets[0].visual_ref == "evaluated_answer"
+        if action.kind == "show_relation" and action.relation_ref == "median_callout"
     )
     assert focus_index < conclusion_index
     assert 6 <= program.total_duration_seconds <= 12
@@ -392,7 +392,47 @@ def test_a_fifteen_value_elimination_still_fits_the_scene_budget(answer, compile
     assert 6 <= program.total_duration_seconds <= 12
 
 
-def test_focus_target_creates_item_specific_median_callout(median_plan, answer, compile_context):
+def test_pair_elimination_declares_no_answer_card(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+
+
+def test_the_conclusion_names_the_median_and_recolours_nothing(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+
+    assert [entry.action.kind for entry in conclusion] == ["show_relation"]
+    assert conclusion[0].action.relation_ref == "median_callout"
+    assert conclusion[0].duration_seconds >= 1.5
+
+
+def test_a_plan_supplied_callout_replaces_the_generated_one(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][3]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "bottom"},
+        "text": "This is the median - the middle value!",
+    }]
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    assert [relation.text for relation in program.relations] == [
+        "This is the median - the middle value!",
+    ]
+
+
+def test_the_conclusion_creates_an_item_specific_median_callout(
+    median_plan, answer, compile_context,
+):
     program = compile_teaching_plan(
         median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
     )
@@ -405,9 +445,12 @@ def test_focus_target_creates_item_specific_median_callout(median_plan, answer, 
     }]
 
 
-def test_answer_visual_is_revealed_only_by_the_conclusion(median_plan, answer, compile_context):
+def test_answer_visual_is_revealed_only_by_the_conclusion(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
     program = compile_teaching_plan(
-        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
     )
 
     answer_entries = [
@@ -415,17 +458,26 @@ def test_answer_visual_is_revealed_only_by_the_conclusion(median_plan, answer, c
         if entry.action.kind == "reveal" and entry.action.targets[0].visual_ref == "evaluated_answer"
     ]
     assert len(answer_entries) == 1
-    assert answer_entries[0].beat_id == "show_answer"
+    assert answer_entries[0].beat_id == "conclude"
 
 
 def test_conclusion_reveal_and_role_hold_together_for_at_least_one_and_a_half_seconds(
-    median_plan, answer, compile_context,
+    published_perimeter_plan, perimeter_answer, compile_context,
 ):
-    program = compile_teaching_plan(
-        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
-    )
-    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+    """The answer card's reveal and its `conclusion` recolour must land together.
 
+    Asserted on a lesson that still draws an answer card: `pair_elimination`
+    names one of the collection's own values instead, so its conclusion is a
+    single `show_relation` with nothing to co-ordinate (see
+    `test_the_conclusion_names_the_median_and_recolours_nothing`).
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == "conclude"]
+
+    assert {entry.action.kind for entry in conclusion_entries} == {"reveal", "set_role"}
     assert {entry.at_seconds for entry in conclusion_entries} == {conclusion_entries[0].at_seconds}
     assert all(entry.duration_seconds >= 1.5 for entry in conclusion_entries)
 

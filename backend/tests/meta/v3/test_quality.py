@@ -95,11 +95,20 @@ def apply_literal_test_mutation(candidate, mutation):
         ]
         return Candidate(candidate.plan, program.model_copy(update={"timeline": timeline}))
     if mutation == "initial_answer_focus":
+        # Mutated on the perimeter lesson: the median's answer is one of its own
+        # values, so its program declares no `evaluated_answer` card to give a
+        # premature role to.
+        plan = _perimeter_plan()
+        perimeter = _compile(
+            plan,
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+            {"length", "width"},
+        )
         visuals = [
             visual.model_copy(update={"initial_role": "focus"}) if visual.ref == "evaluated_answer" else visual
-            for visual in program.visuals
+            for visual in perimeter.visuals
         ]
-        return Candidate(candidate.plan, program.model_copy(update={"visuals": visuals}))
+        return Candidate(plan, perimeter.model_copy(update={"visuals": visuals}))
     if mutation == "row_anchor_for_item":
         relation = program.relations[0]
         row_target = relation.target.model_copy(update={"part": None, "index": None, "anchor": "center"})
@@ -206,7 +215,13 @@ def _mid_scene_conclude_plan_data():
     """The median plan with a SECOND `conclude` beat inserted before the beat
     that derives the answer -- so the evaluated answer is revealed and given
     its `conclusion` role at 1.3s of a 6.5s scene, 20% in, before the `focus`
-    beat that is supposed to derive it."""
+    beat that is supposed to derive it.
+
+    `group_reveal` rather than `pair_elimination`: what is under test is when
+    the `evaluated_answer` card may be revealed, and a `pair_elimination` plan
+    declares no such card -- its answer is one of the collection's own values.
+    The strategy is otherwise immaterial here; this plan has no `organize` beat,
+    so it compiles to the same 6.5s timeline either way."""
     return {
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
@@ -214,7 +229,7 @@ def _mid_scene_conclude_plan_data():
             "kind": "ordered_values", "ref": "values",
             "values": [_field(f"v{index}") for index in range(1, 8)],
         },
-        "strategy": "pair_elimination",
+        "strategy": "group_reveal",
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},

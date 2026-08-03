@@ -58,7 +58,14 @@ class BeatExpander:
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
         ]
-        visuals.append(AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression))
+        if plan.strategy != "pair_elimination":
+            # The answer is one of the collection's own values, already on
+            # screen. Suppressed at declaration rather than at reveal because
+            # `quality.check_unused_visual` fails any visual absent from the
+            # timeline.
+            visuals.append(
+                AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression)
+            )
         initial_roles = {visual.ref: visual.initial_role for visual in visuals}
         # Keyed by `_target_key`, not by bare ref, so a part-level lookup can
         # fall back to its whole visual's role -- the renderer initialises every
@@ -221,29 +228,7 @@ class BeatExpander:
             return actions
 
         if beat.kind == "focus":
-            actions = self._generic_role_change(beat, "focus", current_roles)
-            if plan.strategy == "pair_elimination":
-                middle = len(plan.primary_visual.values) // 2
-                for target in beat.targets:
-                    if (
-                        target.visual_ref == plan.primary_visual.ref
-                        and target.part == "item"
-                        and target.index == middle
-                        and not any(relation.ref == "median_callout" for relation in relations)
-                    ):
-                        relations.append(CalloutRelation(
-                            ref="median_callout",
-                            target={
-                                "visual_ref": target.visual_ref,
-                                "part": "item",
-                                "index": middle,
-                                "anchor": "bottom",
-                            },
-                            text="median",
-                        ))
-                        actions.append(ShowRelationAction(relation_ref="median_callout"))
-                        break
-            return actions
+            return self._generic_role_change(beat, "focus", current_roles)
 
         if beat.kind == "derive":
             # "map visible structure into a calculation or relationship" -- the
@@ -255,6 +240,8 @@ class BeatExpander:
             return self._generic_role_change(beat, "focus", current_roles)
 
         if beat.kind == "conclude":
+            if plan.strategy == "pair_elimination":
+                return self._median_callout(plan, beat, relations)
             answer_target = TargetRef(visual_ref="evaluated_answer")
             revealed.add(self._target_key(answer_target))
             return [
@@ -263,6 +250,31 @@ class BeatExpander:
             ]
 
         return self._generic_role_change(beat, "structure", current_roles)
+
+    def _median_callout(self, plan, beat, relations):
+        """Name the surviving middle value -- unless the plan already names it.
+
+        Two callouts on one anchor stack two labels in the same space, which
+        `quality.check_salience` rejects outright, so defer to the author's own
+        wording when there is any. Emitting no recolour here is deliberate: the
+        median changes colour exactly once, at the focus beat.
+        """
+        middle = len(plan.primary_visual.values) // 2
+        anchor = (plan.primary_visual.ref, "item", middle)
+        if any(
+            (action.target.visual_ref, action.target.part, action.target.index) == anchor
+            for action in beat.custom_actions if action.kind == "callout"
+        ):
+            return []
+        relations.append(CalloutRelation(
+            ref="median_callout",
+            target={
+                "visual_ref": plan.primary_visual.ref, "part": "item",
+                "index": middle, "anchor": "bottom",
+            },
+            text="median",
+        ))
+        return [ShowRelationAction(relation_ref="median_callout")]
 
     def _generic_role_change(self, beat, role, current_roles):
         """The kind's default role change, minus targets the beat details itself.
