@@ -224,9 +224,13 @@ def _validate_target(target, specs, path):
 def _validate_path_ref(path_ref, specs, path):
     visual_ref, separator, name = path_ref.partition(".")
     if not separator or not visual_ref or not name or "." in name:
+        declared = _DECLARED_PATHS.get(specs[visual_ref].kind, set()) if visual_ref in specs else set()
         _fail(
             "invalid_path_ref", path, "a declared visual path reference", path_ref,
-            "use the form visual_ref.path_name",
+            _enumerate_legal(
+                declared, "use the form visual_ref.path_name",
+                "use the form visual_ref.path_name",
+            ),
         )
     try:
         spec = specs[visual_ref]

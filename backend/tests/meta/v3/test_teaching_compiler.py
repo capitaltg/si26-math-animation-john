@@ -533,6 +533,46 @@ def test_unknown_declared_path_hint_names_the_declared_paths(
     assert failure.hint == "use a declared semantic path: perimeter"
 
 
+def test_invalid_path_ref_hint_names_the_declared_paths(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "rectangle.length_edge.0"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "invalid_path_ref"
+    assert failure.hint == "use the form visual_ref.path_name: perimeter"
+
+
+def test_invalid_path_ref_hint_falls_back_when_the_visual_ref_is_unresolved(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "missing.length_edge.0"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "invalid_path_ref"
+    assert failure.hint == "use the form visual_ref.path_name"
+
+
 def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
     median_plan, answer, compile_context,
 ):

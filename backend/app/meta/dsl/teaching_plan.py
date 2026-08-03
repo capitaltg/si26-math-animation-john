@@ -111,7 +111,15 @@ class RestoreRequest(BaseModel):
 class TraceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["trace"] = "trace"
-    path_ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
+    path_ref: GeneratedText = Field(
+        pattern=r"^[a-z][a-z0-9_.]{0,95}$",
+        description=(
+            "A declared visual path, in the form visual_ref.path_name (exactly one dot). "
+            "The only declared path today is perimeter, on rectangle_measurement visuals "
+            "only. Reference any other sub-part (an edge, vertex, or item) through a "
+            "target's part and index, never through path_ref."
+        ),
+    )
 
 
 class CalloutRequest(BaseModel):
@@ -138,7 +146,15 @@ class MoveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["move"] = "move"
     target: TargetRef
-    path_ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
+    path_ref: GeneratedText = Field(
+        pattern=r"^[a-z][a-z0-9_.]{0,95}$",
+        description=(
+            "A declared visual path, in the form visual_ref.path_name (exactly one dot). "
+            "The only declared path today is perimeter, on rectangle_measurement visuals "
+            "only. Reference any other sub-part (an edge, vertex, or item) through a "
+            "target's part and index, never through path_ref."
+        ),
+    )
 
 
 RequestedAction = Annotated[
