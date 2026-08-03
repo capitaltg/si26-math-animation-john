@@ -236,6 +236,13 @@ class TeachingPlanDocument(BaseModel):
                 f"compiler stages the elimination; found {len(organize_positions)}"
             )
 
+        organize_beat = self.beats[organize_positions[0]]
+        if organize_beat.custom_actions:
+            raise ValueError(
+                f"beat {organize_beat.id!r} is pair_elimination's organize beat, which the "
+                "compiler stages entirely on its own; move its custom actions to another beat"
+            )
+
         middle = TargetRef(
             visual_ref=self.primary_visual.ref,
             part="item",
@@ -255,10 +262,10 @@ class TeachingPlanDocument(BaseModel):
                 if (
                     action.kind in {"dim", "emphasize", "restore"}
                     and action.target.visual_ref == self.primary_visual.ref
-                    and action.target.part == "item"
                 ):
                     raise ValueError(
-                        f"beat {beat.id!r} changes the role of an item of the primary visual; "
-                        "pair_elimination stages its own elimination, so remove the custom action"
+                        f"beat {beat.id!r} changes the role of the primary visual, whole or "
+                        "item; pair_elimination stages its own elimination, so remove the "
+                        "custom action"
                     )
         return self

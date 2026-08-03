@@ -166,6 +166,16 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
     assert 6 <= program.total_duration_seconds <= 12
 
 
+def test_pair_elimination_rejects_an_answer_that_is_not_the_middle_value(
+    median_plan, compile_context,
+):
+    with pytest.raises(V3ValidationError, match="pair_elimination_answer_must_be_middle_value"):
+        compile_teaching_plan(
+            median_plan, FieldRefNode(field="v1"),
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+
 def test_pair_elimination_program_names_the_median_as_its_answer_anchor(
     median_plan, answer, compile_context,
 ):
@@ -676,6 +686,10 @@ def test_custom_draw_and_move_reject_incompatible_visual_targets(
 ):
     if action_request["kind"] == "draw":
         raw = median_plan.model_dump()
+        # short_stagger, not pair_elimination: the organize beat under test rejects
+        # every custom action for pair_elimination now, and this test's subject
+        # (draw/target compatibility) is strategy-independent.
+        raw["strategy"] = "short_stagger"
         known_fields, expression = frozenset({f"v{i}" for i in range(1, 8)}), answer
     else:
         raw = perimeter_plan.model_dump()
@@ -920,6 +934,10 @@ def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (declared-path hints) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["beats"][1]["custom_actions"] = [
         {"kind": "trace", "path_ref": "values.outline"}
     ]
@@ -988,6 +1006,10 @@ def test_incompatible_transform_hint_says_so_when_the_source_kind_cannot_transfo
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (transform target compatibility) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "median callout"}]
     raw["beats"][1]["custom_actions"] = [{
         "kind": "transform",
@@ -1031,6 +1053,10 @@ def test_incompatible_draw_hint_names_the_drawable_kinds(
     median_plan, answer, compile_context,
 ):
     raw = median_plan.model_dump()
+    # short_stagger, not pair_elimination: the organize beat under test rejects
+    # every custom action for pair_elimination now, and this test's subject
+    # (draw target compatibility) is strategy-independent.
+    raw["strategy"] = "short_stagger"
     raw["beats"][1]["custom_actions"] = [
         {"kind": "draw", "target": {"visual_ref": "values"}}
     ]
@@ -1153,6 +1179,10 @@ def test_an_organize_beat_on_an_already_structural_visual_still_acts(compile_con
 
 
 def _plan_with_custom_reveals(custom_actions):
+    # short_stagger, not pair_elimination: this fixture puts custom actions on
+    # the organize beat, which pair_elimination now rejects outright (its
+    # organize beat is staged entirely by the compiler). The reveal-tracking
+    # behaviour under test here is strategy-independent.
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
@@ -1160,7 +1190,7 @@ def _plan_with_custom_reveals(custom_actions):
             "kind": "ordered_values", "ref": "values",
             "values": [_field(f"v{i}") for i in range(1, 8)],
         },
-        "strategy": "pair_elimination",
+        "strategy": "short_stagger",
         "beats": [
             {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
              "intent": "show the ordered values together"},

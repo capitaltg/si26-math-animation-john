@@ -52,6 +52,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
     validate_unique_visual_refs(plan)
     validate_target_refs(plan)
     validate_strategy_compatibility(plan)
+    validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
     recipe = resolve_style_recipe(
         seed=plan.variation_seed,
@@ -170,6 +171,26 @@ def validate_strategy_compatibility(plan):
             "pair_elimination_requires_odd_values", "primary_visual.values",
             "an odd number of ordered values", str(len(plan.primary_visual.values)),
             "use an odd-sized collection with one middle item",
+        )
+
+
+def validate_pair_elimination_answer(plan, answer_expression):
+    """`pair_elimination`'s answer is the surviving middle value, by definition.
+
+    `_answer_anchor` always points the probe gates at the middle item, so a
+    plan whose `answer_expression` names something else would animate to,
+    caption, and hold the persistence gate on one value while claiming a
+    different one is the answer -- and nothing else compares the two.
+    """
+    if plan.strategy != "pair_elimination":
+        return
+    middle = plan.primary_visual.values[len(plan.primary_visual.values) // 2]
+    if answer_expression != middle:
+        _fail(
+            "pair_elimination_answer_must_be_middle_value", "answer_expression",
+            "the same expression as the primary visual's middle value",
+            str(answer_expression),
+            "set answer_expression to primary_visual.values[len(values) // 2]",
         )
 
 
