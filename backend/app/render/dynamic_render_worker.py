@@ -232,6 +232,14 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
             relation.ref for relation in program.relations
             if relation.target.part in DIMENSION_TARGET_PARTS
         ],
+        # Evidence that each measured visual actually put its measurements on
+        # screen. Read off the rendered mobjects, so it reports what the frame
+        # shows rather than what the program intended.
+        "dimension_labels": _dimension_labels(scene, program),
+        "declared_dimension_labels": [
+            visual.ref for visual in program.visuals
+            if visual.kind == "rectangle_measurement"
+        ],
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),
         "final_answer_visible": scene.final_answer_visible,
@@ -332,6 +340,22 @@ def _mobject_anchor(mobject, anchor):
         "left": mobject.get_left(),
         "right": mobject.get_right(),
     }[anchor]
+
+
+def _dimension_labels(scene, program) -> dict:
+    labels = {}
+    for visual in program.visuals:
+        if visual.kind != "rectangle_measurement":
+            continue
+        rendered = {}
+        for part in ("length_label", "width_label"):
+            mobject = scene.rendered.targets.get((visual.ref, part, 0))
+            if mobject is not None:
+                # `original_text` is the string handed to manim; `.text` is
+                # manim's normalised form, which drops the space in "8 cm".
+                rendered[part] = getattr(mobject, "original_text", "")
+        labels[visual.ref] = rendered
+    return labels
 
 
 def _pixel_bounds(bounds, width, height) -> list[float]:

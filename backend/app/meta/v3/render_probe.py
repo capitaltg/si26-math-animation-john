@@ -45,6 +45,7 @@ def validate_rendered_quality(manifest: dict) -> QualityReport:
         check_state_order(manifest),
         check_declared_path_events(manifest),
         check_dimension_attachments(manifest),
+        check_dimension_labels(manifest),
         check_final_answer_persistence(manifest),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
@@ -66,6 +67,8 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "declared_path_events": list,
         "dimension_anchor_checks": dict,
         "declared_dimension_anchors": list,
+        "dimension_labels": dict,
+        "declared_dimension_labels": list,
         "state_events": list,
         "declared_state_events": list,
         "final_answer_visible": bool,
@@ -91,7 +94,7 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         return _failed("render_probe_contract_invalid", "anchors", "anchors must be two numeric coordinates")
     if not all(_relation_contract(relation) for relation in manifest["relations"].values()):
         return _failed("render_probe_contract_invalid", "relations", "relation evidence is incomplete")
-    if not all(isinstance(value, str) for field in ("declared_relations", "path_events", "declared_path_events", "declared_dimension_anchors") for value in manifest[field]):
+    if not all(isinstance(value, str) for field in ("declared_relations", "path_events", "declared_path_events", "declared_dimension_anchors", "declared_dimension_labels") for value in manifest[field]):
         return _failed("render_probe_contract_invalid", "manifest", "declared and observed identifiers must be strings")
     if not all(_state_contract(event, observed=True) for event in manifest["state_events"]):
         return _failed("render_probe_contract_invalid", "state_events", "observed state evidence is incomplete")
@@ -181,6 +184,26 @@ def check_frame_bounds(manifest: dict) -> QualityCheck:
         if not _inside(relation.get("bounds", []), safe_frame):
             return _failed("frame_out_of_bounds", f"relations.{ref}.bounds", "a callout bound extends outside the safe frame")
     return _passed("frame_out_of_bounds", "visual_bounds")
+
+
+def check_dimension_labels(manifest: dict) -> QualityCheck:
+    """A measurement visual must render both of its measurements as text.
+
+    Nothing in either gate layer confirmed that a `rectangle_measurement` put its
+    length and width on screen, so a perimeter lesson could ship as a bare
+    rectangle with no numbers to add up -- geometrically correct and
+    pedagogically empty.
+    """
+    observed = manifest.get("dimension_labels", {})
+    for ref in manifest.get("declared_dimension_labels", []):
+        labels = observed.get(ref, {})
+        for part in ("length_label", "width_label"):
+            if not str(labels.get(part, "")).strip():
+                return _failed(
+                    "dimension_label_missing", f"dimension_labels.{ref}.{part}",
+                    "a measured visual rendered no text for this dimension",
+                )
+    return _passed("dimension_label_missing", "dimension_labels")
 
 
 def check_visual_overlap(manifest: dict) -> QualityCheck:

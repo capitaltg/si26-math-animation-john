@@ -44,6 +44,8 @@ def valid_manifest():
         "declared_path_events": [],
         "dimension_anchor_checks": {},
         "declared_dimension_anchors": [],
+        "dimension_labels": {},
+        "declared_dimension_labels": [],
         "state_events": [
             {"seconds": 1.5, "target": "values.item[3]", "role": "neutral"},
             {"seconds": 4.5, "target": "values.item[3]", "role": "focus"},
@@ -69,6 +71,8 @@ def valid_manifest():
     ("answer", "final_answer_not_persistent"),
     ("outside_safe_frame", "frame_out_of_bounds"),
     ("overlapping_visuals", "visual_overlap"),
+    ("unlabelled_dimension", "dimension_label_missing"),
+    ("blank_dimension_label", "dimension_label_missing"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -87,6 +91,17 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
     elif mutation == "overlapping_visuals":
         manifest["visual_bounds"] = {
             **valid_manifest["visual_bounds"], "evaluated_answer": [800, 100, 880, 145],
+        }
+    elif mutation == "unlabelled_dimension":
+        # A measurement visual that renders no measurements: the published
+        # perimeter lesson drew a rectangle whose length and width appeared
+        # nowhere, leaving nothing on screen to add up.
+        manifest["declared_dimension_labels"] = ["rect"]
+        manifest["dimension_labels"] = {"rect": {"length_label": "8 cm"}}
+    elif mutation == "blank_dimension_label":
+        manifest["declared_dimension_labels"] = ["rect"]
+        manifest["dimension_labels"] = {
+            "rect": {"length_label": "8 cm", "width_label": "   "},
         }
     elif mutation == "misaligned":
         manifest["relations"] = {"median_callout": {**valid_manifest["relations"]["median_callout"], "tip": [600, 400]}}

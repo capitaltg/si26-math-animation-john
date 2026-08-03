@@ -184,7 +184,8 @@ def _measure_ordered_values(*, spec, values, measurer):
 
 def _measure_rectangle(*, spec, values, measurer):
     return measure_rectangle(
-        ref=spec.ref, length=values["length"], width=values["width"], unit=values["unit"]
+        ref=spec.ref, length=values["length"], width=values["width"],
+        unit=values["unit"], measurer=measurer,
     )
 
 

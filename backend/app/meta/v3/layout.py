@@ -1,7 +1,9 @@
 from collections.abc import Sequence
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
-from app.meta.v3.geometry import Bounds, MeasuredVisual, PlacedVisual, Point, SemanticPart
+from app.meta.v3.geometry import (
+    Bounds, MeasuredVisual, PlacedVisual, Point, SemanticPart, translate_bounds,
+)
 
 
 SAFE_FRAME = Bounds(-6.6, 6.6, -3.6, 3.6)
@@ -134,24 +136,29 @@ def _place_instructional(
     left = [scale_measured_visual(item, scale) for item in supporting_sides[0]]
     right = [scale_measured_visual(item, scale) for item in supporting_sides[1]]
     center_y = frame.center.y
-    placed = [PlacedVisual(
-        primary,
-        Point(-primary.bounds.center.x, center_y - primary.bounds.center.y),
-        scale,
-    )]
-    placed.extend(_place_supporting_side(left, primary, center_y, -1, scale))
-    placed.extend(_place_supporting_side(right, primary, center_y, 1, scale))
+    primary_offset = Point(-primary.bounds.center.x, center_y - primary.bounds.center.y)
+    # The side cursors start from where the primary visual ACTUALLY lands, not
+    # from its untranslated measured box. The two coincide only when the box is
+    # centred on its own origin, which was true of every primary visual until
+    # `measure_rectangle` began reserving space for dimension labels outside the
+    # shape. For an off-centre box, untranslated bounds put each side stack wrong
+    # by exactly `primary_offset.x` -- off the frame on one side, over the
+    # primary visual on the other.
+    primary_bounds = translate_bounds(primary.bounds, primary_offset)
+    placed = [PlacedVisual(primary, primary_offset, scale)]
+    placed.extend(_place_supporting_side(left, primary_bounds, center_y, -1, scale))
+    placed.extend(_place_supporting_side(right, primary_bounds, center_y, 1, scale))
     return placed
 
 
 def _place_supporting_side(
     items: Sequence[MeasuredVisual],
-    primary: MeasuredVisual,
+    primary_bounds: Bounds,
     center_y: float,
     direction: int,
     scale: float,
 ) -> list[PlacedVisual]:
-    cursor = (primary.bounds.left if direction < 0 else primary.bounds.right) + direction * GAP * scale
+    cursor = (primary_bounds.left if direction < 0 else primary_bounds.right) + direction * GAP * scale
     placed = []
     for item in items:
         width = item.bounds.right - item.bounds.left

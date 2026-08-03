@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 
 import pytest
-from manim import Text
+from manim import Line, Text
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
@@ -243,6 +243,44 @@ def test_label_text_is_rendered_at_the_scale_layout_assigned_it():
     )
 
 
+def test_rectangle_renders_its_measured_dimensions_as_visible_text():
+    """The length and width must reach the screen as glyphs, not just as geometry.
+
+    The renderer read `length`/`width` from the payload only to size the box, so
+    a perimeter lesson showed a rectangle with no numbers on it -- nothing to add
+    up. The rendered text also has to carry the layout scale, like every other
+    label.
+    """
+    plan = _scaled_down_lesson_plan()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, ManimTextMeasurer())
+
+    rendered = render_resolved_scene(RecordingScene(), resolved)
+
+    length_label = rendered.targets[("rect", "length_label", 0)]
+    width_label = rendered.targets[("rect", "width_label", 0)]
+    # `Text.text` is manim-normalised ("8cm"); `original_text` is what we passed.
+    assert length_label.original_text == "8 cm"
+    assert width_label.original_text == "3 cm"
+    # The length labels the bottom edge and the width the left edge, so a
+    # swapped pair would put "3 cm" under the shape. Compare against the edges,
+    # not the group -- the labels are submobjects, so the group's own extent
+    # already includes them.
+    bottom_edge = rendered.targets[("rect", "length_edge", 0)]
+    left_edge = rendered.targets[("rect", "width_edge", 0)]
+    assert float(length_label.get_top()[1]) <= float(bottom_edge.get_bottom()[1])
+    assert float(width_label.get_right()[0]) <= float(left_edge.get_left()[0])
+    reserved = resolved.visual("rect").measured.parts[("length_label", 0)].bounds
+    assert float(length_label.width) == pytest.approx(
+        reserved.right - reserved.left, abs=0.01,
+    )
+
+
 def _perimeter_plan_emphasizing_alias_edges():
     """A boundary_trace plan whose derive beat emphasizes the declared
     `length_edge`/`width_edge` semantic parts.
@@ -314,6 +352,11 @@ def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edge
     # The four emphasis actions really did play, so `_target_mobject` resolved
     # every alias key rather than raising.
     assert [call.role for call in scene.play_calls if call.role] == ["focus"] * 4
-    # The rectangle group still holds exactly its four edges: the aliases are
-    # additional *names* for those lines, not extra geometry.
-    assert len(rendered.visuals["rectangle"].submobjects) == 4
+    # The rectangle group still holds exactly four Lines: the aliases are
+    # additional *names* for those lines, not extra geometry. (The two dimension
+    # labels are separate Text mobjects, not duplicated edges.)
+    lines = [
+        submobject for submobject in rendered.visuals["rectangle"].submobjects
+        if isinstance(submobject, Line)
+    ]
+    assert len(lines) == 4

@@ -72,14 +72,18 @@ def test_rendered_perimeter_meets_v3_contract(rendered_perimeter):
     # a process rather than asserted.
     assert "rectangle.perimeter" in report["traced_paths"]
 
-    # Load-bearing guard: the refs come from the compiled program (the compiler
-    # names callout relations positionally), so a dimension filter that stops
-    # matching real programs fails here instead of comparing {} == {}.
-    dimension_refs = rendered_perimeter.dimension_relation_refs
-    assert dimension_refs, "the perimeter plan's edge callouts must compile to dimension relations"
-    # Redundant: rendered `check_dimension_attachments` already fails any
-    # detached or missing dimension anchor, and raises inside the fixture.
-    assert report["dimension_anchor_checks"] == {ref: True for ref in dimension_refs}
+    # Load-bearing: the lesson's measurements are actually on screen. This used
+    # to assert dimension CALLOUTS were rendered and anchored; a callout's text
+    # is a plain string frozen at generation time, so it could not survive the
+    # template being reused on another problem. `rectangle_measurement` now
+    # measures and draws the dimensions from the length/width expressions, so the
+    # evidence is the rendered label text -- read off the mobjects, and matching
+    # this fixture's own field values rather than a hardcoded pair.
+    assert report["declared_dimension_labels"] == [lesson.primary_visual_ref]
+    assert report["dimension_labels"][lesson.primary_visual_ref] == {
+        "length_label": f"{lesson.verified_params['length']} cm",
+        "width_label": f"{lesson.verified_params['width']} cm",
+    }
 
     # Load-bearing, and the only guard on the mandated derive beat: within that
     # beat the renderer really emphasized all four edges -- the length pair

@@ -475,15 +475,20 @@ def _perimeter_plan_with_dimension_callouts():
     })
 
 
-def test_real_perimeter_program_with_dimension_callouts_passes_static_quality():
-    """Proves `check_dimension_anchor_specificity` actually runs and ACCEPTS
-    the `length_edge`/`width_edge` alias parts as valid dimension anchors --
-    the exact typed target the real compiler emits for a length/width
-    callout. Before this fix, the check filtered on `"dimension" in
-    relation.ref` (never true) and, had it ever run, would have REJECTED
-    these same relations for not being anchored to a plain "edge" part --
-    i.e. the static gate and the compiler disagreed about what a valid
-    dimension anchor looks like."""
+def test_a_callout_on_a_dimension_edge_is_rejected_as_a_duplicate_label():
+    """`measure_rectangle` now labels the length and width itself, so a callout
+    on `length_edge`/`width_edge` writes a second label over the first.
+
+    Those callouts used to be the only route to a visible dimension, and this
+    test asserted they PASSED. They cannot express a per-render value, though:
+    `CalloutRelation.text` is a plain string frozen at generation time, so a
+    template reused on another problem would keep labelling the first problem's
+    numbers. The dimensions are now measured and drawn from the `length`/`width`
+    expressions, and a callout on those same edges is a duplicate.
+
+    Callouts remain available for every other anchor -- a plain numbered `edge`,
+    a `vertex` -- which is what `check_dimension_anchor_specificity` still guards.
+    """
     plan = _perimeter_plan_with_dimension_callouts()
     program = _compile(
         plan,
@@ -498,8 +503,29 @@ def test_real_perimeter_program_with_dimension_callouts_passes_static_quality():
 
     report = validate_static_quality(plan, program)
 
+    assert report.passed is False
+    assert "duplicate_dimension_label" in [
+        check.code for check in report.checks if not check.passed
+    ]
+
+
+def test_a_callout_on_a_plain_vertex_is_still_accepted():
+    """The duplicate-label gate must not turn into a blanket ban on callouts."""
+    raw = _perimeter_plan_with_dimension_callouts().model_dump()
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "callout", "text": "start here",
+        "target": {"visual_ref": "rectangle", "part": "vertex", "index": 0, "anchor": "top"},
+    }]
+    plan = TeachingPlanDocument.model_validate(raw)
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+
+    report = validate_static_quality(plan, program)
+
     assert report.passed is True
-    assert all(check.passed for check in report.checks if check.code == "dimension_anchor_mismatch")
 
 
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):

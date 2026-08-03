@@ -128,8 +128,15 @@ def _build_visual(placed, palette: str):
         }
         root = VGroup(*children.values())
     elif {"length", "width", "unit"} <= payload.keys():
-        root = Rectangle(width=bounds.right - bounds.left, height=bounds.top - bounds.bottom)
-        root.move_to(_array(bounds.center))
+        # Size the shape from its EDGE parts, not from `bounds`: the measured
+        # bounds now also enclose the dimension labels outside the shape, so
+        # using them would stretch the rectangle over its own labels.
+        shape_bounds = _shape_bounds(measured, placed.offset)
+        root = Rectangle(
+            width=shape_bounds.right - shape_bounds.left,
+            height=shape_bounds.top - shape_bounds.bottom,
+        )
+        root.move_to(_array(shape_bounds.center))
         edges = {
             index: _line_for_bounds(_translated(part_value.bounds, placed.offset))
             for (part, index), part_value in measured.parts.items()
@@ -146,12 +153,20 @@ def _build_visual(placed, palette: str):
         # same lines, so adding `children` would ask manim to hold a submobject
         # twice -- which it ignores with a warning rather than duplicating, so
         # this is about keeping the intent (and the log) clean, not correctness.
+        dimension_labels = {
+            (part, 0): _text(
+                payload[part], "label",
+                _center(measured.parts[(part, 0)].bounds, placed.offset), placed.scale,
+            )
+            for part in ("length_label", "width_label")
+        }
         children = {
             **{("edge", index): line for index, line in edges.items()},
             ("length_edge", 0): edges[0], ("length_edge", 1): edges[2],
             ("width_edge", 0): edges[3], ("width_edge", 1): edges[1],
+            **dimension_labels,
         }
-        root.add(*edges.values())
+        root.add(*edges.values(), *dimension_labels.values())
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "markers" in payload:
@@ -222,6 +237,18 @@ def _rectangle_for_bounds(bounds: Bounds):
     rectangle = Rectangle(width=max(bounds.right - bounds.left, 0.02), height=max(bounds.top - bounds.bottom, 0.02))
     rectangle.move_to(_array(bounds.center))
     return rectangle
+
+
+def _shape_bounds(measured, offset: Point) -> Bounds:
+    """The rectangle proper, from the union of its four edges."""
+    edges = [
+        _translated(part.bounds, offset)
+        for (name, _index), part in measured.parts.items() if name == "edge"
+    ]
+    return Bounds(
+        min(edge.left for edge in edges), max(edge.right for edge in edges),
+        min(edge.bottom for edge in edges), max(edge.top for edge in edges),
+    )
 
 
 def _line_for_bounds(bounds: Bounds):

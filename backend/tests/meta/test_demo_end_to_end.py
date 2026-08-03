@@ -243,20 +243,14 @@ PERIMETER_LESSON = DemoLesson(
             {"id": "show_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
              "intent": "show the rectangle whose boundary will be measured"},
             # boundary_trace attaches the perimeter trace to the first
-            # organize/derive/focus beat, so the trace happens here. The two
-            # callouts label the measured edges through the declared
-            # length_edge/width_edge semantic parts, which is what the static
-            # and rendered dimension-anchor gates select on.
+            # organize/derive/focus beat, so the trace happens here. This beat
+            # used to also request callouts on the length_edge/width_edge parts
+            # to name the measured edges; `rectangle_measurement` now measures
+            # and draws those dimensions itself, from the length/width
+            # expressions, so such a callout is a duplicate label and
+            # `quality.check_duplicate_dimension_label` rejects it.
             {"id": "trace_boundary", "kind": "organize", "targets": [{"visual_ref": "rectangle"}],
-             "intent": "trace the whole boundary once and name the two measured edges",
-             "custom_actions": [
-                 {"kind": "callout", "text": "length", "target": {
-                     "visual_ref": "rectangle", "part": "length_edge", "index": 0, "anchor": "bottom",
-                 }},
-                 {"kind": "callout", "text": "width", "target": {
-                     "visual_ref": "rectangle", "part": "width_edge", "index": 0, "anchor": "left",
-                 }},
-             ]},
+             "intent": "trace the whole boundary once to show what perimeter measures"},
             # The mandated derive beat: emphasize the two length edges, then the
             # two width edges, so the boundary visibly maps onto
             # 2 x (length + width). rectangle_measurement emits edges in the
@@ -409,6 +403,8 @@ def build_demo_quality_report(manifest: dict) -> dict:
             ref: outcome["passed"]
             for ref, outcome in manifest["dimension_anchor_checks"].items()
         },
+        "dimension_labels": manifest["dimension_labels"],
+        "declared_dimension_labels": list(manifest["declared_dimension_labels"]),
         "derivation_visible": manifest["derivation_visible"],
     }
 

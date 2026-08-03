@@ -64,6 +64,7 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_salience(program),
         check_repeated_reveal(program),
         check_unused_visual(program),
+        check_duplicate_dimension_label(program),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
 
@@ -232,6 +233,28 @@ def check_salience(program) -> QualityCheck:
             return _failed("callout_collision", "relations", "multiple callouts share one anchor")
         anchors[key] = relation.ref
     return _passed("callout_collision", "timeline")
+
+
+def check_duplicate_dimension_label(program) -> QualityCheck:
+    # `rectangle_measurement.measure_rectangle` measures and labels its own
+    # length and width from the `length`/`width` expressions, so those values
+    # re-resolve per render and a reused template labels each problem's own
+    # numbers. A callout on the same edge writes a second label into the space
+    # the intrinsic one occupies -- and could not carry a live value anyway,
+    # since `CalloutRelation.text` is a plain string fixed at generation time.
+    # Callouts on any other anchor (a plain numbered `edge`, a `vertex`) remain
+    # available; `check_dimension_anchor_specificity` still governs those.
+    visual_kind_by_ref = {visual.ref: visual.kind for visual in program.visuals}
+    for relation_index, relation in enumerate(program.relations):
+        target = relation.target
+        if visual_kind_by_ref.get(target.visual_ref) != "rectangle_measurement":
+            continue
+        if target.part in DIMENSION_TARGET_PARTS:
+            return _failed(
+                "duplicate_dimension_label", f"relations[{relation_index}].target.part",
+                "the rectangle already labels this dimension, so the callout repeats it",
+            )
+    return _passed("duplicate_dimension_label", "relations")
 
 
 def check_repeated_reveal(program) -> QualityCheck:
