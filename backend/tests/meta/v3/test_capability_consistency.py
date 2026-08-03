@@ -17,6 +17,9 @@ from pydantic import ValidationError
 
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.v3 import beat_expander
+from app.meta.v3.compiler import (
+    _DECLARED_PATHS, _DRAWABLE_TARGETS, _MOVABLE_TARGETS, _TRANSFORM_COMPATIBILITY,
+)
 from app.meta.v3.visual_registry import _SUPPORTED_STRATEGIES
 
 
@@ -79,3 +82,25 @@ def test_every_supported_strategy_has_expander_behavior():
     unhandled = {strategy for strategy in supported if strategy not in source}
 
     assert unhandled == _STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR
+
+
+# Kinds each capability table covers today. Adding a kind to a table fails this
+# test, forcing the expected set to be updated in the same change -- capability
+# growth becomes a reviewable one-line diff. Seven of eight kinds are absent
+# from all four tables, so trace/draw/move/transform custom actions fail on
+# everything but rectangle_measurement.
+_EXPECTED_TABLE_COVERAGE = [
+    ("_DECLARED_PATHS", _DECLARED_PATHS, {"rectangle_measurement"}),
+    ("_DRAWABLE_TARGETS", _DRAWABLE_TARGETS, {"rectangle_measurement"}),
+    ("_MOVABLE_TARGETS", _MOVABLE_TARGETS, {"rectangle_measurement"}),
+    ("_TRANSFORM_COMPATIBILITY", _TRANSFORM_COMPATIBILITY, {"rectangle_measurement"}),
+]
+
+
+@pytest.mark.parametrize(
+    "table, expected_kinds",
+    [(table, expected) for _, table, expected in _EXPECTED_TABLE_COVERAGE],
+    ids=[name for name, _, _ in _EXPECTED_TABLE_COVERAGE],
+)
+def test_capability_tables_cover_declared_kinds(table, expected_kinds):
+    assert set(table) == expected_kinds
