@@ -957,3 +957,73 @@ def test_an_organize_beat_on_an_already_structural_visual_still_acts(compile_con
     )
 
     assert {entry.beat_id for entry in program.timeline} == {beat.id for beat in plan.beats}
+
+
+def _plan_with_custom_reveals(custom_actions):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{i}") for i in range(1, 8)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward",
+             "custom_actions": custom_actions},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "custom-reveal-tracking",
+    })
+
+
+@pytest.mark.parametrize("target", [
+    {"visual_ref": "values", "part": "item", "index": 3},
+    {"visual_ref": "values"},
+])
+def test_a_custom_reveal_of_something_already_on_screen_emits_nothing(
+    target, answer, compile_context,
+):
+    """Custom reveals must share the expander's revealed-set.
+
+    `_custom_actions` returned a `RevealAction` unconditionally, so an author's
+    `reveal` re-faded a mobject the first beat had already faded in. For a PART
+    that also slipped past `check_repeated_reveal`, which compared whole and part
+    keys as if they were unrelated -- yet the item is a child of the group the
+    whole reveal brought on screen, so fading it again is a visible flicker.
+    """
+    plan = _plan_with_custom_reveals([{"kind": "reveal", "targets": [target]}])
+
+    program = compile_teaching_plan(
+        plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+
+    reveals = [
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal" and entry.beat_id == "organize_pairs"
+    ]
+    assert reveals == []
+
+
+def test_a_custom_reveal_of_an_unrevealed_visual_still_reveals_it(answer, compile_context):
+    """Regression guard: tracking must not swallow a reveal that is doing work."""
+    raw = _plan_with_custom_reveals([]).model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "the middle one"}]
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "reveal", "targets": [{"visual_ref": "caption"}]},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(
+        plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+
+    assert len(_reveals_of(program, "caption")) == 1

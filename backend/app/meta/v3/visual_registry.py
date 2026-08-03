@@ -38,6 +38,9 @@ class VisualRegistry:
                     hint="select a compatible strategy",
                 )
             )
+        # Before the factory: a count-driven factory builds one part per unit, so
+        # an oversized count has to be refused while it is still a number.
+        _require_renderable_cardinality(spec, values)
         measured = factory(spec=spec, values=values, measurer=measurer)
         _require_renderable_extent(measured, values)
         return measured
@@ -58,6 +61,48 @@ _SUPPORTED_STRATEGIES = {
 #: Fields whose value sets a visual's size, so a failure can name the number to
 #: change rather than telling a reviewer to "reduce visual content".
 _SIZE_DRIVING_FIELDS = ("maximum", "columns", "rows", "count", "parts", "values")
+
+#: Per KIND, the fields that decide how many semantic parts a factory builds.
+#: Keyed by kind rather than by field name because the same name means different
+#: things: `bar.maximum` is a segment count, while `number_line.maximum` is a
+#: numeric scale whose markers land inside fixed +/-2.75 bounds -- a line from 0
+#: to a million costs nothing to draw and must not be rejected. `ordered_values`
+#: and `number_line` bound their lists in the plan schema already.
+_CARDINALITY_FIELDS = {
+    "bar": ("maximum",),
+    "grid": ("rows", "columns"),
+    "object_set": ("count",),
+    "partition": ("parts",),
+}
+
+#: The largest part count any kind could ever need. The tightest pitch is a bar
+#: segment at 0.65 units, so the 18.9-unit width limit admits ~29; `object_set`
+#: packs five per row, so the 8.6-unit height limit admits ~65. This is a
+#: deliberately loose over-approximation -- its only job is to keep a factory from
+#: looping past what fits, leaving `_require_renderable_extent` to decide
+#: precisely.
+MAX_PART_CARDINALITY = 128
+
+
+def _require_renderable_cardinality(spec, values) -> None:
+    for name in _CARDINALITY_FIELDS.get(spec.kind, ()):
+        if name not in values:
+            continue
+        count = _whole(values[name], name) if _is_whole(values[name]) else None
+        if count is not None and count <= MAX_PART_CARDINALITY:
+            continue
+        observed = _describe(values[name])
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=f"a {spec.kind} of at most {MAX_PART_CARDINALITY} parts",
+            observed=f"{spec.ref} would draw {observed} parts ({name}={observed})",
+            hint=f"reduce the value driving this visual's size ({name}={observed})",
+        ))
+
+
+def _is_whole(value) -> bool:
+    return getattr(value, "denominator", 1) == 1
 
 
 def _require_renderable_extent(measured, values) -> None:

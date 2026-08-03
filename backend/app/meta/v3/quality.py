@@ -290,17 +290,24 @@ def check_repeated_reveal(program) -> QualityCheck:
     # to emit one `reveal` per `orient`/`reveal` beat with no record of what was
     # already revealed, so two beats naming one visual produced two fade-ins.
     revealed = set()
+    revealed_wholes = set()
     for index, entry in enumerate(program.timeline):
         if entry.action.kind != "reveal":
             continue
         for target in entry.action.targets:
             key = (target.visual_ref, target.part, target.index)
-            if key in revealed:
+            # A whole-visual reveal brings its children on screen with it, so a
+            # later reveal of one of those parts is a repeat. Comparing only exact
+            # keys treated whole and part as unrelated and let that through.
+            if key in revealed or target.visual_ref in revealed_wholes:
                 return _failed(
                     "repeated_reveal", f"timeline[{index}].action.targets",
-                    "a target may only be revealed once",
+                    "a target may only be revealed once, and revealing a visual "
+                    "reveals its parts with it",
                 )
             revealed.add(key)
+            if target.part is None:
+                revealed_wholes.add(target.visual_ref)
     return _passed("repeated_reveal", "timeline")
 
 

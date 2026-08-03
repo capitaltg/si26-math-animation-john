@@ -1,6 +1,6 @@
 from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.guard import GuardDocument, compile_guard, predicate_expressions
-from app.meta.dsl.params import ParamsDocument
+from app.meta.dsl.params import ParamsDocument, field_contract_for
 from app.meta.draft_generation import ProposedFixture
 
 
@@ -59,29 +59,72 @@ def ensure_negative_fixtures(
     return [*fixtures, mutated]
 
 
-def _referenced_fields(expression, found: set) -> set:
-    """Field names an expression tree reads."""
+def _referenced_refs(expression, found: list) -> list:
+    """Every `field_ref` node an expression reads, not merely its field names.
+
+    The witness search needs the index and item field a predicate actually used:
+    mutating an array field means replacing one item's scalar, and a bare name
+    cannot say which.
+    """
     if expression.node == "field_ref":
-        found.add(expression.field)
+        found.append(expression)
     for operand in getattr(expression, "operands", ()):
-        _referenced_fields(operand, found)
+        _referenced_refs(operand, found)
     return found
 
 
-def _predicate_fields(predicate) -> set:
-    found: set = set()
+def _predicate_refs(predicate) -> list:
+    found: list = []
     for expression in predicate_expressions(predicate):
-        _referenced_fields(expression, found)
+        _referenced_refs(expression, found)
     return found
 
 
-def _candidate_values(field_spec, params: dict, siblings: set) -> list:
-    """Values worth trying for one field when hunting a rejecting witness.
+def _spec_for(ref, specs):
+    """The field spec whose bounds bracket the value this ref reads."""
+    spec = specs.get(ref.field)
+    if spec is None:
+        return None
+    if getattr(spec, "type", None) != "array":
+        return spec if ref.item_field is None else None
+    return next(
+        (item for item in spec.item_fields if item.name == ref.item_field), None
+    )
+
+
+def _current_value(ref, params: dict):
+    try:
+        raw = params[ref.field]
+        if ref.index is not None:
+            raw = raw[ref.index]
+        if ref.item_field is not None:
+            raw = raw[ref.item_field]
+    except (KeyError, IndexError, TypeError):
+        return None
+    return raw if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+
+
+def _with_value(ref, params: dict, value):
+    """`params` with the single scalar this ref reads replaced.
+
+    An array field keeps its list-of-objects shape, and every other item keeps its
+    value: replacing the whole list with a number would make the fixture invalid
+    against the params model rather than a witness for the predicate.
+    """
+    if ref.item_field is None:
+        return {**params, ref.field: value}
+    items = [dict(item) for item in params[ref.field]]
+    items[ref.index] = {**items[ref.index], ref.item_field: value}
+    return {**params, ref.field: items}
+
+
+def _candidate_values(field_spec, siblings: list) -> list:
+    """Values worth trying for one reference when hunting a rejecting witness.
 
     Bound-adjacent values break `range` and `positive` predicates; the odd value
-    just inside the minimum breaks `divisible_by`; and a sibling field's current
-    value breaks `equals`/`not_equals`/`ordered`, which no single field's own
-    bounds ever suggest.
+    just inside the minimum breaks `divisible_by`; and a sibling reference's
+    current value breaks `equals`/`not_equals`/`ordered`, which no single field's
+    own bounds ever suggest.
     """
     candidates = []
     minimum = getattr(field_spec, "minimum", None)
@@ -90,8 +133,7 @@ def _candidate_values(field_spec, params: dict, siblings: set) -> list:
         candidates += [minimum - 1, minimum, minimum + 1]
     if maximum is not None:
         candidates += [maximum + 1, maximum]
-    candidates += [0, 1, -1]
-    candidates += [params[name] for name in siblings if name in params]
+    candidates += [0, 1, -1, *siblings]
     seen, ordered = set(), []
     for candidate in candidates:
         if isinstance(candidate, bool) or not isinstance(candidate, (int, float)):
@@ -131,9 +173,12 @@ def ensure_guard_predicate_witnesses(
     the first perturbation that makes that predicate fail. Anything not solved
     this way is left uncovered for validation to report exactly as before.
     """
-    known_fields = frozenset(field.name for field in params_document.fields)
+    # Shapes, not names: a guard reading `scores[0].value` compiles only against a
+    # contract that knows `scores` is an array. Built from names, `compile_guard`
+    # raised `unexpected_item_field`, the except below swallowed it, and every
+    # array-item draft silently got no witnesses.
     try:
-        compiled = compile_guard(guard_document, known_fields)
+        compiled = compile_guard(guard_document, field_contract_for(params_document))
     except DslValidationError:
         return fixtures  # `validate_candidate` reports the real compilation failure.
 
@@ -166,13 +211,20 @@ def ensure_guard_predicate_witnesses(
 
 
 def _find_witness(compiled, predicate, index: int, base_params: dict, specs: dict):
-    fields = _predicate_fields(predicate)
-    for name in sorted(fields):
-        spec = specs.get(name)
-        if spec is None or name not in base_params:
+    refs = _predicate_refs(predicate)
+    for ref in refs:
+        spec = _spec_for(ref, specs)
+        if spec is None:
             continue
-        for candidate in _candidate_values(spec, base_params, fields - {name}):
-            mutated = {**base_params, name: candidate}
+        siblings = [
+            value for other in refs if other is not ref
+            for value in [_current_value(other, base_params)] if value is not None
+        ]
+        for candidate in _candidate_values(spec, siblings):
+            try:
+                mutated = _with_value(ref, base_params, candidate)
+            except (KeyError, IndexError, TypeError):
+                continue
             if index in _failing_indexes(compiled, mutated):
                 return mutated
     return None

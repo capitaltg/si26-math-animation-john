@@ -1,7 +1,9 @@
 import pytest
 
 from app.meta.dsl.guard import GuardDocument, compile_guard
-from app.meta.dsl.params import IntegerFieldSpec, ParamsDocument, StringFieldSpec
+from app.meta.dsl.params import (
+    ArrayFieldSpec, IntegerFieldSpec, ParamsDocument, StringFieldSpec, field_contract_for,
+)
 from app.meta.draft_generation import ProposedFixture
 from app.meta.fixture_mutation import (
     drop_ungrounded_positive_fixtures,
@@ -129,7 +131,8 @@ def _coverage_documents():
 
 
 def _witnessed_indexes(guard, params_document, fixtures):
-    compiled = compile_guard(guard, frozenset(field.name for field in params_document.fields))
+    # Shapes, not names -- the same distinction the code under test needs.
+    compiled = compile_guard(guard, field_contract_for(params_document))
     covered = set()
     for fixture in fixtures:
         if fixture.expected_outcome != "reject":
@@ -192,3 +195,63 @@ def test_guard_witness_repair_is_a_no_op_when_coverage_is_already_complete():
     ]
 
     assert ensure_guard_predicate_witnesses(params_document, guard, fixtures) == fixtures
+
+
+def _array_coverage_documents():
+    """A guard whose predicates read scalars inside array items."""
+    params = ParamsDocument(
+        params_version=1,
+        fields=[ArrayFieldSpec(
+            name="scores", label="Scores", description="", min_items=2, max_items=7,
+            item_fields=[IntegerFieldSpec(
+                name="value", label="V", description="", minimum=1, maximum=99,
+            )],
+        )],
+    )
+    def ref(index):
+        return {"node": "field_ref", "field": "scores", "index": index, "item_field": "value"}
+    guard = GuardDocument(predicates=[
+        {"predicate": "positive", "value": ref(0)},
+        {"predicate": "ordered", "direction": "non_decreasing", "terms": [ref(0), ref(1)]},
+    ])
+    return params, guard
+
+
+def test_array_item_guards_still_get_synthesized_witnesses():
+    """The repair must compile against field SHAPES, not bare names.
+
+    It built its contract as `frozenset(field.name ...)`, so an `item_field`
+    reference looked like an item field on a scalar -- `compile_guard` raised
+    `unexpected_item_field`, the bare `except DslValidationError` swallowed it,
+    and the function returned the fixtures untouched. Every draft whose guard
+    reads an array item therefore got no witnesses at all, silently, and failed
+    the publish gate on coverage it could have satisfied.
+    """
+    params_document, guard = _array_coverage_documents()
+    fixtures = [ProposedFixture(
+        kind="positive", expected_outcome="accept", observation_id="obs-1",
+        params={"scores": [{"value": 3}, {"value": 8}]},
+    )]
+
+    repaired = ensure_guard_predicate_witnesses(params_document, guard, fixtures)
+
+    assert _witnessed_indexes(guard, params_document, repaired) == {0, 1}
+    for fixture in repaired[len(fixtures):]:
+        # A witness must keep the array shape the params document declares.
+        assert isinstance(fixture.params["scores"], list)
+        assert all(isinstance(item, dict) for item in fixture.params["scores"])
+
+
+def test_a_synthesized_array_witness_leaves_the_other_items_alone():
+    params_document, guard = _array_coverage_documents()
+    fixtures = [ProposedFixture(
+        kind="positive", expected_outcome="accept", observation_id="obs-1",
+        params={"scores": [{"value": 3}, {"value": 8}]},
+    )]
+
+    repaired = ensure_guard_predicate_witnesses(params_document, guard, fixtures)
+
+    added = repaired[len(fixtures):]
+    assert added, "the uncovered predicates must produce witnesses"
+    for fixture in added:
+        assert len(fixture.params["scores"]) == 2

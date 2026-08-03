@@ -64,6 +64,7 @@ class BeatExpander:
             )
             for action_index, request in enumerate(beat.custom_actions):
                 actions.extend(self._custom_actions(
+                    plan=plan,
                     request=request,
                     beat_index=beat_index,
                     action_index=action_index,
@@ -71,6 +72,7 @@ class BeatExpander:
                     initial_roles=initial_roles,
                     current_roles=current_roles,
                     previous_roles=previous_roles,
+                    revealed=revealed,
                 ))
             minimum_seconds, weight = _BEAT_TIMING[beat.kind]
             expanded.append(ExpandedBeat(
@@ -133,18 +135,21 @@ class BeatExpander:
             actions.extend(self._role_change(target, "focus", current_roles))
         return actions
 
-    def _reveal_unrevealed(self, plan, targets, revealed):
+    def _reveal_unrevealed(self, plan, targets, revealed, mode=None):
         """Reveal only targets not already on screen.
 
         Nothing else adds a mobject to the manim scene, so an unrevealed target
         is invisible; revealing one twice fades the same mobject in twice, which
-        reads as the visual being drawn two times over.
+        reads as the visual being drawn two times over. Custom reveals share this
+        path, so an author's `reveal` cannot re-fade something a beat already
+        brought on screen.
         """
         pending = [target for target in targets if not self._is_revealed(target, revealed)]
         if not pending:
             return []
         revealed.update(self._target_key(target) for target in pending)
-        mode = "stagger" if plan.strategy == "short_stagger" else "together"
+        if mode is None:
+            mode = "stagger" if plan.strategy == "short_stagger" else "together"
         return [RevealAction(targets=pending, mode=mode)]
 
     @staticmethod
@@ -299,12 +304,12 @@ class BeatExpander:
         return current_roles.get((visual_ref, None, None))
 
     def _custom_actions(
-        self, *, request, beat_index, action_index, relations,
-        initial_roles, current_roles, previous_roles,
+        self, *, plan, request, beat_index, action_index, relations,
+        initial_roles, current_roles, previous_roles, revealed,
     ):
         kind = request.kind
         if kind == "reveal":
-            return [RevealAction(targets=request.targets, mode=request.mode)]
+            return self._reveal_unrevealed(plan, request.targets, revealed, request.mode)
         if kind == "emphasize":
             return [self._set_role(request.target, request.role, current_roles)]
         if kind == "dim":

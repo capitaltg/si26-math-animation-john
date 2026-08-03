@@ -7,7 +7,7 @@ import pytest
 from app.meta.v3.errors import V3ValidationError
 from app.meta.v3.geometry import Point
 from app.meta.v3.layout import SAFE_FRAME
-from app.meta.v3.visual_registry import default_visual_registry
+from app.meta.v3.visual_registry import VisualRegistry, default_visual_registry
 
 
 class LiteralTextMeasurer:
@@ -125,3 +125,49 @@ def test_a_visual_that_fits_the_frame_still_measures():
     )
 
     assert visual.bounds.right - visual.bounds.left < 19
+
+
+def test_an_oversized_count_is_rejected_before_the_factory_materializes_parts():
+    """The extent check must not run after the parts already exist.
+
+    `_measure_bar` builds one `SemanticPart` per segment, so validating extent
+    only after the factory returned meant a `maximum` of 10**12 -- which
+    `MAX_NUMERIC_MAGNITUDE` permits -- looped 10**12 times before anything
+    rejected it. Measured: 2,000,000 took 1.66s, so 10**12 is days of wall time
+    or an OOM inside the probe subprocess.
+    """
+    registry = VisualRegistry()
+
+    def must_not_run(*, spec, values, measurer):
+        raise AssertionError("the factory ran before the count was checked")
+
+    registry.register("bar", must_not_run)
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        registry.measure(
+            SimpleNamespace(kind="bar", ref="huge"),
+            {"value": Fraction(1), "maximum": Fraction(10**12)},
+            LiteralTextMeasurer(),
+        )
+
+    assert exc_info.value.failure.code == "visual_extent_unrenderable"
+    assert "maximum" in exc_info.value.failure.observed
+
+
+def test_a_number_line_keeps_a_large_numeric_range():
+    """`number_line.maximum` is a scale, not a count.
+
+    Markers are placed inside fixed +/-2.75 bounds, so a line from 0 to a million
+    costs nothing to draw. A preflight keyed on field NAME rather than visual kind
+    would reject it, since `bar.maximum` and `number_line.maximum` share a name
+    and mean entirely different things.
+    """
+    visual = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(1_000_000),
+         "markers": [Fraction(250_000), Fraction(750_000)]},
+        LiteralTextMeasurer(),
+    )
+
+    assert visual.bounds.right - visual.bounds.left < 19
+    assert len(visual.parts) == 2
