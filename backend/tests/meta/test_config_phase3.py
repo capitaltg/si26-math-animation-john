@@ -27,11 +27,16 @@ def test_meta_draft_max_refinements_default():
     assert Settings().meta_draft_max_refinements == 5
 
 
-def test_version_constants_identify_the_v3_teaching_plan_cutover_wave():
+def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # Both constants are part of every draft's artifact hash and of approval's
-    # stale-runtime precondition, so the v3 cutover (teaching-plan compiler +
-    # scene-program renderer) had to bump them: a draft validated by the v2
-    # compiler must not stay approvable under the v3 one. This is the tripwire
-    # that keeps the next compiler/renderer change from forgetting the bump.
-    assert DSL_COMPILER_VERSION == 3
-    assert DYNAMIC_RENDERER_VERSION == 3
+    # stale-runtime precondition, so a compiler or renderer change has to bump
+    # them: a draft validated by an older compiler must not stay approvable under
+    # a newer one. This is the tripwire that keeps the next compiler/renderer
+    # change from forgetting the bump.
+    #
+    # 4 covers the array-item addressing wave: the compiler now takes field
+    # shapes rather than bare names, and the renderer draws rectangle dimensions,
+    # vertex anchors, object_set items, scale-aware label text, and stacked
+    # supporting rows.
+    assert DSL_COMPILER_VERSION == 4
+    assert DYNAMIC_RENDERER_VERSION == 4

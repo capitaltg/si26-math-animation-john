@@ -84,11 +84,12 @@ def test_validate_fixture_tracks_the_failed_guard_predicate_for_a_negative_fixtu
     assert result.failed_predicate_indexes == frozenset({0})
 
 
-def test_v3_runtime_versions_make_v2_validation_reports_stale():
-    stale_report = {"compiler_version": 2, "renderer_version": 2}
+def test_older_runtime_versions_make_their_validation_reports_stale():
+    stale_report = {"compiler_version": 3, "renderer_version": 3}
 
     assert (stale_report["compiler_version"], stale_report["renderer_version"]) != (
         DSL_COMPILER_VERSION,
         DYNAMIC_RENDERER_VERSION,
     )
-    assert (DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION) == (3, 3)
+    # Pinned so a compiler/renderer change cannot land without a deliberate bump.
+    assert (DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION) == (4, 4)
