@@ -39,6 +39,7 @@ def validate_rendered_quality(manifest: dict) -> QualityReport:
         check_manifest_contract(manifest),
         check_non_blank_frames(manifest),
         check_frame_bounds(manifest),
+        check_visual_overlap(manifest),
         check_relation_alignment(manifest),
         check_callout_collisions(manifest),
         check_state_order(manifest),
@@ -56,6 +57,7 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "conclusion_hold_seconds": (int, float),
         "simple_reveal_mode": (str, type(None)),
         "frames": list,
+        "safe_frame": (list, tuple),
         "visual_bounds": dict,
         "anchors": dict,
         "relations": dict,
@@ -76,6 +78,11 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         return _failed("render_probe_contract_invalid", "frames", "probe needs a frame size and at least one sampled frame")
     if not _numbers(manifest["frame_size"], 2):
         return _failed("render_probe_contract_invalid", "frame_size", "frame dimensions must be numeric")
+    # Required, not defaulted: without it `check_frame_bounds` has no box to
+    # compare against, and silently falling back to the physical frame would
+    # reinstate the unguarded margin this evidence exists to close.
+    if not _numbers(manifest["safe_frame"], 4):
+        return _failed("render_probe_contract_invalid", "safe_frame", "the safe frame must be four numeric coordinates")
     if not all(_frame_contract(frame) for frame in manifest["frames"]):
         return _failed("render_probe_contract_invalid", "frames", "sampled frames need beat, time, and path evidence")
     if not all(_numbers(bounds, 4) for bounds in manifest["visual_bounds"].values()):
@@ -158,14 +165,41 @@ def check_non_blank_frames(manifest: dict) -> QualityCheck:
 
 
 def check_frame_bounds(manifest: dict) -> QualityCheck:
-    width, height = _frame_size(manifest)
+    """Every visible bound must stay inside the safe frame layout targets.
+
+    Comparing against the *physical* frame instead left the margin between the
+    two unguarded -- 16px horizontally at a 900px-wide render. A visual resting
+    in that band reads as touching the frame edge while the gate reports it
+    comfortably inside, which is how the published perimeter lesson shipped with
+    its formula label against the left edge.
+    """
+    safe_frame = manifest.get("safe_frame", [])
     for ref, bounds in manifest.get("visual_bounds", {}).items():
-        if not _inside(bounds, width, height):
-            return _failed("frame_out_of_bounds", f"visual_bounds.{ref}", "a visible bound extends outside the rendered frame")
+        if not _inside(bounds, safe_frame):
+            return _failed("frame_out_of_bounds", f"visual_bounds.{ref}", "a visible bound extends outside the safe frame")
     for ref, relation in manifest.get("relations", {}).items():
-        if not _inside(relation.get("bounds", []), width, height):
-            return _failed("frame_out_of_bounds", f"relations.{ref}.bounds", "a callout bound extends outside the rendered frame")
+        if not _inside(relation.get("bounds", []), safe_frame):
+            return _failed("frame_out_of_bounds", f"relations.{ref}.bounds", "a callout bound extends outside the safe frame")
     return _passed("frame_out_of_bounds", "visual_bounds")
+
+
+def check_visual_overlap(manifest: dict) -> QualityCheck:
+    """No two visuals may occupy the same pixels.
+
+    `check_callout_collisions` only compares callouts against visuals, so two
+    overlapping visuals were unchecked in either gate layer -- and text
+    overrunning its reserved box collides with a neighbouring visual long before
+    it reaches any frame edge.
+    """
+    bounds_by_ref = sorted(manifest.get("visual_bounds", {}).items())
+    for index, (ref, bounds) in enumerate(bounds_by_ref):
+        for other_ref, other_bounds in bounds_by_ref[index + 1:]:
+            if _overlap(bounds, other_bounds):
+                return _failed(
+                    "visual_overlap", f"visual_bounds.{ref}",
+                    f"visual bounds overlap those of {other_ref}",
+                )
+    return _passed("visual_overlap", "visual_bounds")
 
 
 def check_relation_alignment(manifest: dict) -> QualityCheck:
@@ -334,11 +368,13 @@ def _numbers(value, count: int) -> bool:
     )
 
 
-def _inside(bounds, width, height) -> bool:
+def _inside(bounds, frame) -> bool:
+    if not (isinstance(frame, (list, tuple)) and len(frame) == 4):
+        return False
     return (
         isinstance(bounds, (list, tuple)) and len(bounds) == 4
-        and 0 <= bounds[0] <= bounds[2] <= width
-        and 0 <= bounds[1] <= bounds[3] <= height
+        and frame[0] <= bounds[0] <= bounds[2] <= frame[2]
+        and frame[1] <= bounds[1] <= bounds[3] <= frame[3]
     )
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
+from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.manim_measurer import ManimTextMeasurer
 from app.meta.v3.quality import DIMENSION_TARGET_PARTS
 from app.meta.v3.renderer import render_resolved_scene
@@ -209,6 +210,11 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     conclusion_starts = [action.at_seconds for action in resolved.timeline if action.beat_id == _last_beat_id(resolved)]
     return {
         "frame_size": [width, height],
+        # The box `place_vertical_lesson` lays out into, in the same pixel
+        # coordinates as `visual_bounds`, so `render_probe.check_frame_bounds`
+        # can hold the render to the frame layout actually targeted rather than
+        # to the wider physical frame.
+        "safe_frame": _pixel_bounds(SAFE_FRAME, width, height),
         "total_duration_seconds": resolved.total_duration_seconds,
         "conclusion_hold_seconds": resolved.total_duration_seconds - min(conclusion_starts),
         "simple_reveal_mode": _simple_reveal_mode(resolved),
@@ -326,6 +332,13 @@ def _mobject_anchor(mobject, anchor):
         "left": mobject.get_left(),
         "right": mobject.get_right(),
     }[anchor]
+
+
+def _pixel_bounds(bounds, width, height) -> list[float]:
+    return [
+        _pixel_x(bounds.left, width), _pixel_y(bounds.top, height),
+        _pixel_x(bounds.right, width), _pixel_y(bounds.bottom, height),
+    ]
 
 
 def _pixel_mobject_bounds(mobject, width, height) -> list[float]:

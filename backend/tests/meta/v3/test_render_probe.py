@@ -22,8 +22,12 @@ def valid_manifest():
             {"beat_id": "focus_middle", "seconds": 4.5, "path": "probe-1.png", "non_background_pixels": 150},
             {"beat_id": "show_answer", "seconds": 7.5, "path": "probe-2.png", "non_background_pixels": 200},
         ],
+        # `SAFE_FRAME` at this frame size: manim's default frame is 14.222 x 8
+        # units, so the +/-6.6 x +/-3.6 safe box insets by 16 px horizontally
+        # and 25 px vertically.
+        "safe_frame": [16, 25, 884, 475],
         "visual_bounds": {
-            "values": [0, 0, 900, 120],
+            "values": [20, 30, 880, 150],
             "evaluated_answer": [200, 360, 700, 430],
         },
         "anchors": {"values.item[3].bottom": [451, 220]},
@@ -63,6 +67,8 @@ def valid_manifest():
     ("path", "undeclared_path_event"),
     ("dimension", "dimension_anchor_mismatch"),
     ("answer", "final_answer_not_persistent"),
+    ("outside_safe_frame", "frame_out_of_bounds"),
+    ("overlapping_visuals", "visual_overlap"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -70,6 +76,18 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["frames"] = [{**valid_manifest["frames"][0], "non_background_pixels": 0}]
     elif mutation == "off_frame":
         manifest["visual_bounds"] = {"values": [-1, 0, 900, 120]}
+    elif mutation == "outside_safe_frame":
+        # Inside the physical frame, outside the safe box layout targets. This
+        # is the 16-px band the gate used to ignore -- exactly where the
+        # published perimeter lesson's formula label came to rest, which is why
+        # a label visibly touching the frame edge passed the rendered gate.
+        manifest["visual_bounds"] = {
+            **valid_manifest["visual_bounds"], "values": [4, 30, 880, 150],
+        }
+    elif mutation == "overlapping_visuals":
+        manifest["visual_bounds"] = {
+            **valid_manifest["visual_bounds"], "evaluated_answer": [800, 100, 880, 145],
+        }
     elif mutation == "misaligned":
         manifest["relations"] = {"median_callout": {**valid_manifest["relations"]["median_callout"], "tip": [600, 400]}}
     elif mutation == "collision":
