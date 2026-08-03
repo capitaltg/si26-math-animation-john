@@ -270,10 +270,17 @@ def _state_events(render_events, resolved) -> list[dict]:
                     continue
                 visual = resolved.visual(visual_ref)
                 if part is None:
+                    # Mirror `_declared_state_events`: the role the renderer
+                    # actually draws at build time (`_build_visual` ->
+                    # `_initial_role`, renderer.py:90-92), not a literal
+                    # `neutral`, or `check_state_order`'s declared/observed
+                    # comparison drifts out of agreement for any visual whose
+                    # declared role isn't `neutral`.
+                    role = _initial_role(visual_ref, visual.measured.payload)
                     events.extend({
                         "seconds": event["seconds"],
                         "target": f"{visual_ref}.{part_name}[{part_index}]",
-                        "role": "neutral",
+                        "role": role,
                     } for part_name, part_index in visual.measured.parts if part_name == "item")
         elif event["kind"] == "set_role" and event["state_applied"]:
             for target in event["targets"]:
