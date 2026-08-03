@@ -3,6 +3,7 @@ from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.geometry import Bounds, SemanticPart
+from app.meta.v3.layout import INSTRUCTIONAL_FRAME, MIN_TEXT_SCALE, SAFE_FRAME
 from app.meta.v3.geometry import MeasuredVisual, TextMeasurer
 from app.meta.v3.ordered_values import measure_ordered_values
 from app.meta.v3.rectangle_measurement import measure_rectangle
@@ -37,7 +38,9 @@ class VisualRegistry:
                     hint="select a compatible strategy",
                 )
             )
-        return factory(spec=spec, values=values, measurer=measurer)
+        measured = factory(spec=spec, values=values, measurer=measurer)
+        _require_renderable_extent(measured, values)
+        return measured
 
 
 _SUPPORTED_STRATEGIES = {
@@ -50,6 +53,51 @@ _SUPPORTED_STRATEGIES = {
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
 }
+
+
+#: Fields whose value sets a visual's size, so a failure can name the number to
+#: change rather than telling a reviewer to "reduce visual content".
+_SIZE_DRIVING_FIELDS = ("maximum", "columns", "rows", "count", "parts", "values")
+
+
+def _require_renderable_extent(measured, values) -> None:
+    """Reject a visual too large to fit the frame at any permitted scale.
+
+    `_measure_bar`, `_measure_grid` and `_measure_object_set` derive their extent
+    linearly from a numeric parameter, and nothing bounded it -- the expression
+    DSL allows magnitudes to 10**12 and no limit caps how many semantic parts a
+    visual may measure. A bar with `maximum` 10000 measured 6500 units wide and
+    built 10000 parts; the only complaint reached the operator as
+    `below_minimum_text_scale` at 0.002, a code about text carrying the hint
+    "reduce visual content" for a scene holding a single bar.
+
+    A visual wider or taller than the frame divided by MIN_TEXT_SCALE cannot fit
+    however little else the lesson holds, so it is rejected here -- where the
+    driving field is still in hand and can be named.
+    """
+    width_limit = (SAFE_FRAME.right - SAFE_FRAME.left) / MIN_TEXT_SCALE
+    height_limit = (INSTRUCTIONAL_FRAME.top - INSTRUCTIONAL_FRAME.bottom) / MIN_TEXT_SCALE
+    width = measured.bounds.right - measured.bounds.left
+    height = measured.bounds.top - measured.bounds.bottom
+    if width <= width_limit and height <= height_limit:
+        return
+    drivers = ", ".join(
+        f"{name}={_describe(values[name])}"
+        for name in _SIZE_DRIVING_FIELDS if name in values
+    )
+    raise V3ValidationError(V3Failure(
+        code="visual_extent_unrenderable",
+        path=f"visuals.{measured.ref}",
+        expected=f"a visual within {width_limit:.1f} x {height_limit:.1f} units",
+        observed=f"{measured.ref} spans {width:.1f} x {height:.1f} units ({drivers})",
+        hint=f"reduce the value driving this visual's size ({drivers or 'its size field'})",
+    ))
+
+
+def _describe(value):
+    if isinstance(value, (list, tuple)):
+        return str(len(value))
+    return str(_whole(value, "size") if getattr(value, "denominator", 1) == 1 else value)
 
 
 def _whole(value, name):

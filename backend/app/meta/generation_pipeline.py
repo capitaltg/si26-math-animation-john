@@ -11,7 +11,11 @@ from app.meta.draft_generation import DraftProposal, propose_template_draft
 from app.meta.drafts import persist_reviewable_draft
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
-from app.meta.fixture_mutation import drop_ungrounded_positive_fixtures, ensure_negative_fixtures
+from app.meta.fixture_mutation import (
+    drop_ungrounded_positive_fixtures,
+    ensure_guard_predicate_witnesses,
+    ensure_negative_fixtures,
+)
 from app.meta.jobs import claim_next_job, complete_job, fail_job, mark_needs_manual
 from app.meta.models import FallbackObservation, TemplateDraft
 from app.meta.validation_pipeline import validate_candidate
@@ -107,6 +111,12 @@ def generate_and_validate_revision(
             continue
         proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
         proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
+        # A negative fixture per guard predicate still lacking one. Without this
+        # the publish gate's coverage requirement can only be met by the model,
+        # and a model that misses a predicate misses it on every retry.
+        proposal.fixtures = ensure_guard_predicate_witnesses(
+            proposal.params_document, proposal.guard_document, proposal.fixtures,
+        )
         compile_context = CompileContext(
             concept_family=f"{fingerprint.operation_family}_{fingerprint.representation_family}",
             grade_band=fingerprint.grade_band,

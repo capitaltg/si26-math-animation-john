@@ -11,8 +11,13 @@ from app.meta.v3.visual_registry import default_visual_registry
 
 
 class LiteralTextMeasurer:
+    # Scaled like real text: `ManimTextMeasurer` reports roughly 0.3 x 0.45 units
+    # per character at the label font size. This returned 10 x 20 units per
+    # character, which made a six-character label 60 units wide -- harmless while
+    # nothing checked extent, but larger than the frame can hold at any scale, so
+    # `_require_renderable_extent` now rejects it.
     def measure(self, text: str, font_role: str):
-        return len(text) * 10, 20
+        return len(text) * 0.3, 0.6
 
 
 class SceneTextMeasurer:
@@ -79,3 +84,44 @@ def test_registry_rejects_unsupported_strategy_kind_pair_with_structured_failure
     assert exc_info.value.failure.expected == "a strategy supported by the visual kind"
     assert exc_info.value.failure.observed == "pair_elimination:rectangle_measurement"
     assert exc_info.value.failure.hint == "select a compatible strategy"
+
+
+@pytest.mark.parametrize(
+    ("kind", "values", "driver"),
+    [
+        ("bar", {"value": Fraction(1), "maximum": Fraction(10000)}, "maximum"),
+        ("grid", {"rows": Fraction(2), "columns": Fraction(4000)}, "columns"),
+        ("object_set", {"count": Fraction(20000)}, "count"),
+    ],
+)
+def test_a_count_driven_visual_too_large_to_render_is_rejected_by_name(kind, values, driver):
+    """A visual whose size comes from a number needs a ceiling.
+
+    `_measure_bar`, `_measure_grid` and `_measure_object_set` derive their extent
+    linearly from a parameter, and nothing bounded it: `MAX_NUMERIC_MAGNITUDE` is
+    10**12 and no limit caps how many semantic parts a visual may measure. A bar
+    with `maximum` 10000 measured 6500 units wide -- 10000 segments the renderer
+    would have built as 10000 mobjects -- and surfaced only as
+    `below_minimum_text_scale` at 0.002, a code about text with the hint "reduce
+    visual content" for a scene holding one bar. Two generation attempts burned
+    on a failure that named neither the visual nor the number driving it.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind=kind, ref="oversized"), values, LiteralTextMeasurer(),
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "visual_extent_unrenderable"
+    assert "oversized" in failure.observed
+    assert driver in failure.hint or driver in failure.observed
+
+
+def test_a_visual_that_fits_the_frame_still_measures():
+    visual = default_visual_registry().measure(
+        SimpleNamespace(kind="bar", ref="bar"),
+        {"value": Fraction(3), "maximum": Fraction(5)},
+        LiteralTextMeasurer(),
+    )
+
+    assert visual.bounds.right - visual.bounds.left < 19
