@@ -3,6 +3,8 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from app.config import get_settings
 from app.meta.db import meta_session
 from app.meta.draft_generation import DraftProposal, propose_template_draft
@@ -39,6 +41,28 @@ class CandidateGenerationExhausted(RuntimeError):
         }
 
 
+_MAX_REPORTED_SCHEMA_ERRORS = 3
+
+
+def _error_path(location) -> str:
+    return ".".join(str(part) for part in location)
+
+
+def _schema_failure(exc: ValidationError) -> V3Failure:
+    """Turn an off-schema tool response into repair feedback the model can act on."""
+    errors = exc.errors()
+    reported = "; ".join(
+        f"{_error_path(error['loc'])}: {error['msg']}" for error in errors[:_MAX_REPORTED_SCHEMA_ERRORS]
+    )
+    return V3Failure(
+        code="draft_schema_invalid",
+        path=_error_path(errors[0]["loc"]) or "draft_proposal",
+        expected="a proposal that satisfies the propose_template_draft tool schema",
+        observed=f"{len(errors)} schema violation(s)",
+        hint=f"re-emit the draft with these fields corrected -- {reported}",
+    )
+
+
 def _load_observations(session, observation_ids: list[str]) -> list[FallbackObservation]:
     if not observation_ids:
         return []
@@ -66,12 +90,21 @@ def generate_and_validate_revision(
     last_failure: V3Failure | None = None
 
     for _ in range(get_settings().meta_draft_generation_max_attempts):
-        proposal = propose_template_draft(
-            fingerprint,
-            observations,
-            prior_proposal=prior,
-            reviewer_feedback=feedback,
-        )
+        try:
+            proposal = propose_template_draft(
+                fingerprint,
+                observations,
+                prior_proposal=prior,
+                reviewer_feedback=feedback,
+            )
+        except ValidationError as exc:
+            last_failure = _schema_failure(exc)
+            feedback = {
+                "code": last_failure.code,
+                "path": last_failure.path,
+                "hint": last_failure.hint,
+            }
+            continue
         proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
         proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
         compile_context = CompileContext(

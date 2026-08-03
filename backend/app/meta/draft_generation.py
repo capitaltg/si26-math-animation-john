@@ -129,9 +129,12 @@ def propose_template_draft(
         f"fingerprint={fingerprint.model_dump_json()}\n\n"
         f"observations:\n{_observation_context(observations)}"
     )
-    if prior_proposal is not None and reviewer_feedback is not None:
+    if reviewer_feedback is not None:
+        # A draft that never parsed leaves no prior proposal to echo back, but the
+        # feedback still has to reach the model or the retry repeats the same mistake.
+        if prior_proposal is not None:
+            user_message += f"\n\nprior proposal:\n{prior_proposal.model_dump_json()}"
         user_message += (
-            f"\n\nprior proposal:\n{prior_proposal.model_dump_json()}"
             f"\n\nreviewer feedback to address:\n{_reviewer_feedback_context(reviewer_feedback)}"
         )
     _, raw = call_with_tool(

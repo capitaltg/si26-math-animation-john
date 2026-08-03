@@ -234,6 +234,65 @@ def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monke
         assert "traceback" not in reviewer_visible.lower()
 
 
+def _running_job_and_observations():
+    _seed_job_and_observation()
+    with db.meta_session() as session:
+        job = session.get(models.GenerationJob, "job-1")
+        job.status = models.JOB_RUNNING
+        return job, [session.get(models.FallbackObservation, "obs-1")]
+
+
+def _schema_violation():
+    """Raise the same pydantic error the tool call raises on an off-schema draft."""
+    raw = _proposal().model_dump()
+    raw["teaching_plan_document"]["beats"][0]["intent"] = ""
+    DraftProposal.model_validate(raw)
+
+
+def test_generate_and_validate_revision_retries_off_schema_proposal_with_feedback(monkeypatch, engine):
+    from app.meta.generation_pipeline import generate_and_validate_revision
+
+    proposal = _proposal()
+    calls = []
+
+    def propose(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            _schema_violation()
+        return proposal
+
+    monkeypatch.setattr("app.meta.generation_pipeline.propose_template_draft", propose)
+    monkeypatch.setattr("app.meta.generation_pipeline.validate_candidate", lambda *a, **k: _candidate(proposal))
+    job, observations = _running_job_and_observations()
+
+    draft = generate_and_validate_revision(job=job, fingerprint=_fingerprint(), observations=observations)
+
+    assert draft.status == models.DRAFT_PENDING_REVIEW
+    assert len(calls) == 2
+    feedback = calls[-1]["reviewer_feedback"]
+    assert feedback["code"] == "draft_schema_invalid"
+    assert feedback["path"].startswith("teaching_plan_document")
+    assert feedback["hint"]
+    assert calls[-1]["prior_proposal"] is None
+
+
+def test_run_generation_job_marks_persistent_schema_failure_manual_not_generic_error(monkeypatch, engine):
+    from app.meta.generation_pipeline import run_generation_job
+
+    monkeypatch.setattr(
+        "app.meta.generation_pipeline.propose_template_draft",
+        lambda *a, **k: _schema_violation(),
+    )
+    _seed_job_and_observation()
+
+    assert run_generation_job(owner="worker-1") is None
+
+    with db.meta_session() as session:
+        job = session.get(models.GenerationJob, "job-1")
+        assert job.status == models.JOB_NEEDS_MANUAL
+        assert job.error_summary == "automatic_generation_needs_manual_authoring"
+
+
 def test_run_generation_job_returns_none_when_nothing_queued(engine):
     from app.meta.generation_pipeline import run_generation_job
 

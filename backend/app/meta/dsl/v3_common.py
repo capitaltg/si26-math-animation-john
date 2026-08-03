@@ -15,13 +15,14 @@ MAX_ACTION_SECONDS = 2.0
 MAX_SIMPLE_STAGGER_SECONDS = 0.15
 MIN_CONCLUSION_HOLD_SECONDS = 1.5
 
-_GENERATED_TEXT_RULES = (
+# Rules that hold for every generated string, whether it names a reference or is
+# shown to a learner. Nothing here can appear in legitimate K-8 math wording.
+_SHARED_TEXT_RULES = (
     (re.compile(r"(?:https?|ftp)://|\bwww\.", re.IGNORECASE), "URLs"),
     (re.compile(r"\b(?:from\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s+import|import\s+[A-Za-z_])"), "imports"),
     (re.compile(
         r"\b(?:scene|self)\s*\.\s*(?:play|add|remove|wait|construct)\s*\(|"
-        r"\b(?:FadeIn|FadeOut|Create|Transform|MoveToTarget|Write|GrowFromCenter)\s*\(|"
-        r"\b[A-Z][A-Za-z0-9_]*\s*\("
+        r"\b(?:FadeIn|FadeOut|Create|Transform|MoveToTarget|Write|GrowFromCenter)\s*\("
     ), "Python or Manim calls"),
     (re.compile(r"(?<!\w)(?:\.\.?[\\/]|[\\/])[^\s]+"), "paths"),
     (re.compile(
@@ -36,19 +37,37 @@ _GENERATED_TEXT_RULES = (
         r"\b(?:easing|ease|rate_func|interpolation|interpolate)\s*[:=]"
         r"|\b(?:easeIn|easeOut|easeInOut|linear|smooth)\s*\("
     ), "easing directives"),
-    (re.compile(r"(?<!\w)[A-Za-z_]\w*\s*=(?!=)"), "Python assignments"),
     (re.compile(r"\b(?:eval|exec|compile|__import__)\s*\("), "executable Python"),
 )
 
+# Extra rules for identifier-shaped strings (refs, ids, seeds). These reject any
+# `name = ...` or `Name(...)` shape outright. They are deliberately NOT applied to
+# learner-facing prose, where "P = 2 x (length + width)" and "Area (square units)"
+# are the content, not code. Prose is passed to Manim as a runtime string value
+# (see app/meta/v3/renderer.py) and is never compiled or evaluated.
+_IDENTIFIER_TEXT_RULES = _SHARED_TEXT_RULES + (
+    (re.compile(r"\b[A-Z][A-Za-z0-9_]*\s*\("), "Python or Manim calls"),
+    (re.compile(r"(?<!\w)[A-Za-z_]\w*\s*=(?!=)"), "Python assignments"),
+)
 
-def validate_generated_text(value: str) -> str:
-    for pattern, category in _GENERATED_TEXT_RULES:
+
+def _validate_against(value: str, rules) -> str:
+    for pattern, category in rules:
         if pattern.search(value):
             raise ValueError(f"generated text contains prohibited {category}")
     return value
 
 
+def validate_generated_text(value: str) -> str:
+    return _validate_against(value, _IDENTIFIER_TEXT_RULES)
+
+
+def validate_prose_text(value: str) -> str:
+    return _validate_against(value, _SHARED_TEXT_RULES)
+
+
 GeneratedText = Annotated[str, AfterValidator(validate_generated_text)]
+ProseText = Annotated[str, AfterValidator(validate_prose_text)]
 
 
 class TargetRef(BaseModel):

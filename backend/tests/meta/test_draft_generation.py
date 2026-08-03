@@ -191,6 +191,25 @@ def test_refinement_call_includes_prior_teaching_plan_and_structured_quality_fee
 
 
 @patch("app.meta.draft_generation.call_with_tool")
+def test_refinement_includes_feedback_when_prior_proposal_never_parsed(mock_call):
+    mock_call.return_value = ("propose_template_draft", _raw_proposal())
+
+    propose_template_draft(
+        _fingerprint(), [_observation()],
+        reviewer_feedback={
+            "code": "draft_schema_invalid",
+            "path": "teaching_plan_document.beats.3.intent",
+            "hint": "keep every field inside the tool schema",
+        },
+    )
+
+    _, kwargs = mock_call.call_args
+    assert '"code":"draft_schema_invalid"' in kwargs["user_message"]
+    assert '"path":"teaching_plan_document.beats.3.intent"' in kwargs["user_message"]
+    assert "prior proposal" not in kwargs["user_message"]
+
+
+@patch("app.meta.draft_generation.call_with_tool")
 def test_refinement_rejects_incomplete_structured_quality_feedback(mock_call):
     prior = DraftProposal.model_validate(_raw_proposal())
 
