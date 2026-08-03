@@ -253,12 +253,12 @@ class TeachingPlanDocument(BaseModel):
         for beat in self.beats:
             for action in beat.custom_actions:
                 if (
-                    action.kind in {"dim", "emphasize"}
+                    action.kind in {"dim", "emphasize", "restore"}
                     and action.target.visual_ref == self.primary_visual.ref
                     and action.target.part == "item"
                 ):
                     raise ValueError(
-                        f"beat {beat.id!r} dims or emphasizes an item of the primary visual; "
+                        f"beat {beat.id!r} changes the role of an item of the primary visual; "
                         "pair_elimination stages its own elimination, so remove the custom action"
                     )
         return self

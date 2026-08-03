@@ -118,7 +118,7 @@ def test_pair_elimination_rejects_dim_on_a_primary_item():
     plan["beats"][1]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 0}},
     ]
-    with pytest.raises(ValidationError, match="dims or emphasizes an item"):
+    with pytest.raises(ValidationError, match="changes the role of an item"):
         TeachingPlanDocument.model_validate(plan)
 
 
@@ -129,7 +129,16 @@ def test_pair_elimination_rejects_emphasize_on_a_primary_item():
          "target": {"visual_ref": "values", "part": "item", "index": 3},
          "role": "conclusion"},
     ]
-    with pytest.raises(ValidationError, match="dims or emphasizes an item"):
+    with pytest.raises(ValidationError, match="changes the role of an item"):
+        TeachingPlanDocument.model_validate(plan)
+
+
+def test_pair_elimination_rejects_restore_on_a_primary_item():
+    plan = _median_plan()
+    plan["beats"][3]["custom_actions"] = [
+        {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 0}},
+    ]
+    with pytest.raises(ValidationError, match="changes the role of an item"):
         TeachingPlanDocument.model_validate(plan)
 
 
@@ -176,5 +185,14 @@ def test_other_strategies_may_still_dim_collection_items():
     plan["strategy"] = "short_stagger"
     plan["beats"][1]["custom_actions"] = [
         {"kind": "dim", "target": {"visual_ref": "values", "part": "item", "index": 0}},
+    ]
+    assert TeachingPlanDocument.model_validate(plan).strategy == "short_stagger"
+
+
+def test_other_strategies_may_still_restore_collection_items():
+    plan = _median_plan()
+    plan["strategy"] = "short_stagger"
+    plan["beats"][1]["custom_actions"] = [
+        {"kind": "restore", "target": {"visual_ref": "values", "part": "item", "index": 0}},
     ]
     assert TeachingPlanDocument.model_validate(plan).strategy == "short_stagger"
