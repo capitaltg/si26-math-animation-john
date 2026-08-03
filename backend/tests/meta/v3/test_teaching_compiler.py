@@ -511,3 +511,112 @@ def test_unknown_visual_ref_hint_names_the_declared_visuals(
     assert failure.hint == (
         "reference the primary or a supporting visual: caption, values"
     )
+
+
+def test_unknown_declared_path_hint_names_the_declared_paths(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "rectangle.diagonal"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_declared_path"
+    assert failure.hint == "use a declared semantic path: perimeter"
+
+
+def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "values.outline"}
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_declared_path"
+    assert failure.hint == "this visual exposes no semantic paths"
+
+
+def test_unknown_visual_ref_hint_names_the_declared_visuals_from_a_path_ref(
+    perimeter_plan, compile_context,
+):
+    # `_validate_path_ref` raises unknown_visual_ref independently of
+    # `_validate_target` -- the visual_ref prefix of a path_ref string, not a
+    # beat or custom-action target. Task 4 enumerated the target-ref site;
+    # this pins the path-ref site to the same treatment.
+    raw = perimeter_plan.model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "trace", "path_ref": "missing.perimeter"}
+    ]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_visual_ref"
+    assert failure.hint == "reference the primary or a supporting visual: rectangle"
+
+
+def test_incompatible_transform_hint_names_the_compatible_kinds(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "same area"}]
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "transform",
+        "source": {"visual_ref": "rectangle"},
+        "target": {"visual_ref": "caption"},
+    }]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_transform_target"
+    assert failure.hint == (
+        "transform between compatible declared visuals: rectangle_measurement"
+    )
+
+
+def test_incompatible_callout_anchor_hint_names_the_permitted_anchors(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["beats"][2]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 3, "anchor": "top"},
+        "text": "middle value",
+    }]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_callout_anchor"
+    assert failure.hint == "attach item callouts to a permitted anchor: bottom"

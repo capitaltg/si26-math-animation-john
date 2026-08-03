@@ -41,6 +41,7 @@ _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
 _DRAWABLE_TARGETS = {"rectangle_measurement": {None}}
 _MOVABLE_TARGETS = {"rectangle_measurement": {None}}
 _TRANSFORM_COMPATIBILITY = {"rectangle_measurement": {"rectangle_measurement"}}
+_ITEM_CALLOUT_ANCHORS = {"bottom"}
 
 
 def compile_teaching_plan(plan, answer_expression, known_fields, context):
@@ -130,7 +131,12 @@ def validate_target_refs(plan):
                     _fail(
                         "incompatible_transform_target", path,
                         "compatible whole source and target visuals",
-                        f"{source.kind}:{target.kind}", "transform between compatible declared visuals",
+                        f"{source.kind}:{target.kind}",
+                        _enumerate_legal(
+                            compatible_kinds,
+                            "transform between compatible declared visuals",
+                            "this visual kind cannot be transformed",
+                        ),
                     )
             elif action.kind == "callout":
                 spec = _validate_target(action.target, specs, f"{path}.target")
@@ -227,12 +233,19 @@ def _validate_path_ref(path_ref, specs, path):
     except KeyError:
         _fail(
             "unknown_visual_ref", path, "a visual declared by the plan", visual_ref,
-            "reference the primary or a supporting visual",
+            _enumerate_legal(
+                specs, "reference the primary or a supporting visual",
+                "the plan declares no visuals",
+            ),
         )
-    if name not in _DECLARED_PATHS.get(spec.kind, set()):
+    declared = _DECLARED_PATHS.get(spec.kind, set())
+    if name not in declared:
         _fail(
             "unknown_declared_path", path, "a path exposed by the visual", path_ref,
-            "use a declared semantic path",
+            _enumerate_legal(
+                declared, "use a declared semantic path",
+                "this visual exposes no semantic paths",
+            ),
         )
     return spec
 
@@ -246,11 +259,18 @@ def _validate_compatible_target(target, spec, compatible_targets, code, path, ex
 
 
 def _validate_callout_anchor(target, spec, path):
-    if spec.kind == "ordered_values" and target.part == "item" and target.anchor != "bottom":
+    if (
+        spec.kind == "ordered_values"
+        and target.part == "item"
+        and target.anchor not in _ITEM_CALLOUT_ANCHORS
+    ):
         _fail(
             "incompatible_callout_anchor", f"{path}.target.anchor",
             "the bottom anchor of an ordered-value item", target.anchor,
-            "attach item callouts to the declared item bottom anchor",
+            _enumerate_legal(
+                _ITEM_CALLOUT_ANCHORS, "attach item callouts to a permitted anchor",
+                "this part accepts no callout anchors",
+            ),
         )
 
 
