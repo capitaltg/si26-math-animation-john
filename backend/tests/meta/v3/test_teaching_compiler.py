@@ -412,6 +412,37 @@ def test_the_conclusion_names_the_median_and_recolours_nothing(
     assert conclusion[0].duration_seconds >= 1.5
 
 
+def test_a_multi_action_conclusion_co_starts_its_actions_and_holds_the_floor(
+    median_plan, answer, compile_context,
+):
+    """The conclusion holds everything it does at one instant, card or no card.
+
+    This used to fall out of the answer card: `timeline.schedule_beats` forced a
+    single slot for any beat containing a `reveal` of `evaluated_answer`. A
+    `pair_elimination` lesson declares no such card, so a conclusion with more
+    than one action was split into sequential slots of `beat_seconds / N` -- two
+    actions here held 0.9868s each -- while `quality.check_conclusion_hold`
+    requires EVERY final-beat action to clear `MIN_CONCLUSION_HOLD_SECONDS`
+    individually. `schedule_beats` now keys the single slot on the last beat that
+    acts, which is the same beat that check reads off `timeline[-1].beat_id`.
+    """
+    raw = median_plan.model_dump()
+    raw["beats"][3]["custom_actions"] = [{
+        "kind": "callout",
+        "target": {"visual_ref": "values", "part": "item", "index": 0, "anchor": "bottom"},
+        "text": "eliminated",
+    }]
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+
+    assert len(conclusion) == 2, "this plan must compile to a multi-action conclusion"
+    assert {entry.at_seconds for entry in conclusion} == {conclusion[0].at_seconds}
+    assert all(entry.duration_seconds >= 1.5 for entry in conclusion)
+
+
 def test_a_plan_supplied_callout_replaces_the_generated_one(
     median_plan, answer, compile_context,
 ):
@@ -684,10 +715,20 @@ def test_scheduler_batches_dense_same_beat_actions_without_exceeding_budget():
     ]
     timeline, total = schedule_beats([
         ExpandedBeat(beat_id="dense", actions=actions, minimum_seconds=0.15, weight=1.0),
+        # A trailing beat, so `dense` is not the conclusion. The conclusion holds
+        # all its actions at one instant by design, which would collapse the dense
+        # beat to a single batch and make the batching under test here vacuous.
+        ExpandedBeat(
+            beat_id="conclude",
+            actions=[SetRoleAction(target=TargetRef(visual_ref="values"), role="conclusion")],
+            minimum_seconds=1.5,
+            weight=1.5,
+        ),
     ])
 
-    starts = {entry.at_seconds for entry in timeline}
-    assert len(starts) < len(timeline)
+    dense = [entry for entry in timeline if entry.beat_id == "dense"]
+    starts = {entry.at_seconds for entry in dense}
+    assert 1 < len(starts) < len(dense)
     assert all(entry.at_seconds + entry.duration_seconds <= total for entry in timeline)
 
 

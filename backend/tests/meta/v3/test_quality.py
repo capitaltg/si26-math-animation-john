@@ -543,6 +543,38 @@ def test_a_callout_on_a_plain_vertex_is_still_accepted():
     assert report.passed is True
 
 
+def test_a_multi_action_conclusion_without_an_answer_card_still_clears_the_hold_floor():
+    """`check_conclusion_hold`'s fallback must be satisfiable by real output.
+
+    The fallback holds EVERY action of the final beat to
+    `MIN_CONCLUSION_HOLD_SECONDS`, and a `pair_elimination` lesson declares no
+    `evaluated_answer` -- which used to be the only thing making
+    `timeline.schedule_beats` co-start a conclusion. Without that, this plan's
+    conclude beat (revealing a supporting label, then showing the median callout)
+    was split into two sequential 0.9868s slots and the gate rejected reachable
+    compiler output. The two halves of the fix have to agree on which beat the
+    conclusion is, so this asserts the gate against the compiler, not a mutation.
+    """
+    raw = _median_plan().model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "answer_label", "text": "the middle value is the median"},
+    ]
+    raw["beats"][3]["targets"] = [
+        {"visual_ref": "values", "part": "item", "index": 3},
+        {"visual_ref": "answer_label"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+    conclusion = [entry for entry in program.timeline if entry.beat_id == "show_answer"]
+    assert len(conclusion) == 2, "this plan must compile to a multi-action conclusion"
+    assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is True
+    assert [check.code for check in report.checks if not check.passed] == []
+
+
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):
     report = validate_static_quality(valid_program.plan, valid_program.program)
 
