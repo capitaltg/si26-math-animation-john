@@ -302,7 +302,7 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
 
         try:
             computed_answer = compile_expression(
-                answer_expression, compiled.known_fields
+                answer_expression, compiled.field_contract
             ).evaluate(params.model_dump())
         except DslValidationError as exc:
             raise HTTPException(

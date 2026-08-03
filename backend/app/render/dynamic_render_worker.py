@@ -1,10 +1,13 @@
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from app.meta.manim_primitives.style import resolve_semantic_style
+from app.meta.v3.errors import V3ValidationError
 from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
+from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.manim_measurer import ManimTextMeasurer
 from app.meta.v3.quality import DIMENSION_TARGET_PARTS
 from app.meta.v3.renderer import render_resolved_scene
@@ -19,10 +22,22 @@ def main() -> None:
         raise ValueError(f"Unknown render mode {mode!r}; expected one of {sorted(VALID_MODES)}")
 
     if mode == "probe":
-        _render_probe(
-            Path(program_path), Path(known_fields_path), Path(values_path),
-            Path(output_path_str), Path(scratch_dir_str),
-        )
+        try:
+            _render_probe(
+                Path(program_path), Path(known_fields_path), Path(values_path),
+                Path(output_path_str), Path(scratch_dir_str),
+            )
+        except V3ValidationError as exc:
+            # A structured rejection (`below_minimum_text_scale`, an unresolvable
+            # target ...) is actionable evidence with its own code and hint. Left
+            # to propagate it becomes a nonzero exit and nothing more, which the
+            # parent can only report as `render_probe_failed` / "regenerate the
+            # candidate". Hand the failure across the process boundary so it
+            # survives intact; the traceback still goes to stderr for the log.
+            Path(output_path_str).with_suffix(".failure.json").write_text(
+                json.dumps(asdict(exc.failure))
+            )
+            raise
         return
 
     del known_fields_path  # The stored scene program is already compiled against its field contract.
@@ -209,6 +224,11 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     conclusion_starts = [action.at_seconds for action in resolved.timeline if action.beat_id == _last_beat_id(resolved)]
     return {
         "frame_size": [width, height],
+        # The box `place_vertical_lesson` lays out into, in the same pixel
+        # coordinates as `visual_bounds`, so `render_probe.check_frame_bounds`
+        # can hold the render to the frame layout actually targeted rather than
+        # to the wider physical frame.
+        "safe_frame": _pixel_bounds(SAFE_FRAME, width, height),
         "total_duration_seconds": resolved.total_duration_seconds,
         "conclusion_hold_seconds": resolved.total_duration_seconds - min(conclusion_starts),
         "simple_reveal_mode": _simple_reveal_mode(resolved),
@@ -225,6 +245,14 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "declared_dimension_anchors": [
             relation.ref for relation in program.relations
             if relation.target.part in DIMENSION_TARGET_PARTS
+        ],
+        # Evidence that each measured visual actually put its measurements on
+        # screen. Read off the rendered mobjects, so it reports what the frame
+        # shows rather than what the program intended.
+        "dimension_labels": _dimension_labels(scene, program),
+        "declared_dimension_labels": [
+            visual.ref for visual in program.visuals
+            if visual.kind == "rectangle_measurement"
         ],
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),
@@ -326,6 +354,29 @@ def _mobject_anchor(mobject, anchor):
         "left": mobject.get_left(),
         "right": mobject.get_right(),
     }[anchor]
+
+
+def _dimension_labels(scene, program) -> dict:
+    labels = {}
+    for visual in program.visuals:
+        if visual.kind != "rectangle_measurement":
+            continue
+        rendered = {}
+        for part in ("length_label", "width_label"):
+            mobject = scene.rendered.targets.get((visual.ref, part, 0))
+            if mobject is not None:
+                # `original_text` is the string handed to manim; `.text` is
+                # manim's normalised form, which drops the space in "8 cm".
+                rendered[part] = getattr(mobject, "original_text", "")
+        labels[visual.ref] = rendered
+    return labels
+
+
+def _pixel_bounds(bounds, width, height) -> list[float]:
+    return [
+        _pixel_x(bounds.left, width), _pixel_y(bounds.top, height),
+        _pixel_x(bounds.right, width), _pixel_y(bounds.bottom, height),
+    ]
 
 
 def _pixel_mobject_bounds(mobject, width, height) -> list[float]:

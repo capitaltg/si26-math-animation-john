@@ -14,6 +14,7 @@ from manim import (
     Rectangle,
     Text,
     Transform,
+    VectorizedPoint,
     VGroup,
     VMobject,
 )
@@ -119,15 +120,24 @@ def _build_visual(placed, palette: str):
 
     if "values" in payload:
         children = {
-            ("item", index): _text(value, "math_value", _center(part.bounds, placed.offset))
+            ("item", index): _text(
+                value, "math_value", _center(part.bounds, placed.offset), placed.scale,
+            )
             for (part_name, index), part in measured.parts.items()
             if part_name == "item"
             for value in (payload["values"][index],)
         }
         root = VGroup(*children.values())
     elif {"length", "width", "unit"} <= payload.keys():
-        root = Rectangle(width=bounds.right - bounds.left, height=bounds.top - bounds.bottom)
-        root.move_to(_array(bounds.center))
+        # Size the shape from its EDGE parts, not from `bounds`: the measured
+        # bounds now also enclose the dimension labels outside the shape, so
+        # using them would stretch the rectangle over its own labels.
+        shape_bounds = _shape_bounds(measured, placed.offset)
+        root = Rectangle(
+            width=shape_bounds.right - shape_bounds.left,
+            height=shape_bounds.top - shape_bounds.bottom,
+        )
+        root.move_to(_array(shape_bounds.center))
         edges = {
             index: _line_for_bounds(_translated(part_value.bounds, placed.offset))
             for (part, index), part_value in measured.parts.items()
@@ -144,14 +154,35 @@ def _build_visual(placed, palette: str):
         # same lines, so adding `children` would ask manim to hold a submobject
         # twice -- which it ignores with a warning rather than duplicating, so
         # this is about keeping the intent (and the log) clean, not correctness.
+        dimension_labels = {
+            (part, 0): _text(
+                payload[part], "label",
+                _center(measured.parts[(part, 0)].bounds, placed.offset), placed.scale,
+            )
+            for part in ("length_label", "width_label")
+        }
+        # `compiler._PART_CARDINALITY` accepts `vertex` as a rectangle target and
+        # the resolver resolves it, but nothing built a mobject for one, so any
+        # plan naming a vertex -- a callout at the corner a boundary walk starts
+        # from, say -- died with a KeyError inside `_target_mobject`. In the probe
+        # subprocess that surfaced only as `render_probe_failed`. A
+        # `VectorizedPoint` is an anchor with no visible geometry: it gives
+        # `_mobject_anchor` a position to read without drawing a corner marker.
+        vertices = {
+            ("vertex", index): VectorizedPoint(_array(_center(value.bounds, placed.offset)))
+            for (name, index), value in measured.parts.items()
+            if name == "vertex"
+        }
         children = {
             **{("edge", index): line for index, line in edges.items()},
             ("length_edge", 0): edges[0], ("length_edge", 1): edges[2],
             ("width_edge", 0): edges[3], ("width_edge", 1): edges[1],
+            **vertices,
+            **dimension_labels,
         }
-        root.add(*edges.values())
+        root.add(*edges.values(), *dimension_labels.values())
     elif "text" in payload:
-        root, children = _text(payload["text"], "label", bounds.center), {}
+        root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "markers" in payload:
         root, children = _line_visual(bounds, measured, placed.offset, "marker")
     elif {"rows", "columns"} <= payload.keys():
@@ -163,7 +194,12 @@ def _build_visual(placed, palette: str):
     elif {"value", "maximum"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "segment")
     elif "count" in payload:
-        root, children = _parts_as_dots(measured, placed.offset, "item")
+        # `_parts_as_dots` returns the children dict alone, not a (root, children)
+        # pair -- unpacking it here consumed the dict's KEYS, so every
+        # `object_set` visual raised (or, at count == 2, silently bound two part
+        # keys to `root` and `children`). Mirror the `partition` branch instead.
+        children = _parts_as_dots(measured, placed.offset, "item")
+        root = VGroup(*children.values())
     else:
         raise ValueError(f"unsupported resolved visual {measured.ref}")
 
@@ -177,8 +213,17 @@ def _initial_role(ref: str, payload) -> str:
     return "structure"
 
 
-def _text(text: str, font_role: str, center: Point):
+def _text(text: str, font_role: str, center: Point, scale: float = 1.0):
+    """Text at the size layout measured it, then reduced by layout's own factor.
+
+    Scaling the built mobject -- rather than asking for `FONT_SIZES[role] *
+    scale` -- reproduces exactly what layout computed: it measured the glyphs at
+    the base size and multiplied that measurement by `scale`. Re-rendering at a
+    smaller font size would re-run font metrics and land somewhere else.
+    """
     mobject = Text(text, font_size=FONT_SIZES[font_role])
+    if scale != 1.0:
+        mobject.scale(scale)
     mobject.move_to(_array(center))
     return mobject
 
@@ -211,6 +256,18 @@ def _rectangle_for_bounds(bounds: Bounds):
     rectangle = Rectangle(width=max(bounds.right - bounds.left, 0.02), height=max(bounds.top - bounds.bottom, 0.02))
     rectangle.move_to(_array(bounds.center))
     return rectangle
+
+
+def _shape_bounds(measured, offset: Point) -> Bounds:
+    """The rectangle proper, from the union of its four edges."""
+    edges = [
+        _translated(part.bounds, offset)
+        for (name, _index), part in measured.parts.items() if name == "edge"
+    ]
+    return Bounds(
+        min(edge.left for edge in edges), max(edge.right for edge in edges),
+        min(edge.bottom for edge in edges), max(edge.top for edge in edges),
+    )
 
 
 def _line_for_bounds(bounds: Bounds):

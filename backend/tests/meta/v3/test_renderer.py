@@ -1,15 +1,19 @@
 from dataclasses import dataclass, replace
+from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
-from manim import Text
+from manim import Line, Text
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
-from app.meta.v3.compiler import compile_teaching_plan
+from app.meta.v3.compiler import _PART_CARDINALITY, compile_teaching_plan
+from app.meta.v3.geometry import PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
-from app.meta.v3.renderer import render_resolved_scene
+from app.meta.v3.renderer import _build_visual, render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
+from app.meta.v3.visual_registry import default_visual_registry
 
 
 class LiteralTextMeasurer:
@@ -177,6 +181,153 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
     assert any(call.kind == "trace" for call in scene.play_calls)
 
 
+_MEASURABLE_VALUES = {
+    "ordered_values": {"values": ["3", "5", "8"]},
+    "rectangle_measurement": {"length": Fraction(8), "width": Fraction(3), "unit": "cm"},
+    "number_line": {"minimum": Fraction(0), "maximum": Fraction(10), "markers": [Fraction(4)]},
+    "grid": {"rows": 2, "columns": 3},
+    "partition": {"whole": Fraction(8), "parts": 4},
+    "bar": {"value": Fraction(3), "maximum": Fraction(5)},
+    "object_set": {"count": 6},
+    "label": {"text": "Answer"},
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_PART_CARDINALITY))
+def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
+    """A part the compiler accepts as a target must be renderable.
+
+    `compiler._PART_CARDINALITY` decides which semantic parts a plan may name,
+    `measure_rectangle` and friends give them geometry, and the resolver resolves
+    them -- but the renderer builds child mobjects independently, so a part
+    declared in all three and built by none crashes `_target_mobject` with a
+    KeyError. Inside the probe subprocess that surfaces only as
+    `render_probe_failed`, "probe renderer exited unsuccessfully", after three
+    burnt generation attempts.
+
+    `tests/meta/v3/test_capability_consistency.py` deliberately compares
+    declarations only ("never compile a plan"), so this is the check that the
+    declarations are actually backed by geometry the renderer can find.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind=kind, ref=kind), _MEASURABLE_VALUES[kind], ManimTextMeasurer(),
+    )
+    _root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+
+    targetable = {
+        key for key in measured.parts if key[0] in _PART_CARDINALITY[kind]
+    }
+    missing = sorted(targetable - set(children))
+    assert not missing, f"{kind} declares targetable parts the renderer never builds: {missing}"
+
+
+def _scaled_down_lesson_plan():
+    """A rectangle plus a label wide enough that layout must scale the lesson down.
+
+    `place_vertical_lesson` fits the lesson inside `SAFE_FRAME` by scaling every
+    measured bound uniformly. The renderer then rebuilt label text from the
+    payload at a fixed font size, so only the text escaped that scale.
+
+    The label is long enough (13.85 units) to exceed even the full 13.2-unit
+    width of a stacked row, which is what forces a scale below 1 now that a wide
+    supporting label no longer has to squeeze in beside the primary.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find the perimeter of a rectangle from its two dimensions.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rect",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "formula_label", "text": "Perimeter equals two times the length plus the width of the rectangle"},
+        ],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rect"}],
+             "intent": "show the measured rectangle"},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "introduce the perimeter formula"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "rect"}],
+             "intent": "substitute the two dimensions into the formula"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "scaled-down-lesson",
+    })
+
+
+def test_label_text_is_rendered_at_the_scale_layout_assigned_it():
+    """A label's rendered glyphs must fill exactly the box layout reserved for it.
+
+    Measured with the real `ManimTextMeasurer`, a label's measured size IS its
+    manim `Text` size, so after a uniform layout scale the rendered mobject must
+    match its placed bounds. It did not: the bounds were scaled and the `Text`
+    was rebuilt at `FONT_SIZES["label"]`, so the glyphs overran their reserved
+    box by 1/scale -- off the safe frame on one side and into the primary visual
+    on the other.
+    """
+    plan = _scaled_down_lesson_plan()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, ManimTextMeasurer())
+    placed = resolved.visual("formula_label").bounds
+    unscaled_width, _height = ManimTextMeasurer().measure(
+        "Perimeter equals two times the length plus the width of the rectangle", "label",
+    )
+    reserved_width = placed.right - placed.left
+    assert reserved_width < unscaled_width, "this lesson must be scaled down to be a test"
+
+    rendered = render_resolved_scene(RecordingScene(), resolved)
+
+    assert float(rendered.visuals["formula_label"].width) == pytest.approx(
+        reserved_width, abs=0.01,
+    )
+
+
+def test_rectangle_renders_its_measured_dimensions_as_visible_text():
+    """The length and width must reach the screen as glyphs, not just as geometry.
+
+    The renderer read `length`/`width` from the payload only to size the box, so
+    a perimeter lesson showed a rectangle with no numbers on it -- nothing to add
+    up. The rendered text also has to carry the layout scale, like every other
+    label.
+    """
+    plan = _scaled_down_lesson_plan()
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(program, {"length": 8, "width": 3}, ManimTextMeasurer())
+
+    rendered = render_resolved_scene(RecordingScene(), resolved)
+
+    length_label = rendered.targets[("rect", "length_label", 0)]
+    width_label = rendered.targets[("rect", "width_label", 0)]
+    # `Text.text` is manim-normalised ("8cm"); `original_text` is what we passed.
+    assert length_label.original_text == "8 cm"
+    assert width_label.original_text == "3 cm"
+    # The length labels the bottom edge and the width the left edge, so a
+    # swapped pair would put "3 cm" under the shape. Compare against the edges,
+    # not the group -- the labels are submobjects, so the group's own extent
+    # already includes them.
+    bottom_edge = rendered.targets[("rect", "length_edge", 0)]
+    left_edge = rendered.targets[("rect", "width_edge", 0)]
+    assert float(length_label.get_top()[1]) <= float(bottom_edge.get_bottom()[1])
+    assert float(width_label.get_right()[0]) <= float(left_edge.get_left()[0])
+    reserved = resolved.visual("rect").measured.parts[("length_label", 0)].bounds
+    assert float(length_label.width) == pytest.approx(
+        reserved.right - reserved.left, abs=0.01,
+    )
+
+
 def _perimeter_plan_emphasizing_alias_edges():
     """A boundary_trace plan whose derive beat emphasizes the declared
     `length_edge`/`width_edge` semantic parts.
@@ -248,6 +399,11 @@ def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edge
     # The four emphasis actions really did play, so `_target_mobject` resolved
     # every alias key rather than raising.
     assert [call.role for call in scene.play_calls if call.role] == ["focus"] * 4
-    # The rectangle group still holds exactly its four edges: the aliases are
-    # additional *names* for those lines, not extra geometry.
-    assert len(rendered.visuals["rectangle"].submobjects) == 4
+    # The rectangle group still holds exactly four Lines: the aliases are
+    # additional *names* for those lines, not extra geometry. (The two dimension
+    # labels are separate Text mobjects, not duplicated edges.)
+    lines = [
+        submobject for submobject in rendered.visuals["rectangle"].submobjects
+        if isinstance(submobject, Line)
+    ]
+    assert len(lines) == 4

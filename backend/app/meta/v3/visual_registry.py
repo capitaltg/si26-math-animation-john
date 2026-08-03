@@ -3,6 +3,7 @@ from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.geometry import Bounds, SemanticPart
+from app.meta.v3.layout import INSTRUCTIONAL_FRAME, MIN_TEXT_SCALE, SAFE_FRAME
 from app.meta.v3.geometry import MeasuredVisual, TextMeasurer
 from app.meta.v3.ordered_values import measure_ordered_values
 from app.meta.v3.rectangle_measurement import measure_rectangle
@@ -37,7 +38,12 @@ class VisualRegistry:
                     hint="select a compatible strategy",
                 )
             )
-        return factory(spec=spec, values=values, measurer=measurer)
+        # Before the factory: a count-driven factory builds one part per unit, so
+        # an oversized count has to be refused while it is still a number.
+        _require_renderable_cardinality(spec, values)
+        measured = factory(spec=spec, values=values, measurer=measurer)
+        _require_renderable_extent(measured, values)
+        return measured
 
 
 _SUPPORTED_STRATEGIES = {
@@ -50,6 +56,93 @@ _SUPPORTED_STRATEGIES = {
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
 }
+
+
+#: Fields whose value sets a visual's size, so a failure can name the number to
+#: change rather than telling a reviewer to "reduce visual content".
+_SIZE_DRIVING_FIELDS = ("maximum", "columns", "rows", "count", "parts", "values")
+
+#: Per KIND, the fields that decide how many semantic parts a factory builds.
+#: Keyed by kind rather than by field name because the same name means different
+#: things: `bar.maximum` is a segment count, while `number_line.maximum` is a
+#: numeric scale whose markers land inside fixed +/-2.75 bounds -- a line from 0
+#: to a million costs nothing to draw and must not be rejected. `ordered_values`
+#: and `number_line` bound their lists in the plan schema already.
+_CARDINALITY_FIELDS = {
+    "bar": ("maximum",),
+    "grid": ("rows", "columns"),
+    "object_set": ("count",),
+    "partition": ("parts",),
+}
+
+#: The largest part count any kind could ever need. The tightest pitch is a bar
+#: segment at 0.65 units, so the 18.9-unit width limit admits ~29; `object_set`
+#: packs five per row, so the 8.6-unit height limit admits ~65. This is a
+#: deliberately loose over-approximation -- its only job is to keep a factory from
+#: looping past what fits, leaving `_require_renderable_extent` to decide
+#: precisely.
+MAX_PART_CARDINALITY = 128
+
+
+def _require_renderable_cardinality(spec, values) -> None:
+    for name in _CARDINALITY_FIELDS.get(spec.kind, ()):
+        if name not in values:
+            continue
+        count = _whole(values[name], name) if _is_whole(values[name]) else None
+        if count is not None and count <= MAX_PART_CARDINALITY:
+            continue
+        observed = _describe(values[name])
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=f"a {spec.kind} of at most {MAX_PART_CARDINALITY} parts",
+            observed=f"{spec.ref} would draw {observed} parts ({name}={observed})",
+            hint=f"reduce the value driving this visual's size ({name}={observed})",
+        ))
+
+
+def _is_whole(value) -> bool:
+    return getattr(value, "denominator", 1) == 1
+
+
+def _require_renderable_extent(measured, values) -> None:
+    """Reject a visual too large to fit the frame at any permitted scale.
+
+    `_measure_bar`, `_measure_grid` and `_measure_object_set` derive their extent
+    linearly from a numeric parameter, and nothing bounded it -- the expression
+    DSL allows magnitudes to 10**12 and no limit caps how many semantic parts a
+    visual may measure. A bar with `maximum` 10000 measured 6500 units wide and
+    built 10000 parts; the only complaint reached the operator as
+    `below_minimum_text_scale` at 0.002, a code about text carrying the hint
+    "reduce visual content" for a scene holding a single bar.
+
+    A visual wider or taller than the frame divided by MIN_TEXT_SCALE cannot fit
+    however little else the lesson holds, so it is rejected here -- where the
+    driving field is still in hand and can be named.
+    """
+    width_limit = (SAFE_FRAME.right - SAFE_FRAME.left) / MIN_TEXT_SCALE
+    height_limit = (INSTRUCTIONAL_FRAME.top - INSTRUCTIONAL_FRAME.bottom) / MIN_TEXT_SCALE
+    width = measured.bounds.right - measured.bounds.left
+    height = measured.bounds.top - measured.bounds.bottom
+    if width <= width_limit and height <= height_limit:
+        return
+    drivers = ", ".join(
+        f"{name}={_describe(values[name])}"
+        for name in _SIZE_DRIVING_FIELDS if name in values
+    )
+    raise V3ValidationError(V3Failure(
+        code="visual_extent_unrenderable",
+        path=f"visuals.{measured.ref}",
+        expected=f"a visual within {width_limit:.1f} x {height_limit:.1f} units",
+        observed=f"{measured.ref} spans {width:.1f} x {height:.1f} units ({drivers})",
+        hint=f"reduce the value driving this visual's size ({drivers or 'its size field'})",
+    ))
+
+
+def _describe(value):
+    if isinstance(value, (list, tuple)):
+        return str(len(value))
+    return str(_whole(value, "size") if getattr(value, "denominator", 1) == 1 else value)
 
 
 def _whole(value, name):
@@ -184,7 +277,8 @@ def _measure_ordered_values(*, spec, values, measurer):
 
 def _measure_rectangle(*, spec, values, measurer):
     return measure_rectangle(
-        ref=spec.ref, length=values["length"], width=values["width"], unit=values["unit"]
+        ref=spec.ref, length=values["length"], width=values["width"],
+        unit=values["unit"], measurer=measurer,
     )
 
 

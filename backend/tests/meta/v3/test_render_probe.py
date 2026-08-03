@@ -7,7 +7,10 @@ from app.meta.dsl.v3_common import CompileContext
 from app.meta.preview_render import render_preview_and_probe
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
-from app.meta.v3.render_probe import validate_rendered_quality
+from app.meta.v3 import render_probe
+from app.meta.v3.render_probe import (
+    ProbeRequest, run_probe_subprocess, validate_rendered_quality,
+)
 
 
 @pytest.fixture
@@ -22,8 +25,12 @@ def valid_manifest():
             {"beat_id": "focus_middle", "seconds": 4.5, "path": "probe-1.png", "non_background_pixels": 150},
             {"beat_id": "show_answer", "seconds": 7.5, "path": "probe-2.png", "non_background_pixels": 200},
         ],
+        # `SAFE_FRAME` at this frame size: manim's default frame is 14.222 x 8
+        # units, so the +/-6.6 x +/-3.6 safe box insets by 16 px horizontally
+        # and 25 px vertically.
+        "safe_frame": [16, 25, 884, 475],
         "visual_bounds": {
-            "values": [0, 0, 900, 120],
+            "values": [20, 30, 880, 150],
             "evaluated_answer": [200, 360, 700, 430],
         },
         "anchors": {"values.item[3].bottom": [451, 220]},
@@ -40,6 +47,8 @@ def valid_manifest():
         "declared_path_events": [],
         "dimension_anchor_checks": {},
         "declared_dimension_anchors": [],
+        "dimension_labels": {},
+        "declared_dimension_labels": [],
         "state_events": [
             {"seconds": 1.5, "target": "values.item[3]", "role": "neutral"},
             {"seconds": 4.5, "target": "values.item[3]", "role": "focus"},
@@ -63,6 +72,10 @@ def valid_manifest():
     ("path", "undeclared_path_event"),
     ("dimension", "dimension_anchor_mismatch"),
     ("answer", "final_answer_not_persistent"),
+    ("outside_safe_frame", "frame_out_of_bounds"),
+    ("overlapping_visuals", "visual_overlap"),
+    ("unlabelled_dimension", "dimension_label_missing"),
+    ("blank_dimension_label", "dimension_label_missing"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -70,6 +83,29 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["frames"] = [{**valid_manifest["frames"][0], "non_background_pixels": 0}]
     elif mutation == "off_frame":
         manifest["visual_bounds"] = {"values": [-1, 0, 900, 120]}
+    elif mutation == "outside_safe_frame":
+        # Inside the physical frame, outside the safe box layout targets. This
+        # is the 16-px band the gate used to ignore -- exactly where the
+        # published perimeter lesson's formula label came to rest, which is why
+        # a label visibly touching the frame edge passed the rendered gate.
+        manifest["visual_bounds"] = {
+            **valid_manifest["visual_bounds"], "values": [4, 30, 880, 150],
+        }
+    elif mutation == "overlapping_visuals":
+        manifest["visual_bounds"] = {
+            **valid_manifest["visual_bounds"], "evaluated_answer": [800, 100, 880, 145],
+        }
+    elif mutation == "unlabelled_dimension":
+        # A measurement visual that renders no measurements: the published
+        # perimeter lesson drew a rectangle whose length and width appeared
+        # nowhere, leaving nothing on screen to add up.
+        manifest["declared_dimension_labels"] = ["rect"]
+        manifest["dimension_labels"] = {"rect": {"length_label": "8 cm"}}
+    elif mutation == "blank_dimension_label":
+        manifest["declared_dimension_labels"] = ["rect"]
+        manifest["dimension_labels"] = {
+            "rect": {"length_label": "8 cm", "width_label": "   "},
+        }
     elif mutation == "misaligned":
         manifest["relations"] = {"median_callout": {**valid_manifest["relations"]["median_callout"], "tip": [600, 400]}}
     elif mutation == "collision":
@@ -161,3 +197,77 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
 
     assert artifact_exists(tmp_path, artifact_hash)
     assert manifest["final_answer_visible"] is True
+
+
+def _overcrowded_program():
+    """Three measured rectangles: more than SAFE_FRAME can hold.
+
+    Each rectangle's measured box is 6.58 x 2.71 (shape plus dimension labels),
+    far too wide to sit beside another, so all three take full-width rows --
+    9.03 units of height against the 6.0-high instructional frame.
+    `place_vertical_lesson` raises `below_minimum_text_scale` at 0.67 while
+    resolving, before any frame is drawn.
+    """
+    def rectangle(ref):
+        return {
+            "kind": "rectangle_measurement", "ref": ref,
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        }
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare the perimeters of three rectangles.",
+        "primary_visual": rectangle("first"),
+        "supporting_visuals": [rectangle("second"), rectangle("third")],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "first"}],
+             "intent": "show the first rectangle"},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "second"}],
+             "intent": "show the second rectangle"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "third"}],
+             "intent": "apply the perimeter formula to each"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "first"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "overcrowded-probe",
+    })
+    return compile_teaching_plan(
+        plan, MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+
+def test_a_structured_failure_inside_the_probe_reaches_the_caller_intact():
+    """A structured rejection from the subprocess must not flatten to a crash.
+
+    Anything raising inside the probe was reported as `render_probe_failed`,
+    "probe renderer exited unsuccessfully", hint "regenerate the candidate" --
+    discarding the real code and its actionable hint, and leaving the retry loop
+    nothing to act on. The subprocess stderr was discarded too, so an operator
+    saw three burnt attempts and no traceback.
+    """
+    program = _overcrowded_program()
+    # Asserted by intercepting the module's own logger call, not via `caplog`:
+    # whether a record reaches a handler depends on global logging state that
+    # other imports mutate (manim installs a root handler; a `dictConfig`
+    # anywhere can set `Logger.disabled`, which `isEnabledFor` does not consult).
+    # That made the same assertion pass alone and fail in the full suite.
+    logged = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(render_probe.logger, "error", lambda *args: logged.append(args))
+        with pytest.raises(V3ValidationError) as exc_info:
+            run_probe_subprocess(ProbeRequest(
+                scene_program=program,
+                known_fields=["length", "width"],
+                field_values={"length": 8, "width": 3},
+            ))
+
+    failure = exc_info.value.failure
+    assert failure.code == "below_minimum_text_scale"
+    assert failure.hint == "reduce visual content so the lesson remains readable"
+    # And the operator gets the traceback the reviewer-facing failure omits.
+    assert logged, "a probe crash must log the subprocess stderr for the operator"
+    assert "below_minimum_text_scale" in " ".join(str(arg) for arg in logged[0])

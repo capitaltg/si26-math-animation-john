@@ -6,6 +6,12 @@ MAX_NUMERIC_MAGNITUDE = 10**12
 # Guard DSL
 MAX_GUARD_PREDICATES = 20
 MAX_PREDICATE_TERMS = 6
+# `ordered` constrains a whole displayed collection, so it needs a term per item.
+# `OrderedValuesVisual.values` accepts up to 15 and `pair_elimination` depends on
+# that collection being sorted; capping this at MAX_PREDICATE_TERMS (a bound meant
+# for arithmetic predicates) left a median of seven unable to state its own
+# precondition, and the tool schema rejected the whole draft.
+MAX_ORDERED_TERMS = 15
 
 # Params DSL
 MAX_PARAMS_FIELDS = 20

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import CalloutRelation
+from app.meta.dsl.scene_program import CalloutRelation, LabelProgramVisual
 from app.meta.dsl.teaching_plan import (
     OrderedValuesVisual,
     TeachingBeat,
@@ -160,6 +160,23 @@ def apply_literal_test_mutation(candidate, mutation):
         return Candidate(candidate.plan, program.model_copy(update={"relations": [*program.relations, duplicate]}))
     if mutation == "extend_to_13_seconds":
         return Candidate(candidate.plan, program.model_copy(update={"total_duration_seconds": 13.0}))
+    if mutation == "repeat_reveal":
+        # Two beats naming the same visual compiled to two `reveal` actions on
+        # it, so the rendered scene faded the same mobject in twice. Duplicate
+        # the entry in place (same instant, same duration) so only the repeat
+        # itself is under test, not a timing side effect.
+        first_reveal = next(entry for entry in program.timeline if entry.action.kind == "reveal")
+        return Candidate(candidate.plan, program.model_copy(update={
+            "timeline": [*program.timeline, first_reveal.model_copy()],
+        }))
+    if mutation == "declare_unused_visual":
+        # A visual no timeline action ever names is never added to the manim
+        # scene, yet still claims layout width -- so it silently shrinks every
+        # other visual to make room for nothing.
+        unused = LabelProgramVisual(ref="unused_label", text="never animated")
+        return Candidate(candidate.plan, program.model_copy(update={
+            "visuals": [*program.visuals, unused],
+        }))
     raise AssertionError(f"unknown mutation {mutation}")
 
 
@@ -173,6 +190,8 @@ def apply_literal_test_mutation(candidate, mutation):
     ("detach_dimension_label", "dimension_anchor_mismatch"),
     ("overlap_callout", "callout_collision"),
     ("extend_to_13_seconds", "timeline_over_budget"),
+    ("repeat_reveal", "repeated_reveal"),
+    ("declare_unused_visual", "unused_visual"),
 ])
 def test_quality_mutations_fail(valid_program, mutation, expected_code):
     broken = apply_literal_test_mutation(valid_program, mutation)
@@ -456,15 +475,20 @@ def _perimeter_plan_with_dimension_callouts():
     })
 
 
-def test_real_perimeter_program_with_dimension_callouts_passes_static_quality():
-    """Proves `check_dimension_anchor_specificity` actually runs and ACCEPTS
-    the `length_edge`/`width_edge` alias parts as valid dimension anchors --
-    the exact typed target the real compiler emits for a length/width
-    callout. Before this fix, the check filtered on `"dimension" in
-    relation.ref` (never true) and, had it ever run, would have REJECTED
-    these same relations for not being anchored to a plain "edge" part --
-    i.e. the static gate and the compiler disagreed about what a valid
-    dimension anchor looks like."""
+def test_a_callout_on_a_dimension_edge_is_rejected_as_a_duplicate_label():
+    """`measure_rectangle` now labels the length and width itself, so a callout
+    on `length_edge`/`width_edge` writes a second label over the first.
+
+    Those callouts used to be the only route to a visible dimension, and this
+    test asserted they PASSED. They cannot express a per-render value, though:
+    `CalloutRelation.text` is a plain string frozen at generation time, so a
+    template reused on another problem would keep labelling the first problem's
+    numbers. The dimensions are now measured and drawn from the `length`/`width`
+    expressions, and a callout on those same edges is a duplicate.
+
+    Callouts remain available for every other anchor -- a plain numbered `edge`,
+    a `vertex` -- which is what `check_dimension_anchor_specificity` still guards.
+    """
     plan = _perimeter_plan_with_dimension_callouts()
     program = _compile(
         plan,
@@ -479,8 +503,29 @@ def test_real_perimeter_program_with_dimension_callouts_passes_static_quality():
 
     report = validate_static_quality(plan, program)
 
+    assert report.passed is False
+    assert "duplicate_dimension_label" in [
+        check.code for check in report.checks if not check.passed
+    ]
+
+
+def test_a_callout_on_a_plain_vertex_is_still_accepted():
+    """The duplicate-label gate must not turn into a blanket ban on callouts."""
+    raw = _perimeter_plan_with_dimension_callouts().model_dump()
+    raw["beats"][1]["custom_actions"] = [{
+        "kind": "callout", "text": "start here",
+        "target": {"visual_ref": "rectangle", "part": "vertex", "index": 0, "anchor": "top"},
+    }]
+    plan = TeachingPlanDocument.model_validate(raw)
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+
+    report = validate_static_quality(plan, program)
+
     assert report.passed is True
-    assert all(check.passed for check in report.checks if check.code == "dimension_anchor_mismatch")
 
 
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):
@@ -507,3 +552,61 @@ def test_report_raises_first_structured_failure_without_candidate_contents(valid
 
     assert exc_info.value.failure.hint == "revise the teaching plan and regenerate the candidate"
     assert "v4" not in str(exc_info.value)
+
+
+def _plan_with_a_redundant_reveal_beat():
+    """A `reveal` beat whose target is already revealed AND already in focus.
+
+    The expander reveals only what is not yet on screen, and falls back to moving
+    attention when a beat's kind has nothing left to do -- so a beat is only
+    genuinely empty once even that fallback is a no-op, which needs the target to
+    already hold `focus`. That is the case this gate exists for.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": _field("length"), "width": _field("width"), "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "focus_boundary", "kind": "focus", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "attend to the whole boundary"},
+            {"id": "second_look", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "look again at the same rectangle"},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "quality-redundant-reveal",
+    })
+
+
+def test_a_beat_that_produces_no_action_is_named_rather_than_reported_as_idle_time():
+    """The failure must name the beat at fault, not the gap it leaves behind.
+
+    An empty beat contributes no timeline entry, so the only symptom was
+    `unexplained_idle_time` at the index of the NEXT action -- naming neither the
+    beat nor the reason, which left the repair loop nothing to act on and burned
+    all three generation attempts.
+    """
+    plan = _plan_with_a_redundant_reveal_beat()
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+    assert "second_look" not in {entry.beat_id for entry in program.timeline}, (
+        "this plan must contain a beat that compiles to no actions"
+    )
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    failed = [check for check in report.checks if not check.passed]
+    assert failed[0].code == "beat_without_action", (
+        "the named cause must be reported before the idle-interval symptom"
+    )
+    assert "second_look" in failed[0].detail

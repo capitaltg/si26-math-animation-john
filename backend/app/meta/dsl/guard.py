@@ -11,7 +11,9 @@ from app.meta.dsl.expression import (
     _evaluate,
     _to_fraction,
 )
-from app.meta.dsl.limits import MAX_GUARD_PREDICATES, MAX_PREDICATE_TERMS
+from app.meta.dsl.limits import (
+    MAX_GUARD_PREDICATES, MAX_ORDERED_TERMS, MAX_PREDICATE_TERMS,
+)
 
 
 class RangePredicate(BaseModel):
@@ -66,7 +68,9 @@ class DivisibleByPredicate(BaseModel):
 class OrderedPredicate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     predicate: Literal["ordered"] = "ordered"
-    terms: list[ExpressionNode] = Field(min_length=2, max_length=MAX_PREDICATE_TERMS)
+    # One term per item of the collection being constrained, not the arithmetic
+    # bound: see MAX_ORDERED_TERMS.
+    terms: list[ExpressionNode] = Field(min_length=2, max_length=MAX_ORDERED_TERMS)
     direction: Literal[
         "strictly_increasing", "strictly_decreasing", "non_decreasing", "non_increasing"
     ]

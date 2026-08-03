@@ -57,11 +57,18 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_grouped_simple_reveals(plan, program),
         check_answer_timing(plan, program),
         check_conclusion_hold(program),
+        # Before the idle-interval check: an empty beat IS the cause of the gap,
+        # and `require_passed` reports the first failure, so the named cause has
+        # to come before the anonymous symptom.
+        check_every_beat_acts(plan, program),
         check_unexplained_idle_time(program),
         check_strategy_affordance(plan, program),
         check_semantic_anchor_specificity(plan, program),
         check_dimension_anchor_specificity(plan, program),
         check_salience(program),
+        check_repeated_reveal(program),
+        check_unused_visual(program),
+        check_duplicate_dimension_label(program),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
 
@@ -132,6 +139,29 @@ def check_conclusion_hold(program) -> QualityCheck:
     ):
         return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 1.5 seconds")
     return _passed("conclusion_hold_too_short", "timeline")
+
+
+def check_every_beat_acts(plan, program) -> QualityCheck:
+    """Every beat must reach the timeline.
+
+    `docs/meta-template-dsl-v3-design.md`: "every beat produces an observable
+    state change". A beat that compiles to nothing -- a second `reveal` naming an
+    already-revealed visual, or a role change restating the role a target already
+    holds -- contributes no timeline entry at all, so the only symptom was
+    `unexplained_idle_time` at the index of the NEXT action. That named neither
+    the beat nor the reason, leaving the repair loop nothing to act on. Name the
+    beat instead.
+    """
+    acted = {entry.beat_id for entry in program.timeline}
+    for index, beat in enumerate(plan.beats):
+        if beat.id in acted:
+            continue
+        return _failed(
+            "beat_without_action", f"beats[{index}].id",
+            f"beat {beat.id!r} ({beat.kind}) produces no observable state change; "
+            "give it a target it changes, or drop it and let the neighbouring beats hold its time",
+        )
+    return _passed("beat_without_action", "beats")
 
 
 def check_unexplained_idle_time(program) -> QualityCheck:
@@ -230,6 +260,77 @@ def check_salience(program) -> QualityCheck:
             return _failed("callout_collision", "relations", "multiple callouts share one anchor")
         anchors[key] = relation.ref
     return _passed("callout_collision", "timeline")
+
+
+def check_duplicate_dimension_label(program) -> QualityCheck:
+    # `rectangle_measurement.measure_rectangle` measures and labels its own
+    # length and width from the `length`/`width` expressions, so those values
+    # re-resolve per render and a reused template labels each problem's own
+    # numbers. A callout on the same edge writes a second label into the space
+    # the intrinsic one occupies -- and could not carry a live value anyway,
+    # since `CalloutRelation.text` is a plain string fixed at generation time.
+    # Callouts on any other anchor (a plain numbered `edge`, a `vertex`) remain
+    # available; `check_dimension_anchor_specificity` still governs those.
+    visual_kind_by_ref = {visual.ref: visual.kind for visual in program.visuals}
+    for relation_index, relation in enumerate(program.relations):
+        target = relation.target
+        if visual_kind_by_ref.get(target.visual_ref) != "rectangle_measurement":
+            continue
+        if target.part in DIMENSION_TARGET_PARTS:
+            return _failed(
+                "duplicate_dimension_label", f"relations[{relation_index}].target.part",
+                "the rectangle already labels this dimension, so the callout repeats it",
+            )
+    return _passed("duplicate_dimension_label", "relations")
+
+
+def check_repeated_reveal(program) -> QualityCheck:
+    # Revealing an already-revealed target fades the same mobject in a second
+    # time, which reads as the visual being drawn twice. The beat expander used
+    # to emit one `reveal` per `orient`/`reveal` beat with no record of what was
+    # already revealed, so two beats naming one visual produced two fade-ins.
+    revealed = set()
+    revealed_wholes = set()
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "reveal":
+            continue
+        for target in entry.action.targets:
+            key = (target.visual_ref, target.part, target.index)
+            # A whole-visual reveal brings its children on screen with it, so a
+            # later reveal of one of those parts is a repeat. Comparing only exact
+            # keys treated whole and part as unrelated and let that through.
+            if key in revealed or target.visual_ref in revealed_wholes:
+                return _failed(
+                    "repeated_reveal", f"timeline[{index}].action.targets",
+                    "a target may only be revealed once, and revealing a visual "
+                    "reveals its parts with it",
+                )
+            revealed.add(key)
+            if target.part is None:
+                revealed_wholes.add(target.visual_ref)
+    return _passed("repeated_reveal", "timeline")
+
+
+def check_unused_visual(program) -> QualityCheck:
+    # Nothing adds a visual to the manim scene except an animation that names
+    # it, so a visual absent from the whole timeline never becomes visible --
+    # while still consuming layout space, shrinking everything else to make
+    # room for something the viewer never sees. Count every way a visual can be
+    # named: action targets, a `trace`/`move` path it owns, and callout anchors.
+    used = set()
+    for entry in program.timeline:
+        used.update(target.visual_ref for target in _targets(entry.action))
+        path_ref = getattr(entry.action, "path_ref", None)
+        if path_ref:
+            used.add(path_ref.partition(".")[0])
+    used.update(relation.target.visual_ref for relation in program.relations)
+    for index, visual in enumerate(program.visuals):
+        if visual.ref not in used:
+            return _failed(
+                "unused_visual", f"visuals[{index}].ref",
+                "every declared visual must be named by a timeline action",
+            )
+    return _passed("unused_visual", "visuals")
 
 
 def _targets(action):

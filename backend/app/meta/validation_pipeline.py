@@ -61,7 +61,7 @@ def validate_candidate(
         scene_program = compile_teaching_plan(
             proposal.teaching_plan_document,
             proposal.answer_expression,
-            compiled.known_fields,
+            compiled.field_contract,
             compile_context,
         )
     except (DslValidationError, ValidationError) as exc:

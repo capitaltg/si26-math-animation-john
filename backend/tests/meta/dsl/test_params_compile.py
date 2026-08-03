@@ -12,6 +12,7 @@ from app.meta.dsl.params import (
     ParamsDocument,
     StringFieldSpec,
     compile_template_params,
+    field_contract_for,
 )
 
 
@@ -539,3 +540,58 @@ def test_grounding_number_tokens_falls_back_to_default_stringification_without_f
     )
     params = Params(rows=5)
     assert params.grounding_number_tokens() == ["5"]
+
+
+def test_a_guard_predicate_can_read_a_scalar_inside_an_array_item():
+    """An array field must be usable by the guard, not merely declarable.
+
+    `ArrayFieldSpec.item_fields` makes each element an object, so `model_dump()`
+    hands the guard a list of dicts. Before `item_field` addressing existed, the
+    only way to reference one was `scores[0]` -- the dict itself -- which
+    `_to_fraction` rejected with `unsupported_type: <class 'dict'>` at validation
+    time, reported to an operator as a fixture that "expected accept, got reject".
+    """
+    params = ParamsDocument(params_version=1, fields=[
+        ArrayFieldSpec(
+            name="scores", label="Scores", description="",
+            min_items=2, max_items=7,
+            item_fields=[IntegerFieldSpec(
+                name="value", label="V", description="", minimum=0, maximum=100,
+            )],
+        ),
+    ])
+    guard = GuardDocument(predicates=[
+        {"predicate": "positive",
+         "value": {"node": "field_ref", "field": "scores", "index": 0,
+                   "item_field": "value"}},
+    ])
+    contract = field_contract_for(params)
+    params_cls = compile_template_params(params, compile_guard(guard, contract))
+
+    accepted = params_cls(scores=[{"value": 5}, {"value": 9}])
+
+    assert accepted.guard_result().passed is True
+    with pytest.raises(ValidationError, match="guard predicate failed"):
+        params_cls(scores=[{"value": 0}, {"value": 9}])
+
+
+def test_a_guard_predicate_naming_an_array_without_an_item_field_fails_to_compile():
+    params = ParamsDocument(params_version=1, fields=[
+        ArrayFieldSpec(
+            name="scores", label="Scores", description="",
+            min_items=2, max_items=7,
+            item_fields=[IntegerFieldSpec(
+                name="value", label="V", description="", minimum=0, maximum=100,
+            )],
+        ),
+    ])
+    guard = GuardDocument(predicates=[
+        {"predicate": "positive",
+         "value": {"node": "field_ref", "field": "scores", "index": 0}},
+    ])
+
+    with pytest.raises(DslValidationError) as exc_info:
+        compile_guard(guard, field_contract_for(params))
+
+    assert exc_info.value.code == "array_item_field_required"
+    assert "value" in str(exc_info.value)

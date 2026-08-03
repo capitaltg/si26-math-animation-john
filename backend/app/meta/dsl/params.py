@@ -5,7 +5,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import _evaluate
+from app.meta.dsl.expression import FieldContract, _evaluate
 from app.meta.dsl.guard import CompiledGuard, GuardResult, predicate_expressions
 from app.meta.dsl.limits import MAX_ARRAY_ITEMS, MAX_ENUM_CHOICES, MAX_PARAMS_FIELDS, MAX_STRING_LENGTH
 from app.pipeline.grounding import default_number_tokens
@@ -311,3 +311,21 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
             return derived
 
     return DynamicTemplateParams
+
+
+def field_contract_for(document: ParamsDocument) -> FieldContract:
+    """The expression-visible shape of a params document.
+
+    An `ArrayFieldSpec` materialises as ``list[item_model]``, so an expression
+    reading one needs both an index and the name of a scalar inside the item.
+    Handing compilation only the field names left it unable to require either.
+    """
+    return FieldContract(
+        scalars=frozenset(
+            spec.name for spec in document.fields if spec.type != "array"
+        ),
+        arrays={
+            spec.name: frozenset(item.name for item in spec.item_fields)
+            for spec in document.fields if spec.type == "array"
+        },
+    )

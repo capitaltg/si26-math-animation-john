@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from app.meta.dsl.errors import DslValidationError
-from app.meta.dsl.expression import ExpressionNode, compile_expression
+from app.meta.dsl.expression import ExpressionNode, FieldContract, compile_expression
 from app.meta.dsl.guard import CompiledGuard, GuardDocument, compile_guard
-from app.meta.dsl.params import ParamsDocument, TemplateParamsBase, compile_template_params
+from app.meta.dsl.params import (
+    ParamsDocument, TemplateParamsBase, compile_template_params, field_contract_for,
+)
 from app.pipeline.grounding import check_params_grounded
 
 
@@ -16,6 +18,10 @@ class CompiledDraft:
     answer_expression: ExpressionNode
     known_fields: frozenset[str]
     compiled_guard: CompiledGuard
+    #: The same fields as `known_fields`, but carrying each one's shape so
+    #: compilation can tell a scalar from an array of items. `known_fields` stays
+    #: a plain name set for the validation report and grounding.
+    field_contract: FieldContract = FieldContract()
 
 
 def compile_draft_documents(
@@ -24,15 +30,16 @@ def compile_draft_documents(
     answer_expression: ExpressionNode,
     teaching_plan_document,
 ) -> CompiledDraft:
-    known_fields = frozenset(field.name for field in params_document.fields)
-    compiled_guard = compile_guard(guard_document, known_fields)
+    field_contract = field_contract_for(params_document)
+    compiled_guard = compile_guard(guard_document, field_contract)
     params_cls = compile_template_params(params_document, compiled_guard)
-    compile_expression(answer_expression, known_fields)
+    compile_expression(answer_expression, field_contract)
     return CompiledDraft(
         params_cls=params_cls,
         answer_expression=answer_expression,
-        known_fields=known_fields,
+        known_fields=field_contract.names,
         compiled_guard=compiled_guard,
+        field_contract=field_contract,
     )
 
 

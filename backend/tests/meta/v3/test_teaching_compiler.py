@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.expression import AddNode, FieldRefNode, LiteralNode, MultiplyNode
 from app.meta.dsl.scene_program import (
     DrawAction, MoveAction, RevealAction, SetRoleAction, TransformAction,
 )
@@ -76,6 +76,64 @@ def perimeter_plan():
 
 
 @pytest.fixture
+def published_perimeter_plan():
+    """The shape of the `perimeter` plan actually published to the demo database.
+
+    Two beats name the rectangle, the `organize` beat names a supporting label
+    instead of the rectangle, the `reveal` beat declares its own perimeter
+    trace, and the `conclude` beat names a second label. Every one of those is
+    legal per the plan schema, and each exposed a distinct expander defect.
+    """
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find the perimeter of a rectangle by doubling the sum of its sides.",
+        "primary_visual": {
+            "kind": "rectangle_measurement",
+            "ref": "rect",
+            "length": _field("length"),
+            "width": _field("width"),
+            "unit": "cm",
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "formula_label", "text": "P = 2 x (length + width)"},
+            {"kind": "label", "ref": "answer_label", "text": "Perimeter = 2 x (l + w)"},
+        ],
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "rect"}],
+             "intent": "show the rectangle with both dimensions"},
+            {"id": "reveal_perimeter", "kind": "reveal", "targets": [{"visual_ref": "rect"}],
+             "intent": "trace the boundary to show what perimeter means",
+             "custom_actions": [{"kind": "trace", "path_ref": "rect.perimeter"}]},
+            {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "formula_label"}],
+             "intent": "introduce the perimeter formula"},
+            {"id": "derive", "kind": "derive",
+             "targets": [{"visual_ref": "rect"}, {"visual_ref": "formula_label"}],
+             "intent": "substitute the given length and width into the formula"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "answer_label"}],
+             "intent": "state the final perimeter"},
+        ],
+        "variation_seed": "published-perimeter",
+    })
+
+
+@pytest.fixture
+def perimeter_answer():
+    return MultiplyNode(operands=[
+        LiteralNode(value=2),
+        AddNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+    ])
+
+
+def _reveals_of(program, visual_ref):
+    return [
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == visual_ref for target in entry.action.targets)
+    ]
+
+
+@pytest.fixture
 def answer():
     return FieldRefNode(field="v4")
 
@@ -124,6 +182,98 @@ def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context)
     )
     assert trace < answer_reveal
     assert program.timeline[trace].action.path_ref == "rectangle.perimeter"
+
+
+def test_a_visual_named_by_two_beats_is_revealed_once(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    assert len(_reveals_of(program, "rect")) == 1
+
+
+def test_a_beat_reveals_the_target_it_names(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """The `organize` beat names `formula_label`, so compiling must reveal it.
+
+    The expander's `boundary_trace` branch replaced the beat's own actions with
+    a perimeter trace, so the label the beat named got no action at all and only
+    became visible as a side effect of a later `set_role` -- appearing abruptly,
+    with no fade, four seconds in.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    reveals = _reveals_of(program, "formula_label")
+    assert len(reveals) == 1
+    assert reveals[0].beat_id == "organize"
+
+
+def test_boundary_trace_does_not_duplicate_a_trace_the_plan_declares(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    traces = [entry for entry in program.timeline if entry.action.kind == "trace"]
+    assert [entry.action.path_ref for entry in traces] == ["rect.perimeter"]
+
+
+def test_a_beat_does_not_restate_a_role_the_target_already_holds(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """Every `set_role` must actually change the target's role.
+
+    The renderer plays each one as a colour `Transform`, so re-asserting a role
+    the target already holds animates a recolour from a colour to itself -- a
+    visible mid-lesson flicker that teaches nothing. The rectangle starts
+    `structure`, and `derive` used to re-assert `structure` on it.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    role = next(
+        visual.initial_role for visual in program.visuals if visual.ref == "rect"
+    )
+    for entry in program.timeline:
+        if entry.action.kind != "set_role" or entry.action.target.visual_ref != "rect":
+            continue
+        assert entry.action.role != role, (
+            f"beat {entry.beat_id} restates role {role!r} the rectangle already holds"
+        )
+        role = entry.action.role
+
+
+def test_every_beat_produces_an_observable_state_change(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    """`docs/meta-template-dsl-v3-design.md`: "every beat produces an observable
+    state change".
+
+    `derive` used to fall through to `set_role ... "structure"` on targets that
+    already held `structure`, so the beat's whole allocation was a recolour from
+    a colour to itself. Suppressing that no-op leaves the beat empty, which is
+    idle time the spec forbids -- the beat needs a real state change, and the
+    spec permits `focus` during `derive`.
+    """
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    assert {entry.beat_id for entry in program.timeline} == {
+        beat.id for beat in published_perimeter_plan.beats
+    }
 
 
 def test_pair_elimination_dims_outer_items_before_focusing_middle(
@@ -727,3 +877,153 @@ def test_incompatible_move_hint_names_the_movable_kinds(
     assert failure.hint == (
         "move a whole visual of a movable kind: rectangle_measurement"
     )
+
+
+def _reveal_parts_of_a_revealed_whole_plan():
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read the endpoints of a number line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [_field("a"), _field("b")],
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "reveal_ends", "kind": "reveal", "targets": [
+                {"visual_ref": "line", "part": "marker", "index": 0},
+                {"visual_ref": "line", "part": "marker", "index": 1},
+            ], "intent": "point out the two endpoints"},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "measure the distance between them"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state the distance"},
+        ],
+        "variation_seed": "reveal-ends",
+    })
+
+
+def test_a_beat_naming_parts_already_on_screen_emphasizes_them(compile_context):
+    """A part of a revealed visual is already visible, so revealing it again is a
+    no-op -- but the beat still has to teach something.
+
+    `_line_visual` puts the marker dots inside the group the reveal fades in, so
+    `FadeIn` on one of them changes nothing. Suppressing that left the beat with
+    no actions at all, and a plan whose second beat says "now point out the
+    endpoints" -- entirely reasonable -- was rejected as `beat_without_action`.
+    """
+    plan = _reveal_parts_of_a_revealed_whole_plan()
+    program = compile_teaching_plan(
+        plan, FieldRefNode(field="a"), frozenset({"a", "b"}), compile_context,
+    )
+
+    beat_actions = [entry for entry in program.timeline if entry.beat_id == "reveal_ends"]
+    assert [entry.action.kind for entry in beat_actions] == ["set_role", "set_role"]
+    assert {entry.action.role for entry in beat_actions} == {"focus"}
+    assert {entry.action.target.index for entry in beat_actions} == {0, 1}
+
+
+def test_an_organize_beat_on_an_already_structural_visual_still_acts(compile_context):
+    """`organize` defaults to the `structure` role, which a grid already holds."""
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See multiplication as equal rows.",
+        "primary_visual": {
+            "kind": "grid", "ref": "array",
+            "rows": {"node": "literal", "value": 3},
+            "columns": {"node": "literal", "value": 4},
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+             "intent": "show the array"},
+            {"id": "focus_cell", "kind": "focus",
+             "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+             "intent": "look at a single cell"},
+            {"id": "organize_multiplication", "kind": "organize",
+             "targets": [{"visual_ref": "array"}],
+             "intent": "group the array into equal rows"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+             "intent": "state the product"},
+        ],
+        "variation_seed": "organize-grid",
+    })
+
+    program = compile_teaching_plan(
+        plan, FieldRefNode(field="a"), frozenset({"a"}), compile_context,
+    )
+
+    assert {entry.beat_id for entry in program.timeline} == {beat.id for beat in plan.beats}
+
+
+def _plan_with_custom_reveals(custom_actions):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{i}") for i in range(1, 8)],
+        },
+        "strategy": "pair_elimination",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "show the ordered values together"},
+            {"id": "organize_pairs", "kind": "organize", "targets": [{"visual_ref": "values"}],
+             "intent": "pair values from the outside inward",
+             "custom_actions": custom_actions},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "custom-reveal-tracking",
+    })
+
+
+@pytest.mark.parametrize("target", [
+    {"visual_ref": "values", "part": "item", "index": 3},
+    {"visual_ref": "values"},
+])
+def test_a_custom_reveal_of_something_already_on_screen_emits_nothing(
+    target, answer, compile_context,
+):
+    """Custom reveals must share the expander's revealed-set.
+
+    `_custom_actions` returned a `RevealAction` unconditionally, so an author's
+    `reveal` re-faded a mobject the first beat had already faded in. For a PART
+    that also slipped past `check_repeated_reveal`, which compared whole and part
+    keys as if they were unrelated -- yet the item is a child of the group the
+    whole reveal brought on screen, so fading it again is a visible flicker.
+    """
+    plan = _plan_with_custom_reveals([{"kind": "reveal", "targets": [target]}])
+
+    program = compile_teaching_plan(
+        plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+
+    reveals = [
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal" and entry.beat_id == "organize_pairs"
+    ]
+    assert reveals == []
+
+
+def test_a_custom_reveal_of_an_unrevealed_visual_still_reveals_it(answer, compile_context):
+    """Regression guard: tracking must not swallow a reveal that is doing work."""
+    raw = _plan_with_custom_reveals([]).model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "the middle one"}]
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "reveal", "targets": [{"visual_ref": "caption"}]},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(
+        plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+
+    assert len(_reveals_of(program, "caption")) == 1
