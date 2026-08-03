@@ -44,7 +44,10 @@ class BeatExpander:
         self.answer_expression = answer_expression
 
     def expand(self, plan):
-        visuals = [self._program_visual(spec) for spec in self._visual_specs(plan)]
+        visuals = [
+            self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
+            for spec in self._visual_specs(plan)
+        ]
         visuals.append(AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression))
         initial_roles = {visual.ref: visual.initial_role for visual in visuals}
         # Keyed by `_target_key`, not by bare ref, so a part-level lookup can
@@ -88,8 +91,13 @@ class BeatExpander:
         return [plan.primary_visual, *plan.supporting_visuals]
 
     @staticmethod
-    def _program_visual(spec):
+    def _program_visual(spec, strategy, *, primary):
         program_type, initial_role = _PROGRAM_VISUALS[spec.kind]
+        if primary and spec.kind == "ordered_values" and strategy == "pair_elimination":
+            # Elimination has to read as "these are dismissed", which needs the
+            # items to start in a colour that dimming to `neutral` visibly
+            # leaves. Born `neutral`, every dim is a grey-to-grey transform.
+            initial_role = "structure"
         return program_type.model_validate({**spec.model_dump(), "initial_role": initial_role})
 
     def _standard_actions(

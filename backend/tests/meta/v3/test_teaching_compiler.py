@@ -177,6 +177,25 @@ def test_pair_elimination_program_names_the_median_as_its_answer_anchor(
     }
 
 
+def test_pair_elimination_values_are_born_structure(median_plan, answer, compile_context):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    values, = [visual for visual in program.visuals if visual.ref == "values"]
+    assert values.initial_role == "structure"
+
+
+def test_other_strategies_leave_ordered_values_neutral(median_plan, answer, compile_context):
+    raw = median_plan.model_dump()
+    raw["strategy"] = "short_stagger"
+    program = compile_teaching_plan(
+        TeachingPlanDocument.model_validate(raw), answer,
+        frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+    values, = [visual for visual in program.visuals if visual.ref == "values"]
+    assert values.initial_role == "neutral"
+
+
 def test_other_strategies_declare_no_answer_anchor(perimeter_plan, compile_context):
     program = compile_teaching_plan(
         perimeter_plan,
