@@ -151,7 +151,11 @@ def validate_strategy_compatibility(plan):
     if plan.strategy not in supported:
         _fail(
             "incompatible_strategy", "strategy", "a strategy supported by the visual kind",
-            f"{plan.strategy}:{plan.primary_visual.kind}", "select a compatible strategy",
+            f"{plan.strategy}:{plan.primary_visual.kind}",
+            _enumerate_legal(
+                supported, "select a compatible strategy",
+                "this visual kind supports no strategies",
+            ),
         )
     if plan.strategy == "pair_elimination" and len(plan.primary_visual.values) % 2 == 0:
         _fail(
@@ -179,7 +183,11 @@ def _validate_target(target, specs, path):
     except KeyError:
         _fail(
             "unknown_visual_ref", f"{path}.visual_ref", "a visual declared by the plan",
-            target.visual_ref, "reference the primary or a supporting visual",
+            target.visual_ref,
+            _enumerate_legal(
+                specs, "reference the primary or a supporting visual",
+                "the plan declares no visuals",
+            ),
         )
     if target.part is None:
         return spec
@@ -187,7 +195,11 @@ def _validate_target(target, specs, path):
     if target.part not in parts:
         _fail(
             "unknown_semantic_part", f"{path}.part", "a part exposed by the visual",
-            f"{spec.kind}.{target.part}", "choose a declared semantic part",
+            f"{spec.kind}.{target.part}",
+            _enumerate_legal(
+                parts, "choose a declared semantic part",
+                "this visual exposes no semantic parts",
+            ),
         )
     if target.index is None:
         _fail(
@@ -253,6 +265,12 @@ def _literal_product(left, right):
     if left_value is None or right_value is None:
         return None
     return left_value * right_value
+
+
+def _enumerate_legal(values, prefix, empty):
+    if not values:
+        return empty
+    return f"{prefix}: {', '.join(sorted(values))}"
 
 
 def _fail(code, path, expected, observed, hint):

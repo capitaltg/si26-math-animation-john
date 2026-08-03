@@ -9,6 +9,9 @@ the declarations are mutually consistent and the known gaps are recorded.
 Design: docs/superpowers/specs/2026-08-03-v3-capability-consistency-design.md
 """
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import get_args
 
@@ -104,3 +107,25 @@ _EXPECTED_TABLE_COVERAGE = [
 )
 def test_capability_tables_cover_declared_kinds(table, expected_kinds):
     assert set(table) == expected_kinds
+
+
+def test_hint_enumeration_is_deterministic_across_hash_seeds():
+    # The capability tables hold `set` literals and the expected hint strings in
+    # test_teaching_compiler.py are committed verbatim. Set iteration order is
+    # fixed per process but varies with PYTHONHASHSEED, so an unsorted
+    # enumeration passes every same-process test and flakes in CI. Two seeds,
+    # one expectation.
+    probe = (
+        "from app.meta.v3.compiler import _enumerate_legal; "
+        "print(_enumerate_legal({'zebra', 'apple', 'mango'}, 'pick one', 'none'))"
+    )
+    outputs = {
+        seed: subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        ).stdout.strip()
+        for seed in ("0", "1", "12345")
+    }
+
+    assert set(outputs.values()) == {"pick one: apple, mango, zebra"}

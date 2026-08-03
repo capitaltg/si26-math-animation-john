@@ -421,3 +421,93 @@ def test_timeline_entries_fit_the_declared_total_duration(median_plan, answer, c
         and entry.at_seconds + entry.duration_seconds <= program.total_duration_seconds
         for entry in program.timeline
     )
+
+
+def test_unknown_semantic_part_hint_names_every_legal_part(
+    perimeter_plan, compile_context,
+):
+    raw = perimeter_plan.model_dump()
+    raw["beats"][2]["targets"] = [{"visual_ref": "rectangle", "part": "top", "index": 0}]
+    answer = MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_semantic_part"
+    assert failure.hint == (
+        "choose a declared semantic part: edge, length_edge, vertex, width_edge"
+    )
+
+
+def test_unknown_semantic_part_hint_says_so_when_the_visual_exposes_none(
+    compile_context,
+):
+    raw = {
+        "plan_version": 3,
+        "learning_objective": "A label exposes no semantic parts.",
+        "primary_visual": {"kind": "label", "ref": "caption", "text": "hello"},
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_caption", "kind": "reveal",
+             "targets": [{"visual_ref": "caption"}], "intent": "show the caption"},
+            {"id": "focus_caption", "kind": "focus",
+             "targets": [{"visual_ref": "caption", "part": "text", "index": 0}],
+             "intent": "point at the caption text"},
+            {"id": "state_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "caption"}], "intent": "state the answer"},
+        ],
+        "variation_seed": "label-parts",
+    }
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), FieldRefNode(field="value"),
+            frozenset({"value"}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_semantic_part"
+    assert failure.hint == "this visual exposes no semantic parts"
+
+
+def test_incompatible_strategy_hint_names_the_strategies_the_kind_supports(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["strategy"] = "boundary_trace"
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "incompatible_strategy"
+    assert failure.hint == (
+        "select a compatible strategy: group_reveal, pair_elimination, short_stagger"
+    )
+
+
+def test_unknown_visual_ref_hint_names_the_declared_visuals(
+    median_plan, answer, compile_context,
+):
+    raw = median_plan.model_dump()
+    raw["supporting_visuals"] = [{"kind": "label", "ref": "caption", "text": "middle"}]
+    raw["beats"][0]["targets"] = [{"visual_ref": "missing"}]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(
+            TeachingPlanDocument.model_validate(raw), answer,
+            frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "unknown_visual_ref"
+    assert failure.hint == (
+        "reference the primary or a supporting visual: caption, values"
+    )
