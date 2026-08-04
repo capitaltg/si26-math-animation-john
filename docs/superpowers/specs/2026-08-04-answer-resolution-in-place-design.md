@@ -172,7 +172,29 @@ New `expression_display(node, values) -> str`:
 | `divide` | `a ÷ b` |
 | `fraction` | `a/b` |
 
-Operands are parenthesised when a child binds more loosely than its parent.
+Parenthesisation is minimal and precedence-aware: parens appear only where
+omitting them would make the string mean something the tree does not. The
+expression tree is unambiguous; its flattening to one line is not.
+
+Three precedence tiers:
+
+| tier | nodes |
+|---|---|
+| atom | `literal`, `field_ref`, `fraction` — never parenthesised |
+| tight | `multiply`, `divide` |
+| loose | `add`, `subtract` |
+
+An operand is parenthesised when either condition holds:
+
+1. **Looser than its parent.** `multiply(add(2, 3), 4)` prints
+   `(2 + 3) × 4`; without parens, `2 + 3 × 4` evaluates to 14 rather than 20.
+   The converse needs nothing: `add(multiply(2, 3), 4)` prints `2 × 3 + 4`.
+2. **The right operand of a non-associative parent at equal precedence.**
+   `subtract` and `divide` do not associate, so
+   `subtract(10, subtract(5, 2))` prints `10 - (5 - 2)`; without parens,
+   `10 - 5 - 2` evaluates to 3 rather than 7. Precedence comparison alone does
+   not catch this, because both nodes sit in the same tier.
+   `MAX_EXPRESSION_DEPTH` is 6, so such nesting is legal and must be handled.
 
 Number formatting is not the existing `resolver._format_value`, which renders a
 `Fraction` and would print **`11/4`** for 2.75 (`resolver.py:294`). The new
@@ -258,8 +280,10 @@ Bedrock call.
 
 Written test-first.
 
-- `expression_display`: every node kind; precedence parenthesisation; `2.75`
-  rather than `11/4`; `1/3` falling back to `a/b`
+- `expression_display`: every node kind; a looser child parenthesised
+  (`(2 + 3) × 4`) and a tighter one left bare (`2 × 3 + 4`); the right operand
+  of nested `subtract` and of nested `divide` parenthesised (`10 - (5 - 2)`);
+  `2.75` rather than `11/4`; `1/3` falling back to `a/b`
 - `beat_expander`: stage placement across first / last-derive-or-focus /
   conclude; `work` suppressed for a bare `field_ref` answer;
   `pair_elimination` still declares no answer visual
