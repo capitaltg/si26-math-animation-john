@@ -1213,3 +1213,129 @@ def test_approve_fails_closed_when_token_not_configured(tmp_path, monkeypatch):
     assert "not configured" in resp.json()["detail"]
     get_settings.cache_clear()
     get_settings.cache_clear()
+
+
+# ------------------------------------------------ sharing a teacher's template
+
+
+def _enabled_version(*, version_id, key, name, owner, draft_id=None):
+    with db.meta_session() as session:
+        session.add(models.TemplateVersion(
+            id=version_id, fingerprint_key=key, template_name=name, draft_id=draft_id,
+            artifact_hash="sha256:x", status=models.TEMPLATE_VERSION_ENABLED,
+            owner_session_id=owner, created_at=_now(), updated_at=_now(),
+        ))
+
+
+def _fill_expected_results(draft_id):
+    """Give every positive fixture the derived answer publication requires."""
+    from app.meta.fixture_answers import record_computed_answers
+
+    with db.meta_session() as session:
+        record_computed_answers(session, session.get(models.TemplateDraft, draft_id))
+
+
+def _make_shareable(draft_id):
+    """Bring a draft up to the full shared-publication evidence bar.
+
+    Sharing demands meta_required_fixture_count verified fixtures against
+    distinct real observations, and the seeding helper provides one. This adds
+    the rest rather than lowering the bar, so the promote tests exercise the
+    floor that actually ships.
+    """
+    with db.meta_session() as session:
+        for index in range(1, get_settings().meta_required_fixture_count):
+            observation_id = f"obs-{draft_id}-extra-{index}"
+            session.add(models.FallbackObservation(
+                id=observation_id, candidate_id=f"cand-{observation_id}",
+                source_excerpt="there are 5 apples", grade_level=2,
+                observation_kind="unsupported_shape", excluded=False, created_at=_now(),
+            ))
+            session.flush()
+            session.add(models.TemplateDraftFixture(
+                id=f"{draft_id}-extra-{index}", draft_id=draft_id,
+                observation_id=observation_id, kind="positive", expected_outcome="accept",
+                generation_method="proposed", params_json=json.dumps({"n": 5}),
+                structural_check_passed=True, created_at=_now(),
+            ))
+    _fill_expected_results(draft_id)
+
+
+def test_versions_listing_names_who_owns_each_one(approval_client):
+    draft = _seed_pending_review_draft(observation_id="obs-list")
+    _enabled_version(
+        version_id="tv-own", key="k-own", name="theirs", owner="session-a", draft_id=draft.id
+    )
+    _enabled_version(version_id="tv-shared", key="k-shared", name="everyones", owner=None)
+
+    rows = approval_client.get("/meta/versions").json()
+
+    by_name = {row["template_name"]: row for row in rows}
+    assert by_name["theirs"]["owner_session_id"] == "session-a"
+    assert by_name["everyones"]["owner_session_id"] is None
+
+
+def test_promoting_a_version_shares_it_with_everyone(approval_client):
+    draft = _seed_pending_review_draft(observation_id="obs-promote")
+    _make_shareable(draft.id)
+    _enabled_version(
+        version_id="tv-own", key="k-own", name="theirs", owner="session-a", draft_id=draft.id
+    )
+
+    resp = approval_client.post("/meta/versions/tv-own/promote")
+
+    assert resp.status_code == 200
+    with db.meta_session() as session:
+        version = session.get(models.TemplateVersion, "tv-own")
+        assert version.owner_session_id is None
+        assert version.status == models.TEMPLATE_VERSION_ENABLED
+
+
+def test_promoting_refuses_a_template_with_too_little_evidence(approval_client):
+    """Private approval relaxes the fixture floor; sharing must not inherit that."""
+    draft = _seed_pending_review_draft(observation_id="obs-thin")
+    _enabled_version(
+        version_id="tv-thin", key="k-thin", name="thin", owner="session-a", draft_id=draft.id
+    )
+
+    resp = approval_client.post("/meta/versions/tv-thin/promote")
+
+    assert resp.status_code == 422
+    with db.meta_session() as session:
+        assert session.get(models.TemplateVersion, "tv-thin").owner_session_id == "session-a"
+
+
+def test_promoting_refuses_a_name_another_shared_template_already_holds(approval_client):
+    draft = _seed_pending_review_draft(observation_id="obs-clash")
+    _make_shareable(draft.id)
+    _enabled_version(
+        version_id="tv-own", key="k-own", name="clash", owner="session-a", draft_id=draft.id
+    )
+    _enabled_version(version_id="tv-shared", key="k-other", name="clash", owner=None)
+
+    resp = approval_client.post("/meta/versions/tv-own/promote")
+
+    assert resp.status_code == 409
+    with db.meta_session() as session:
+        assert session.get(models.TemplateVersion, "tv-own").owner_session_id == "session-a"
+
+
+def test_promoting_an_already_shared_version_is_a_conflict(approval_client):
+    _enabled_version(version_id="tv-shared", key="k-shared", name="already", owner=None)
+
+    assert approval_client.post("/meta/versions/tv-shared/promote").status_code == 409
+
+
+def test_promoting_an_unknown_version_is_not_found(approval_client):
+    resp = approval_client.post("/meta/versions/nope/promote")
+
+    assert resp.status_code == 404
+    # Asserting the handler's own message, not just the status: an absent route
+    # would 404 too, and this test would then pass without the route existing.
+    assert "nope" in resp.json()["detail"]
+
+
+def test_promoting_needs_the_reviewer_token(client_without_token):
+    _enabled_version(version_id="tv-own", key="k-own", name="theirs", owner="session-a")
+
+    assert client_without_token.post("/meta/versions/tv-own/promote").status_code == 401
