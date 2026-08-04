@@ -185,6 +185,10 @@ class TeachingPlanDocument(BaseModel):
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison",
     ]
+    #: The unit of the computed result ("meters"), empty when unitless. The
+    #: compiler puts it on the answer visual's suffix; the model authors nothing
+    #: else about answer presentation.
+    answer_unit: ProseText = Field(default="", max_length=20)
     beats: list[TeachingBeat] = Field(min_length=MIN_PLAN_BEATS, max_length=MAX_PLAN_BEATS)
     variation_seed: GeneratedText = Field(min_length=1, max_length=64)
 
