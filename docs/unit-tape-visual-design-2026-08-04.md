@@ -182,8 +182,7 @@ The compiler chooses the staging beat the way `_boundary_trace_beat_id` does,
 with one difference: that helper takes the first beat of any of
 `organize`/`derive`/`focus`, whereas the substitution belongs on the beat that
 does the deriving. So the order of preference is the first `derive` beat, else
-the first `organize`, else the first `focus` — skipped entirely when the plan
-reveals the labels itself. It then appends
+the first `organize`, else the first `focus`. It then appends
 
 ```python
 RevealAction(targets=[TargetRef(visual_ref=ref, part="target_label")], mode="stagger")
@@ -192,6 +191,23 @@ RevealAction(targets=[TargetRef(visual_ref=ref, part="target_label")], mode="sta
 directly, bypassing `_reveal_unrevealed` the way the boundary trace bypasses it.
 `check_strategy_affordance` gains a `unit_substitution` branch that fails when
 that reveal is absent, so the target unit can never go unshown.
+
+The plan may not stage this reveal itself, and a new
+`TeachingPlanDocument.require_unit_substitution_shape` validator rejects any
+`unit_substitution` plan that names `target_label` in a beat target or a custom
+action. Two reasons, both structural rather than stylistic:
+
+- `compiler._validate_target` rejects a plan target that names a part without an
+  index (`missing_semantic_index`), so a plan can only ever reveal
+  `target_label[0]`, `target_label[1]`, … individually. A plan that reveals one
+  index leaves the other boxes' labels invisible while still satisfying an
+  affordance check that merely looks for a reveal.
+- Only the compiler-emitted action can use the group part
+  (`target_label` with no index), because the box count depends on fixture params
+  and is unknown when the plan is written.
+
+This mirrors `require_pair_elimination_shape`: the strategy names a choreography,
+and the compiler owns its staging exclusively.
 
 ### Storyboard
 
@@ -232,10 +248,19 @@ The part that prevents recurrence, applied to every count-driven kind:
   (for conversions), never on a `bar`.
 - The repair `hint` carries the cap and the alternative kind, so a retry is a
   redirection rather than a blind shrink.
-- `number_line` gains tick labels — `format_number` under each marker and its
-  endpoints — so a lesson steered there teaches magnitude instead of showing a
-  bare line. `_measure_number_line` reserves the label space; `_line_visual`
-  draws them.
+- `number_line` gains tick labels — `format_number` under each marker — so a
+  lesson steered there teaches magnitude instead of showing a bare line.
+  `_measure_number_line` reserves a label strip below the line and carries the
+  strings in its payload; the renderer's `markers` branch draws them.
+
+  Markers only, not the endpoints: `renderer._line_visual` draws the line from
+  `bounds.left` to `bounds.right`, so widening the bounds to fit an endpoint
+  label would stretch the line itself. Labelling markers alone keeps the
+  horizontal bounds and the existing `len(parts) == 2` invariant
+  (`test_a_number_line_keeps_a_large_numeric_range`) untouched — the labels are
+  drawn from the payload rather than registered as parts, since nothing needs to
+  address them. A plan wanting the ends labelled adds markers at `minimum` and
+  `maximum`, which the `markers` field description will say.
 
 ## Testing
 
