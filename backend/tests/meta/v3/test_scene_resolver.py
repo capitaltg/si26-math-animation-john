@@ -291,3 +291,42 @@ def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
         assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
         assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
         assert visual.bounds.top <= SAFE_FRAME.top + 1e-9
+
+
+def test_an_answer_expression_resolves_to_three_stages():
+    from app.meta.dsl.scene_program import AnswerProgramVisual
+    from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
+    from app.meta.v3.resolver import evaluate_program_visual
+
+    visual = AnswerProgramVisual(
+        ref="evaluated_answer",
+        expression=MultiplyNode(operands=[
+            FieldRefNode(field="distance_km"), LiteralNode(value=1000),
+        ]),
+        suffix=" meters",
+    )
+
+    spec, payload = evaluate_program_visual(visual, {"distance_km": Fraction(11, 4)})
+
+    assert spec.kind == "answer_expression"
+    assert payload["stages"] == {
+        "unknown": "? meters",
+        "work": "2.75 × 1000 = ? meters",
+        "value": "2.75 × 1000 = 2750 meters",
+    }
+
+
+def test_an_answer_with_no_arithmetic_has_no_work_stage():
+    """A bare field reference has nothing to show, so a work stage would just
+    print the value it is about to resolve to."""
+    from app.meta.dsl.scene_program import AnswerProgramVisual
+    from app.meta.dsl.expression import FieldRefNode
+    from app.meta.v3.resolver import evaluate_program_visual
+
+    visual = AnswerProgramVisual(
+        ref="evaluated_answer", expression=FieldRefNode(field="total"), suffix=" apples",
+    )
+
+    _spec, payload = evaluate_program_visual(visual, {"total": Fraction(7)})
+
+    assert payload["stages"] == {"unknown": "? apples", "value": "7 apples"}

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
@@ -35,6 +35,9 @@ class RenderedScene:
     targets: dict[tuple[str, str | None, int | None], object]
     relations: dict[str, object]
     roles: dict[tuple[str, str | None, int | None], str]
+    #: Answer visual ref -> stage name -> mobject. Deliberately NOT in
+    #: `targets`: a plan may address the answer, never one of its stages.
+    answer_stages: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene:
@@ -82,16 +85,26 @@ def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
     visuals: dict[str, object] = {}
     targets: dict[tuple[str, str | None, int | None], object] = {}
     roles: dict[tuple[str, str | None, int | None], str] = {}
+    answer_stages: dict[str, dict[str, object]] = {}
     for placed in scene.visuals:
-        root, children = _build_visual(placed, palette)
+        payload = placed.measured.payload
+        if isinstance(payload, dict) and "stages" in payload:
+            root, stages = _build_answer_stages(placed, palette)
+            answer_stages[placed.measured.ref] = stages
+            children = {}
+        else:
+            root, children = _build_visual(placed, palette)
         visuals[placed.measured.ref] = root
         targets[(placed.measured.ref, None, None)] = root
         targets.update({(placed.measured.ref, part, index): child for (part, index), child in children.items()})
-        role = _initial_role(placed.measured.ref, placed.measured.payload)
+        role = _initial_role(placed.measured.ref, payload)
         roles[(placed.measured.ref, None, None)] = role
         roles.update({(placed.measured.ref, part, index): role for part, index in children})
     relations = {relation.ref: _build_relation(relation, palette) for relation in scene.relations}
-    return RenderedScene(visuals=visuals, targets=targets, relations=relations, roles=roles)
+    return RenderedScene(
+        visuals=visuals, targets=targets, relations=relations, roles=roles,
+        answer_stages=answer_stages,
+    )
 
 
 _COMPOSITIONS: dict[str, Callable[[ResolvedScene, str], RenderedScene]] = {
@@ -207,6 +220,23 @@ def _build_visual(placed, palette: str):
     return root, children
 
 
+def _build_answer_stages(placed, palette: str):
+    """One Text per stage, all centred on the same point.
+
+    Every stage is built up front because `Transform` needs a target mobject to
+    morph into, and only the `unknown` stage is ever added to the scene: the
+    transitions mutate that one mobject rather than adding new ones.
+    """
+    style = resolve_semantic_style(palette, _initial_role(placed.measured.ref, placed.measured.payload))
+    stages = {
+        stage: _text(text, "label", placed.bounds.center, placed.scale)
+        for stage, text in placed.measured.payload["stages"].items()
+    }
+    for mobject in stages.values():
+        _apply_style(mobject, style)
+    return stages["unknown"], stages
+
+
 def _initial_role(ref: str, payload) -> str:
     """The role a visual is drawn in before any `set_role` plays.
 
@@ -220,7 +250,7 @@ def _initial_role(ref: str, payload) -> str:
     declared = payload.get("initial_role") if isinstance(payload, dict) else None
     if declared is not None:
         return declared
-    if ref == "evaluated_answer" or "values" in payload or "text" in payload:
+    if ref == "evaluated_answer" or "stages" in payload or "values" in payload or "text" in payload:
         return "neutral"
     return "structure"
 
@@ -405,6 +435,12 @@ def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, p
         return Transform(_target_mobject(rendered, action.targets[0].ref), _target_mobject(rendered, action.targets[1].ref))
     if kind == "move":
         return build_move_along_path(_target_mobject(rendered, action.targets[0].ref), _path_mobject(action.path))
+    if kind == "show_answer_stage":
+        target = action.targets[0].ref
+        return Transform(
+            _target_mobject(rendered, target),
+            rendered.answer_stages[target.visual_ref][action.action.stage],
+        )
     raise ValueError(f"unsupported resolved action {kind}")
 
 

@@ -3,17 +3,46 @@ from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
-from manim import Line, Text
+from manim import FadeIn, Line, Text
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.scene_program import StyleRecipeDocument
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import _PART_CARDINALITY, compile_teaching_plan
-from app.meta.v3.geometry import PlacedVisual, Point
+from app.meta.v3.geometry import Bounds, PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
 from app.meta.v3.renderer import _build_visual, render_resolved_scene
-from app.meta.v3.resolver import resolve_scene
+from app.meta.v3.resolver import ResolvedAction, ResolvedScene, ResolvedTarget, resolve_scene
 from app.meta.v3.visual_registry import default_visual_registry
+
+
+def _reveal(mobject):
+    """Stand-in `motion` callback for tests that never actually play a reveal."""
+    return FadeIn(mobject)
+
+
+def _resolved_scene_with(visuals: list[PlacedVisual]) -> ResolvedScene:
+    return ResolvedScene(
+        visuals=visuals,
+        relations=[],
+        timeline=[],
+        total_duration_seconds=1.0,
+        style_recipe=StyleRecipeDocument(
+            palette="ocean", composition="vertical_lesson", motion_variant="smooth",
+        ),
+    )
+
+
+def _resolved_action_for(action) -> ResolvedAction:
+    return ResolvedAction(
+        at_seconds=0.0,
+        duration_seconds=1.0,
+        beat_id="beat",
+        action=action,
+        targets=[ResolvedTarget(ref=action.target, bounds=Bounds(0, 0, 0, 0))],
+        path=None,
+    )
 
 
 class LiteralTextMeasurer:
@@ -414,3 +443,37 @@ def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edge
         if isinstance(submobject, Line)
     ]
     assert len(lines) == 4
+
+
+def test_the_answer_renders_every_stage_and_transforms_between_them():
+    """The unknown stage is the mobject on screen; the transitions mutate it in
+    place, so `dynamic_render_worker._answer_visible` keeps finding the same
+    mobject in the final frame."""
+    from manim import Transform
+
+    from app.meta.dsl.scene_program import ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.geometry import Bounds, MeasuredVisual, PlacedVisual, Point
+    from app.meta.v3.renderer import _action_animation, _build_vertical_lesson
+
+    stages = {"unknown": "? m", "work": "2 × 3 = ? m", "value": "2 × 3 = 6 m"}
+    measured = MeasuredVisual(
+        ref="evaluated_answer",
+        bounds=Bounds(-1, 1, -0.2, 0.2),
+        parts={},
+        paths={},
+        payload={"stages": stages},
+    )
+    scene = _resolved_scene_with([PlacedVisual(measured, Point(0, 0), 1.0)])
+
+    rendered = _build_vertical_lesson(scene, "ocean")
+
+    assert set(rendered.answer_stages["evaluated_answer"]) == {"unknown", "work", "value"}
+    assert rendered.visuals["evaluated_answer"] is (
+        rendered.answer_stages["evaluated_answer"]["unknown"]
+    )
+
+    action = _resolved_action_for(
+        ShowAnswerStageAction(target=TargetRef(visual_ref="evaluated_answer"), stage="work"),
+    )
+    assert isinstance(_action_animation(action, rendered, _reveal, "ocean"), Transform)

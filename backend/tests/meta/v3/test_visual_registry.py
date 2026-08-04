@@ -171,3 +171,23 @@ def test_a_number_line_keeps_a_large_numeric_range():
 
     assert visual.bounds.right - visual.bounds.left < 19
     assert len(visual.parts) == 2
+
+
+def test_the_answer_visual_is_measured_at_its_widest_stage():
+    """Layout has to reserve the final width, or the statement reflows mid-scene."""
+    from app.meta.v3.visual_registry import default_visual_registry
+
+    spec = type("Spec", (), {"kind": "answer_expression", "ref": "evaluated_answer"})()
+    stages = {
+        "unknown": "? m",
+        "work": "2.75 × 1000 = ? m",
+        "value": "2.75 × 1000 = 2750 m",
+    }
+
+    measured = default_visual_registry().measure(
+        spec, {"stages": stages}, LiteralTextMeasurer(),
+    )
+
+    widest, _height = LiteralTextMeasurer().measure(stages["value"], "label")
+    assert measured.bounds.right - measured.bounds.left == pytest.approx(widest)
+    assert measured.payload["stages"] == stages
