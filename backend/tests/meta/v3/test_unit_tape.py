@@ -117,6 +117,113 @@ def test_a_tape_at_the_cap_still_measures():
     assert len(measured.payload["boxes"]) == 8
 
 
+def _tape_plan(strategy="unit_substitution", extra_beat_actions=None):
+    """A four-beat conversion lesson: orient, name the rate, derive, conclude."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Convert a distance in kilometres to metres.",
+        "primary_visual": {
+            "kind": "unit_tape", "ref": "trail_tape",
+            "value": {"node": "field_ref", "field": "distance_km"},
+            "per_unit": {"node": "literal", "value": 1000},
+            "source_unit": "km", "target_unit": "m",
+        },
+        "strategy": strategy,
+        "answer_unit": "meters",
+        "variation_seed": "trail_conversion",
+        "beats": [
+            {"id": "show_tape", "kind": "orient",
+             "targets": [{"visual_ref": "trail_tape"}],
+             "intent": "Show the trail as whole kilometres and part of one."},
+            {"id": "name_rate", "kind": "focus",
+             "targets": [{"visual_ref": "trail_tape", "part": "box", "index": 0}],
+             "intent": "One kilometre is one thousand metres.",
+             "custom_actions": extra_beat_actions or [
+                 {"kind": "callout",
+                  "target": {"visual_ref": "trail_tape", "part": "box", "index": 0, "anchor": "bottom"},
+                  "text": "1 km = 1000 m"},
+             ]},
+            {"id": "rename_boxes", "kind": "derive",
+             "targets": [{"visual_ref": "trail_tape"}],
+             "intent": "Name every box in metres."},
+            {"id": "state_total", "kind": "conclude",
+             "targets": [{"visual_ref": "trail_tape"}],
+             "intent": "Add the metres to get the total."},
+        ],
+    })
+
+
+def _answer_expression():
+    """distance_km x 1000, the metres the lesson concludes with."""
+    from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
+
+    return MultiplyNode(operands=[
+        FieldRefNode(field="distance_km"), LiteralNode(value=1000),
+    ])
+
+
+def _compile(plan):
+    from app.meta.dsl.v3_common import CompileContext
+    from app.meta.v3.compiler import compile_teaching_plan
+
+    return compile_teaching_plan(
+        plan,
+        _answer_expression(),
+        frozenset({"distance_km"}),
+        CompileContext(concept_family="transform_other", grade_band="3-5"),
+    )
+
+
+def test_a_tape_plan_compiles_to_a_scene_program():
+    program = _compile(_tape_plan())
+
+    assert [visual.kind for visual in program.visuals] == ["unit_tape", "answer_expression"]
+
+
+def test_unit_substitution_is_rejected_on_another_visual_kind():
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan().model_dump()
+    payload["primary_visual"] = {
+        "kind": "bar", "ref": "trail_tape",
+        "value": {"node": "literal", "value": 3},
+        "maximum": {"node": "literal", "value": 5},
+    }
+    payload["beats"][1]["custom_actions"] = []
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "segment", "index": 0},
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile(TeachingPlanDocument.model_validate(payload))
+
+    assert exc_info.value.failure.code == "incompatible_strategy"
+
+
+def test_a_plan_may_not_stage_the_substitution_itself():
+    """`unit_substitution` is a choreography the compiler owns.
+
+    `compiler._validate_target` requires an index for any part target, so a plan
+    could only ever reveal `target_label[0]` -- leaving the other boxes' labels
+    invisible while an affordance check still saw a reveal. Only the compiler can
+    name the group part, whose box count is unknown until fixture params arrive.
+    Same division of labour as `require_pair_elimination_shape`.
+    """
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    from pydantic import ValidationError
+
+    payload = _tape_plan().model_dump()
+    payload["beats"][1]["custom_actions"] = [
+        {"kind": "reveal",
+         "targets": [{"visual_ref": "trail_tape", "part": "target_label", "index": 0}]},
+    ]
+
+    with pytest.raises(ValidationError, match="target_label"):
+        TeachingPlanDocument.model_validate(payload)
+
+
 def test_the_tape_factory_never_runs_for_an_oversized_value():
     """The guard runs before the factory, as it does for `bar`."""
     from types import SimpleNamespace

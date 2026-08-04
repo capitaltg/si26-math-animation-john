@@ -250,7 +250,7 @@ class TeachingPlanDocument(BaseModel):
     supporting_visuals: list[SemanticVisualSpec] = Field(default_factory=list, max_length=4)
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
-        "partition", "regroup", "magnitude_comparison",
+        "partition", "regroup", "magnitude_comparison", "unit_substitution",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
@@ -340,4 +340,39 @@ class TeachingPlanDocument(BaseModel):
                         "item; pair_elimination stages its own elimination, so remove the "
                         "custom action"
                     )
+        return self
+
+    @model_validator(mode="after")
+    def require_unit_substitution_shape(self):
+        """`unit_substitution` is staged by the compiler, not written by the plan.
+
+        The compiler reveals every `target_label` at the derive beat using the
+        visual's group part. A plan cannot express that: `_validate_target`
+        requires an index for a part target, so a plan reveal could only name one
+        box's label and would leave the rest unrevealed while still looking like
+        an affordance. Same reasoning as `require_pair_elimination_shape`.
+        """
+        if self.strategy != "unit_substitution":
+            return self
+        for beat in self.beats:
+            targets = [
+                *beat.targets,
+                *(
+                    target
+                    for action in beat.custom_actions
+                    for target in (
+                        *getattr(action, "targets", ()),
+                        *(
+                            getattr(action, attribute)
+                            for attribute in ("target", "source")
+                            if getattr(action, attribute, None) is not None
+                        ),
+                    )
+                ),
+            ]
+            if any(target.part == "target_label" for target in targets):
+                raise ValueError(
+                    f"beat {beat.id!r} names target_label, which unit_substitution "
+                    "stages on its own; remove the target or the custom action"
+                )
         return self

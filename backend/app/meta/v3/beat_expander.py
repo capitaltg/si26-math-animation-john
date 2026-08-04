@@ -6,6 +6,7 @@ from app.meta.dsl.scene_program import (
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
     ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
     ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
+    UnitTapeProgramVisual,
 )
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.expression_display import has_operation
@@ -29,6 +30,7 @@ _PROGRAM_VISUALS = {
     "bar": (BarProgramVisual, "structure"),
     "object_set": (ObjectSetProgramVisual, "structure"),
     "label": (LabelProgramVisual, "neutral"),
+    "unit_tape": (UnitTapeProgramVisual, "structure"),
 }
 
 _BEAT_TIMING = {
