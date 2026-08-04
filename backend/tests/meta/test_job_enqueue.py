@@ -290,12 +290,19 @@ def test_on_demand_enqueue_allows_a_build_another_session_owns_privately(session
     assert job.owner_session_id == "session-a"
 
 
-def test_on_demand_enqueue_refuses_while_another_job_is_active(session):
+def test_on_demand_enqueue_refuses_while_this_sessions_job_is_active(session):
+    """Scoped to the asking session.
+
+    This originally seeded another session's job and expected a refusal, which
+    encoded a real defect: one teacher's private build then blocked every other
+    session's request for the same shape, terminally. The refusal belongs to the
+    owner's own in-flight work.
+    """
     _seed_cluster(session, "k1", 1)
     session.add(models.GenerationJob(
         id="running-job", fingerprint_key="k1", fingerprint_version=1,
         fingerprint_json="{}", trigger_observation_ids="[]",
-        status=models.JOB_RUNNING, attempt=0, owner_session_id="session-b",
+        status=models.JOB_RUNNING, attempt=0, owner_session_id="session-a",
         created_at=_now(), updated_at=_now(),
     ))
     session.flush()
@@ -335,3 +342,66 @@ def test_on_demand_enqueue_retries_after_generation_needed_manual_authoring(sess
 
     assert job is not None
     assert job.attempt == 0
+
+
+def test_two_sessions_can_build_the_same_shape_at_once(session):
+    """One teacher's private build must not block another's.
+
+    has_active_job was global per fingerprint, so a second session asking for the
+    same shape was refused -- and that refusal is terminal in the band, which
+    then offers no way back. Ownership is the isolation boundary everywhere else
+    in this design; the active-job check has to honour it too.
+    """
+    _seed_cluster(session, "k1", 1)
+    session.add(models.GenerationJob(
+        id="job-b", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", trigger_observation_ids="[]",
+        status=models.JOB_RUNNING, attempt=0, owner_session_id="session-b",
+        created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    job = _on_demand(session, owner="session-a", new_id="job-a")
+
+    assert job is not None
+    assert job.owner_session_id == "session-a"
+
+
+def test_one_session_cannot_queue_the_same_shape_twice(session):
+    _seed_cluster(session, "k1", 1)
+    first = _on_demand(session, owner="session-a", new_id="job-1")
+    assert first is not None
+
+    assert _on_demand(session, owner="session-a", new_id="job-2") is None
+
+
+def test_a_teachers_build_does_not_block_the_threshold_path(session):
+    """The ownerless queue is its own scope.
+
+    A threshold-triggered job is owned by nobody, so it must be gated by other
+    ownerless jobs -- not by whatever a teacher happens to be building.
+    """
+    ids = _seed_cluster(session, "k1", 5)
+    _on_demand(session, owner="session-a", new_id="job-teacher", ids=ids)
+
+    job = jobs.evaluate_and_enqueue(
+        session, fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids=ids, threshold=5, new_id="job-threshold", now=_now(),
+    )
+
+    assert job is not None
+    assert job.owner_session_id is None
+
+
+def test_the_threshold_path_still_blocks_on_its_own_active_job(session):
+    ids = _seed_cluster(session, "k1", 5)
+    first = jobs.evaluate_and_enqueue(
+        session, fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids=ids, threshold=5, new_id="job-1", now=_now(),
+    )
+    assert first is not None
+
+    assert jobs.evaluate_and_enqueue(
+        session, fingerprint_key="k1", fingerprint_version=1, fingerprint_json="{}",
+        trigger_observation_ids=ids, threshold=5, new_id="job-2", now=_now(),
+    ) is None

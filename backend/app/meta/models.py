@@ -83,6 +83,7 @@ class GenerationJob(Base):
         Index(
             "uq_active_job_per_fingerprint",
             "fingerprint_key",
+            text_owner_scope(),
             unique=True,
             sqlite_where=text_status_active(),
         ),

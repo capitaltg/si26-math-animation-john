@@ -1339,3 +1339,20 @@ def test_promoting_needs_the_reviewer_token(client_without_token):
     _enabled_version(version_id="tv-own", key="k-own", name="theirs", owner="session-a")
 
     assert client_without_token.post("/meta/versions/tv-own/promote").status_code == 401
+
+
+def test_promoting_refuses_a_name_a_teacher_holds_privately(approval_client):
+    """Sharing a name a session already owns privately would give that session
+    two live templates under one name."""
+    draft = _seed_pending_review_draft(observation_id="obs-private-clash")
+    _make_shareable(draft.id)
+    _enabled_version(
+        version_id="tv-own", key="k-own", name="clash", owner="session-a", draft_id=draft.id
+    )
+    _enabled_version(version_id="tv-other", key="k-other", name="clash", owner="session-b")
+
+    resp = approval_client.post("/meta/versions/tv-own/promote")
+
+    assert resp.status_code == 409
+    with db.meta_session() as session:
+        assert session.get(models.TemplateVersion, "tv-own").owner_session_id == "session-a"

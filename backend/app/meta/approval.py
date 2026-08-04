@@ -20,7 +20,7 @@ import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
@@ -51,6 +51,45 @@ def _same_owner(owner_session_id: str | None):
     if owner_session_id is None:
         return TemplateVersion.owner_session_id.is_(None)
     return TemplateVersion.owner_session_id == owner_session_id
+
+
+def _name_is_reserved(session, template_name: str, owner_session_id: str | None) -> bool:
+    """Whether publishing under this name would collide inside someone's snapshot.
+
+    The invariant a snapshot depends on: for any session S, the shared versions
+    plus S's own private versions must have unique template names. Anything else
+    puts two identical keys into one dict, where query order silently decides
+    which template the name resolves to.
+
+    That makes the check asymmetric:
+
+    - publishing privately collides with a shared name (both are in *our* own
+      snapshot) or with one of our own names;
+    - publishing shared collides with another shared name, or with a name *any*
+      session holds privately, since that session's snapshot would then hold two.
+
+    Two different teachers may still choose the same private name: neither can
+    see the other, so no single snapshot contains both.
+    """
+    scope = (
+        # Sharing: every private holder of this name is a conflict.
+        TemplateVersion.id.isnot(None)
+        if owner_session_id is None
+        else or_(
+            TemplateVersion.owner_session_id.is_(None),
+            TemplateVersion.owner_session_id == owner_session_id,
+        )
+    )
+    taken = session.execute(
+        select(func.count())
+        .select_from(TemplateVersion)
+        .where(
+            TemplateVersion.template_name == template_name,
+            TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+            scope,
+        )
+    ).scalar_one()
+    return bool(taken)
 
 
 class ApprovalError(Exception):
@@ -216,20 +255,23 @@ def approve_draft_service(
                 raise TemplateNameConflictError(
                     f"Invalid template name {template_name!r}"
                 )
-            # Scoped to the same owner: two teachers may independently settle on
-            # the same obvious name for their own private template, and neither
-            # can see the other's.
-            name_collision = session.execute(
+            # Scoped so that no session can end up seeing two live templates
+            # under one name; see _name_is_reserved for why this is asymmetric.
+            # Re-publishing the same fingerprint under its existing name is a
+            # replacement, not a collision, so it is excluded first.
+            replaces_own = session.execute(
                 select(func.count())
                 .select_from(TemplateVersion)
                 .where(
                     TemplateVersion.template_name == template_name,
                     TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
-                    TemplateVersion.fingerprint_key != draft.fingerprint_key,
+                    TemplateVersion.fingerprint_key == draft.fingerprint_key,
                     _same_owner(owner_session_id),
                 )
             ).scalar_one()
-            if name_collision:
+            if not replaces_own and _name_is_reserved(
+                session, template_name, owner_session_id
+            ):
                 raise TemplateNameConflictError(
                     f"Template name {template_name!r} is already in use"
                 )

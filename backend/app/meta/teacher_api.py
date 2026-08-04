@@ -284,23 +284,43 @@ def _build_out(db_session, request: TemplateRequest, now: datetime) -> BuildOut:
     )
 
 
-@router.get("/capabilities", response_model=CapabilitiesOut)
-def capabilities():
+def _feature_is_complete() -> bool:
     """Whether a teacher can complete the whole loop, not merely start it.
 
     All four flags, because any one of them off leaves a dead end: without
-    codegen nothing generates, without approval the approve route refuses, and
-    without the dynamic classifier an approved template never reaches /options.
+    codegen nothing drains the queue, without approval the approve route
+    refuses, and without the dynamic classifier an approved template never
+    reaches /options.
     """
     settings = get_settings()
-    return CapabilitiesOut(
-        enabled=bool(
-            settings.meta_templates_enabled
-            and settings.meta_codegen_enabled
-            and settings.meta_approval_enabled
-            and settings.meta_dynamic_classifier_enabled
-        )
+    return bool(
+        settings.meta_templates_enabled
+        and settings.meta_codegen_enabled
+        and settings.meta_approval_enabled
+        and settings.meta_dynamic_classifier_enabled
     )
+
+
+def _require_complete_feature() -> None:
+    """Refuse a mutation the deployment cannot see through.
+
+    The same gate GET /capabilities reports, so the button a teacher is shown and
+    the work the server accepts can never disagree. Reads are deliberately not
+    gated: looking at what already exists is always safe.
+    """
+    if not _feature_is_complete():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Building new visuals is not fully enabled in this environment, so "
+                "this would not finish"
+            ),
+        )
+
+
+@router.get("/capabilities", response_model=CapabilitiesOut)
+def capabilities():
+    return CapabilitiesOut(enabled=_feature_is_complete())
 
 
 @router.post("/builds", status_code=202)
@@ -316,6 +336,7 @@ def request_build(
     something to report immediately.
     """
     session = _session(session_id)
+    _require_complete_feature()
     candidate = session.candidates.get(request.candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail=f"Unknown candidate {request.candidate_id}")
@@ -353,6 +374,39 @@ def list_builds(session_id: str | None = Cookie(default=None)):
             _build_out(db_session, request, now)
             for request in session.template_requests.values()
         ]
+
+
+#: A build the teacher may clear away: it has finished without leaving anything
+#: to judge. `ready` and `approved` are excluded because there is a draft to act
+#: on, and the in-flight stages because clearing one would orphan a queued job
+#: and hide it from the only session that owns it.
+CLEARABLE_STAGES = frozenset({STAGE_FAILED, STAGE_NEEDS_MANUAL, STAGE_ALREADY_AVAILABLE})
+
+
+@router.delete("/builds/{candidate_id}", status_code=204)
+def clear_build(candidate_id: str, session_id: str | None = Cookie(default=None)):
+    """Forget a finished-but-empty attempt so the teacher can ask again.
+
+    Without this no terminal state has a way out: the band drops the entry button
+    for any candidate that has a build record, so a build that failed -- or was
+    refused because a template already existed -- would be the last word on that
+    problem for the life of the session.
+    """
+    session = _session(session_id)
+    request = session.template_requests.get(candidate_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail=f"No build requested for {candidate_id}")
+
+    with meta_session() as db_session:
+        stage, _job, _draft = _stage_for(db_session, request)
+    if stage not in CLEARABLE_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This build is {stage}; it cannot be cleared away",
+        )
+
+    del session.template_requests[candidate_id]
+    return None
 
 
 @router.get("/drafts/{draft_id}", response_model=DraftOut)
@@ -410,8 +464,7 @@ def approve(
     draft_id: str, request: ApproveIn, session_id: str | None = Cookie(default=None)
 ):
     session = _session(session_id)
-    if not get_settings().meta_approval_enabled:
-        raise HTTPException(status_code=409, detail="Approval is disabled in this environment")
+    _require_complete_feature()
     with meta_session() as db_session:
         draft = _owned_draft(db_session, draft_id, session.session_id)
         # Approval precondition 8 needs each grounded fixture's expected answer
@@ -450,6 +503,7 @@ def reject(
     A reason is required: it is the only thing the next attempt has to work from.
     """
     session = _session(session_id)
+    _require_complete_feature()
     if not request.feedback.strip():
         raise HTTPException(
             status_code=422, detail="Say what is wrong so the next attempt can fix it"

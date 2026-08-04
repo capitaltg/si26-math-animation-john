@@ -833,3 +833,93 @@ def test_re_approving_for_one_owner_disables_that_owners_prior_version(engine, s
     assert check.query(models.TemplateVersion).filter_by(template_name="second").one().status == (
         TEMPLATE_VERSION_ENABLED
     )
+
+
+# ------------------------------- names across the shared/private boundary
+#
+# The invariant: for any session S, {shared versions} union {S's private
+# versions} must have unique template_names. Anything else puts two identical
+# keys into one session's snapshot dict, where query order silently decides
+# which template that name resolves to.
+
+
+def test_a_private_approval_cannot_take_a_shared_name(engine, session):
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-shared", template_name="pair_elimination", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+
+    with pytest.raises(TemplateNameConflictError):
+        approve_draft_service(
+            draft_id="draft-own", template_name="pair_elimination",
+            reviewer_label="teacher", math_semantics_confirmed=True,
+            owner_session_id="session-a",
+        )
+
+
+def test_a_shared_approval_cannot_take_a_name_a_teacher_holds(engine, session):
+    """The same collision from the other side.
+
+    A shared version taking a name some session already holds privately would
+    give that one session two templates under one name.
+    """
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+
+    approve_draft_service(
+        draft_id="draft-own", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    with pytest.raises(TemplateNameConflictError):
+        approve_draft_service(
+            draft_id="draft-shared", template_name="pair_elimination",
+            reviewer_label="dev", math_semantics_confirmed=True, owner_session_id=None,
+        )
+
+
+def test_two_teachers_may_still_share_a_name_with_each_other(engine, session):
+    """Unchanged, and safe: neither can see the other, so no snapshot holds both."""
+    _seed_draft(session, draft_id="draft-a", fingerprint_key="k-a", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-b", fingerprint_key="k-b", job_owner="session-b")
+
+    approve_draft_service(
+        draft_id="draft-a", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+    approve_draft_service(
+        draft_id="draft-b", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-b",
+    )
+
+    check = _fresh(engine)
+    assert check.query(models.TemplateVersion).filter_by(
+        template_name="pair_elimination", status=TEMPLATE_VERSION_ENABLED
+    ).count() == 2
+
+
+def test_a_disabled_version_does_not_reserve_its_name(engine, session):
+    """Only live versions can collide in a snapshot."""
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-shared", template_name="pair_elimination", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+    with _fresh(engine) as disabler:
+        version = disabler.query(models.TemplateVersion).filter_by(
+            template_name="pair_elimination"
+        ).one()
+        version.status = TEMPLATE_VERSION_DISABLED
+        disabler.commit()
+
+    version = approve_draft_service(
+        draft_id="draft-own", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    assert version.owner_session_id == "session-a"

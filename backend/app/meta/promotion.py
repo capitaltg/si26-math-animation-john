@@ -94,6 +94,24 @@ def promote_version(version_id: str) -> TemplateVersion:
                     f"A shared template is already called {version.template_name!r}"
                 )
 
+            # A shared name reaches every session, so any *other* session holding
+            # it privately would end up seeing two live templates under one name.
+            privately_held = session.execute(
+                select(func.count())
+                .select_from(TemplateVersion)
+                .where(
+                    TemplateVersion.template_name == version.template_name,
+                    TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+                    TemplateVersion.owner_session_id.isnot(None),
+                    TemplateVersion.id != version.id,
+                )
+            ).scalar_one()
+            if privately_held:
+                raise PromotionNameConflictError(
+                    f"Another teacher's own template is called {version.template_name!r}; "
+                    "rename one of them before sharing"
+                )
+
             fingerprint_taken = session.execute(
                 select(func.count())
                 .select_from(TemplateVersion)

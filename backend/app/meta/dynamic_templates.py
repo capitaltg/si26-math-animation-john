@@ -6,6 +6,7 @@ those DB rows to the same `(scene_cls, params_cls)` shape that
 `app.templates.registry.get_template` returns for a static (enum) template.
 """
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import TypeAdapter
@@ -30,6 +31,8 @@ from app.models.scene import (
     TemplateRef,
     TemplateVersionMismatchError,
 )
+
+logger = logging.getLogger(__name__)
 
 # Same deserialization pattern as app/meta/drafts.py:_ExpressionAdapter and
 # app/meta/validation_pipeline.py:_ExpressionAdapter -- ExpressionNode is a
@@ -90,16 +93,34 @@ def load_enabled_snapshot(
     owned_fingerprints = {
         version.fingerprint_key for version, _ in rows if version.owner_session_id is not None
     }
-    entries = {
-        version.template_name: DynamicSnapshotEntry(
-            version_id=version.id,
-            artifact_hash=version.artifact_hash,
-            classifier_bullet=classifier_bullet,
-        )
+    visible = [
+        (version, classifier_bullet)
         for version, classifier_bullet in rows
         if version.owner_session_id is not None
         or version.fingerprint_key not in owned_fingerprints
-    }
+    ]
+
+    # Shared first, then the caller's own, so an owned version always wins a
+    # name collision rather than whichever row the query happened to return
+    # last. approve_draft_service refuses to create such a collision in the
+    # first place; this keeps the resolution deterministic for rows written
+    # before that check existed, and for any future path that misses it.
+    entries: dict[str, DynamicSnapshotEntry] = {}
+    for owned in (False, True):
+        for version, classifier_bullet in visible:
+            if (version.owner_session_id is not None) is not owned:
+                continue
+            if owned and version.template_name in entries:
+                logger.warning(
+                    "Template name %r is held by both a shared and a private version; "
+                    "resolving to the caller's own version %s",
+                    version.template_name, version.id,
+                )
+            entries[version.template_name] = DynamicSnapshotEntry(
+                version_id=version.id,
+                artifact_hash=version.artifact_hash,
+                classifier_bullet=classifier_bullet,
+            )
     return EnabledSnapshot(_entries=entries)
 
 

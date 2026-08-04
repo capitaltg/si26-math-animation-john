@@ -5,6 +5,7 @@ import {
   IconCheck,
   IconCross,
   IconPending,
+  IconRedo,
   IconSeedling,
   IconWorking,
 } from './Icons'
@@ -140,6 +141,17 @@ function Attempts({ attempts }) {
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+function ClearAction({ build, busy, onClear }) {
+  return (
+    <div className="actions">
+      <button className="btn" disabled={busy} onClick={() => onClear(build)}>
+        <IconRedo size={16} />
+        Try this problem again
+      </button>
     </div>
   )
 }
@@ -380,6 +392,29 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     }
   }
 
+  // Every terminal-but-empty state needs a way out: the entry offer below is
+  // hidden for any candidate that has a build record, so without this a failed
+  // or refused build would be the last word on that problem for the session.
+  async function clearBuild(build) {
+    setError(null)
+    setBusy(true)
+    try {
+      const resp = await fetch(`/meta/my/builds/${build.candidate_id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!resp.ok) {
+        const data = await responseJson(resp)
+        throw new Error(errorFrom(data, 'Could not clear this attempt'))
+      }
+      setBuilds((current) => current.filter((entry) => entry.candidate_id !== build.candidate_id))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function rejectDraft(build, feedback) {
     setError(null)
     setBusy(true)
@@ -476,19 +511,25 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
                 onReject={(feedback) => rejectDraft(build, feedback)}
               />
             ) : BENIGN_ENDINGS.has(build.stage) ? (
-              <div className="notice notice--fallback">
-                <IconCard />
-                <p className="notice__body">
-                  {build.error || 'No new visual was built for this problem.'}
-                </p>
-              </div>
+              <>
+                <div className="notice notice--fallback">
+                  <IconCard />
+                  <p className="notice__body">
+                    {build.error || 'No new visual was built for this problem.'}
+                  </p>
+                </div>
+                <ClearAction build={build} busy={busy} onClear={clearBuild} />
+              </>
             ) : build.stage === 'failed' ? (
-              <div className="notice notice--danger" role="alert">
-                <IconAlert />
-                <p className="notice__body">
-                  {build.error || 'This visual could not be built.'}
-                </p>
-              </div>
+              <>
+                <div className="notice notice--danger" role="alert">
+                  <IconAlert />
+                  <p className="notice__body">
+                    {build.error || 'This visual could not be built.'}
+                  </p>
+                </div>
+                <ClearAction build={build} busy={busy} onClear={clearBuild} />
+              </>
             ) : (
               <>
                 <StageList stage={build.stage} />

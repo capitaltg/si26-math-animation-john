@@ -57,6 +57,9 @@ function installFetchMock({
       return jsonResponse({ template_name: 'leftover_pair', template_version_id: 'tv-1' })
     }
     if (url?.endsWith('/reject')) return jsonResponse({ requeued: true })
+    if (url?.startsWith('/meta/my/builds/') && init.method === 'DELETE') {
+      return { ok: true, status: 204, json: async () => null }
+    }
     throw new Error(`Unexpected request: ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -429,4 +432,60 @@ it('keeps asking for progress while a build is still running', async () => {
     fetchMock.mock.calls.filter(([url]) => url === '/meta/my/builds').length,
   ).toBeGreaterThan(afterFirstPoll)
   vi.useRealTimers()
+})
+
+// -------------------------------------------------- a way back from a dead end
+
+it('offers a way back when a build could not start', async () => {
+  installFetchMock({
+    builds: [build({ stage: 'failed', error: 'We could not work out what kind of problem this is.' })],
+  })
+
+  renderWorkshop()
+
+  expect(await screen.findByRole('button', { name: /Try this problem again/ })).toBeTruthy()
+})
+
+it('offers a way back when automatic generation gave up', async () => {
+  installFetchMock({
+    builds: [build({ stage: 'needs_manual', error: 'Automatic generation gave up.' })],
+  })
+
+  renderWorkshop()
+
+  expect(await screen.findByRole('button', { name: /Try this problem again/ })).toBeTruthy()
+})
+
+it('clears the finished attempt so the problem can be offered again', async () => {
+  const fetchMock = installFetchMock({
+    builds: [build({ stage: 'failed', error: 'We could not work out what kind of problem this is.' })],
+  })
+
+  renderWorkshop()
+  fireEvent.click(await screen.findByRole('button', { name: /Try this problem again/ }))
+
+  await waitFor(() => {
+    const cleared = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/meta/my/builds/c1' && init?.method === 'DELETE',
+    )
+    expect(cleared).not.toBeUndefined()
+  })
+})
+
+it('does not offer to clear a build that is still going', async () => {
+  installFetchMock({ builds: [build({ stage: 'building' })] })
+
+  renderWorkshop()
+
+  await screen.findByText('2 of 4 stages complete')
+  expect(screen.queryByRole('button', { name: /Try this problem again/ })).toBeNull()
+})
+
+it('does not offer to clear a template waiting to be judged', async () => {
+  installFetchMock({ builds: [build({ stage: 'ready', draft_id: 'draft-1' })] })
+
+  renderWorkshop()
+
+  await screen.findByText('Find the value with no partner.')
+  expect(screen.queryByRole('button', { name: /Try this problem again/ })).toBeNull()
 })

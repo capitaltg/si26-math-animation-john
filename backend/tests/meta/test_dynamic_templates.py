@@ -424,3 +424,58 @@ def test_an_owned_version_does_not_hide_shared_ones_for_other_fingerprints(sessi
     assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset(
         {"shared_other", "own_grid"}
     )
+
+
+def test_a_name_collision_resolves_to_the_callers_own_version(session):
+    """Defence in depth for data the name checks did not prevent.
+
+    approve_draft_service now refuses a private approval that takes a shared
+    name, so this state should not arise. If it ever does -- rows written before
+    that check existed -- the snapshot must not let query order decide which
+    template a name resolves to. The caller's own wins, matching the fingerprint
+    precedence rule.
+    """
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-shared", owner=None
+    )
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-own", owner="session-a"
+    )
+
+    snapshot = load_enabled_snapshot(session, owner_session_id="session-a")
+
+    assert snapshot.names() == frozenset({"same_name"})
+    own_version_id = (
+        session.query(TemplateVersion)
+        .filter_by(template_name="same_name", owner_session_id="session-a")
+        .one()
+        .id
+    )
+    assert snapshot.entry("same_name").version_id == own_version_id
+
+
+def test_a_name_collision_resolves_the_same_way_whichever_row_comes_first(session):
+    """The mirror of the test above, seeded in the opposite order.
+
+    Without both, the assertion can pass on query order alone and prove nothing.
+    """
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-own", owner="session-a"
+    )
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-shared", owner=None
+    )
+
+    snapshot = load_enabled_snapshot(session, owner_session_id="session-a")
+
+    own_version_id = (
+        session.query(TemplateVersion)
+        .filter_by(template_name="same_name", owner_session_id="session-a")
+        .one()
+        .id
+    )
+    assert snapshot.entry("same_name").version_id == own_version_id

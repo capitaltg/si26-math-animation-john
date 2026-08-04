@@ -290,7 +290,9 @@ def test_0007_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
     get_settings.cache_clear()
     cfg = _alembic_config(url)
     try:
-        command.upgrade(cfg, "head")
+        # Pinned to 0007, not head: a later irreversible migration would raise
+        # first and this test would pass for the wrong reason.
+        command.upgrade(cfg, "0007_template_ownership")
         with pytest.raises(
             RuntimeError, match="0007_template_ownership is intentionally irreversible"
         ):
@@ -324,3 +326,67 @@ def test_0007_still_allows_only_one_shared_version_per_template_name(tmp_path: P
             connection, version_id="v-shared-2", fingerprint_key="k-other",
             template_name="pair_elimination", owner=None,
         )
+
+
+def test_0008_scopes_the_active_job_index_to_the_owner(tmp_path: Path, monkeypatch):
+    engine = _migrate_to_head_with_a_shared_version(tmp_path, monkeypatch, "own-active-job")
+
+    def insert_active(connection, *, job_id, owner):
+        connection.execute(
+            text(
+                "INSERT INTO generation_jobs "
+                "(id, fingerprint_key, fingerprint_version, fingerprint_json, "
+                "trigger_observation_ids, status, owner_session_id, attempt, "
+                "created_at, updated_at) "
+                "VALUES (:id, 'k-job', 1, '{}', '[]', 'queued', :owner, 0, "
+                "'2026-08-04 00:00:00', '2026-08-04 00:00:00')"
+            ),
+            {"id": job_id, "owner": owner},
+        )
+
+    with engine.begin() as connection:
+        insert_active(connection, job_id="job-a", owner="session-a")
+        insert_active(connection, job_id="job-b", owner="session-b")
+        insert_active(connection, job_id="job-shared", owner=None)
+
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        insert_active(connection, job_id="job-a2", owner="session-a")
+
+
+def test_0008_still_allows_only_one_ownerless_active_job(tmp_path: Path, monkeypatch):
+    """Two NULL owners must still collide, as they did before 0008."""
+    engine = _migrate_to_head_with_a_shared_version(tmp_path, monkeypatch, "own-active-null")
+
+    def insert_active(connection, job_id):
+        connection.execute(
+            text(
+                "INSERT INTO generation_jobs "
+                "(id, fingerprint_key, fingerprint_version, fingerprint_json, "
+                "trigger_observation_ids, status, attempt, created_at, updated_at) "
+                "VALUES (:id, 'k-null', 1, '{}', '[]', 'queued', 0, "
+                "'2026-08-04 00:00:00', '2026-08-04 00:00:00')"
+            ),
+            {"id": job_id},
+        )
+
+    with engine.begin() as connection:
+        insert_active(connection, "job-1")
+
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        insert_active(connection, "job-2")
+
+
+def test_0008_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
+    db_file = tmp_path / "active-job-downgrade" / "meta.db"
+    url = f"sqlite:///{db_file}"
+    monkeypatch.setenv("META_DB_PATH", str(db_file))
+    get_settings.cache_clear()
+    cfg = _alembic_config(url)
+    try:
+        command.upgrade(cfg, "head")
+        with pytest.raises(
+            RuntimeError, match="0008_owner_scoped_active_job is intentionally irreversible"
+        ):
+            command.downgrade(cfg, "0007_template_ownership")
+    finally:
+        get_settings.cache_clear()

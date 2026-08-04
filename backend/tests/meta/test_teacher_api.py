@@ -563,3 +563,155 @@ def test_the_teacher_routes_need_no_reviewer_token(client):
 
     assert "Authorization" not in client.headers
     assert client.get(f"/meta/my/drafts/{draft_id}").status_code == 200
+
+
+# ------------------------------------------------------- the capability gate
+#
+# GET /meta/my/capabilities already reports all four flags. The mutations have to
+# honour the same gate, or a teacher can start work the deployment cannot finish:
+# without codegen nothing ever drains the queue, and without the dynamic
+# classifier an approved template never reaches /options.
+
+
+@pytest.fixture
+def codegen_disabled_client(tmp_path, monkeypatch, engine):
+    _enable(monkeypatch, tmp_path, engine=engine)
+    monkeypatch.setenv("META_CODEGEN_ENABLED", "0")
+    get_settings.cache_clear()
+    from app.main import create_app
+
+    yield TestClient(create_app())
+    get_settings.cache_clear()
+
+
+def test_requesting_a_build_is_refused_when_the_generator_is_disabled(codegen_disabled_client):
+    """Queuing work no worker will ever claim is worse than refusing it."""
+    _start_session(codegen_disabled_client)
+
+    resp = codegen_disabled_client.post("/meta/my/builds", json={"candidate_id": "c1"})
+
+    assert resp.status_code == 409
+    with db.meta_session() as session:
+        assert session.query(models.GenerationJob).count() == 0
+
+
+def test_a_build_is_not_recorded_when_the_feature_is_incomplete(codegen_disabled_client):
+    _start_session(codegen_disabled_client)
+
+    codegen_disabled_client.post("/meta/my/builds", json={"candidate_id": "c1"})
+
+    assert codegen_disabled_client.get("/meta/my/builds").json() == []
+
+
+def test_rejecting_is_refused_when_the_generator_is_disabled(codegen_disabled_client):
+    """Requeueing hands work to a worker that is not running."""
+    session_id = _start_session(codegen_disabled_client)
+    draft_id, job_id = _seed_owned_draft(owner=session_id)
+
+    resp = codegen_disabled_client.post(
+        f"/meta/my/drafts/{draft_id}/reject", json={"feedback": "not right"}
+    )
+
+    assert resp.status_code == 409
+    with db.meta_session() as session:
+        assert session.get(models.GenerationJob, job_id).status == models.JOB_SUCCEEDED
+        assert session.get(models.TemplateDraft, draft_id).status == models.DRAFT_PENDING_REVIEW
+
+
+def test_approving_is_refused_when_the_classifier_is_disabled(tmp_path, monkeypatch, engine):
+    """A published template /options can never offer is not a usable outcome."""
+    _enable(monkeypatch, tmp_path, engine=engine, dynamic_classifier=False)
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    try:
+        session_id = _start_session(client)
+        draft_id, _ = _seed_owned_draft(owner=session_id)
+
+        resp = client.post(
+            f"/meta/my/drafts/{draft_id}/approve",
+            json={"template_name": "leftover_pair", "math_semantics_confirmed": True},
+        )
+
+        assert resp.status_code == 409
+        with db.meta_session() as session:
+            assert session.query(models.TemplateVersion).count() == 0
+    finally:
+        get_settings.cache_clear()
+
+
+def test_reading_a_draft_still_works_when_the_feature_is_incomplete(codegen_disabled_client):
+    """Only mutations are gated: a teacher may still look at what exists."""
+    session_id = _start_session(codegen_disabled_client)
+    draft_id, _ = _seed_owned_draft(owner=session_id)
+
+    assert codegen_disabled_client.get(f"/meta/my/drafts/{draft_id}").status_code == 200
+
+
+# ------------------------------------------------- clearing a finished attempt
+
+
+def test_a_teacher_can_clear_a_failed_build_and_ask_again(client):
+    """No terminal state may be a dead end.
+
+    A build that failed removes the entry button for that candidate, so without
+    this the teacher has no way to try again -- which is what made the old
+    global active-job refusal permanent.
+    """
+    _start_session(client)
+    with patch("app.meta.ingest.tag_candidate", side_effect=RuntimeError("bedrock down")):
+        client.post("/meta/my/builds", json={"candidate_id": "c1"})
+    assert client.get("/meta/my/builds").json()[0]["stage"] == "failed"
+
+    resp = client.delete("/meta/my/builds/c1")
+
+    assert resp.status_code == 204
+    assert client.get("/meta/my/builds").json() == []
+
+
+def test_clearing_a_build_lets_the_next_request_through(client):
+    _start_session(client)
+    with patch("app.meta.ingest.tag_candidate", side_effect=RuntimeError("bedrock down")):
+        client.post("/meta/my/builds", json={"candidate_id": "c1"})
+    client.delete("/meta/my/builds/c1")
+
+    with patch("app.meta.ingest.tag_candidate", return_value=_fingerprint()):
+        resp = client.post("/meta/my/builds", json={"candidate_id": "c1"})
+
+    assert resp.status_code == 202
+    assert client.get("/meta/my/builds").json()[0]["stage"] == "queued"
+
+
+def test_a_build_still_in_flight_cannot_be_cleared(client):
+    """Clearing mid-build would orphan a queued job and hide it from its owner."""
+    _start_session(client)
+    with patch("app.meta.ingest.tag_candidate", return_value=_fingerprint()):
+        client.post("/meta/my/builds", json={"candidate_id": "c1"})
+
+    resp = client.delete("/meta/my/builds/c1")
+
+    assert resp.status_code == 409
+    assert len(client.get("/meta/my/builds").json()) == 1
+
+
+def test_clearing_a_build_nobody_requested_is_not_found(client):
+    _start_session(client)
+
+    assert client.delete("/meta/my/builds/c1").status_code == 404
+
+
+def test_clearing_a_ready_build_is_refused(client):
+    """A reviewable draft is not rubbish to sweep up; judge or reject it."""
+    session_id = _start_session(client)
+    with patch("app.meta.ingest.tag_candidate", return_value=_fingerprint()):
+        client.post("/meta/my/builds", json={"candidate_id": "c1"})
+    with db.meta_session() as session:
+        queued_job_id = session.query(models.GenerationJob).one().id
+    _seed_owned_draft(
+        owner=session_id,
+        fingerprint_key=canonical_fingerprint_key(_fingerprint()),
+        job_id=queued_job_id,
+    )
+    assert client.get("/meta/my/builds").json()[0]["stage"] == "ready"
+
+    assert client.delete("/meta/my/builds/c1").status_code == 409

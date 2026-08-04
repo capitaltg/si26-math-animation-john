@@ -54,10 +54,28 @@ def count_eligible_observations(session: Session, fingerprint_key: str) -> int:
     return int(session.execute(stmt).scalar_one())
 
 
-def has_active_job(session: Session, fingerprint_key: str) -> bool:
+def has_active_job(
+    session: Session, fingerprint_key: str, owner_session_id: str | None = None
+) -> bool:
+    """Whether this owner already has a build in flight for this shape.
+
+    Scoped to one owner, because ownership is the isolation boundary throughout
+    this design: one teacher's private build must not refuse another teacher's
+    request for the same problem, and the ownerless threshold queue is its own
+    scope rather than something a teacher can block.
+
+    ``IS NULL`` for the ownerless scope, so it is a real scope rather than a
+    comparison that matches nothing.
+    """
+    owner_match = (
+        GenerationJob.owner_session_id.is_(None)
+        if owner_session_id is None
+        else GenerationJob.owner_session_id == owner_session_id
+    )
     stmt = select(func.count()).select_from(GenerationJob).where(
         GenerationJob.fingerprint_key == fingerprint_key,
         GenerationJob.status.in_((JOB_QUEUED, JOB_RUNNING)),
+        owner_match,
     )
     return int(session.execute(stmt).scalar_one()) > 0
 
@@ -113,7 +131,8 @@ def evaluate_and_enqueue(
 ) -> GenerationJob | None:
     if has_enabled_version(session, fingerprint_key):
         return None
-    if has_active_job(session, fingerprint_key):
+    # The threshold path owns nothing, so it is gated by other ownerless jobs.
+    if has_active_job(session, fingerprint_key, None):
         return None
     if count_eligible_observations(session, fingerprint_key) < threshold:
         return None
@@ -180,7 +199,7 @@ def enqueue_on_demand(
     """
     if has_version_available_to(session, fingerprint_key, owner_session_id):
         return None
-    if has_active_job(session, fingerprint_key):
+    if has_active_job(session, fingerprint_key, owner_session_id):
         return None
 
     job = GenerationJob(
