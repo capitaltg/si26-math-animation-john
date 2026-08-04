@@ -406,14 +406,30 @@ def _final_answer_text(rendered, resolved) -> str | None:
 
 
 def _declared_answer_text(resolved) -> str | None:
-    """The stage the timeline's last `show_answer_stage` claims to leave on screen."""
+    """The stage the timeline's last `show_answer_stage` claims to leave on screen.
+
+    A program that declares an answer statement but stages it nowhere -- a
+    document frozen before `show_answer_stage` existed -- is held to its `value`
+    stage anyway. Returning `None` there made
+    `render_probe.check_final_answer_persistence` skip the text comparison
+    entirely, so such a program could end on "?" with every gate green.
+    """
+    answer = next(
+        (
+            item for item in resolved.visuals
+            if item.measured.ref == _ANSWER_REF and "stages" in item.measured.payload
+        ),
+        None,
+    )
+    if answer is None:
+        return None
+    stages = answer.measured.payload["stages"]
     staged = [
         action for action in resolved.timeline if action.action.kind == "show_answer_stage"
     ]
     if not staged:
-        return None
-    last = max(staged, key=lambda action: action.at_seconds)
-    return resolved.visual(_ANSWER_REF).measured.payload["stages"][last.action.stage]
+        return stages["value"]
+    return stages[max(staged, key=lambda action: action.at_seconds).action.stage]
 
 
 def _mobject_has_color(mobject, expected) -> bool:

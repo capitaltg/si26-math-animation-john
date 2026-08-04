@@ -86,10 +86,13 @@ def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
     targets: dict[tuple[str, str | None, int | None], object] = {}
     roles: dict[tuple[str, str | None, int | None], str] = {}
     answer_stages: dict[str, dict[str, object]] = {}
+    staged_refs = _staged_answer_refs(scene.timeline)
     for placed in scene.visuals:
         payload = placed.measured.payload
         if isinstance(payload, dict) and "stages" in payload:
-            root, stages = _build_answer_stages(placed, palette)
+            root, stages = _build_answer_stages(
+                placed, palette, staged=placed.measured.ref in staged_refs,
+            )
             answer_stages[placed.measured.ref] = stages
             children = {}
         else:
@@ -220,12 +223,25 @@ def _build_visual(placed, palette: str):
     return root, children
 
 
-def _build_answer_stages(placed, palette: str):
+def _staged_answer_refs(timeline) -> set[str]:
+    return {
+        action.targets[0].ref.visual_ref
+        for action in timeline if action.action.kind == "show_answer_stage"
+    }
+
+
+def _build_answer_stages(placed, palette: str, *, staged: bool):
     """One Text per stage, all centred on the same point.
 
     Every stage is built up front because `Transform` needs a target mobject to
-    morph into, and only the `unknown` stage is ever added to the scene: the
+    morph into, and only the drawn stage is ever added to the scene: the
     transitions mutate that one mobject rather than adding new ones.
+
+    `staged` is False for a program frozen before `show_answer_stage` existed --
+    it reveals the answer and never transforms it. Such a program replays
+    verbatim (`dynamic_templates.load`), so drawing the `unknown` stage would
+    leave a bare "?" as the lesson's final answer with nothing able to resolve
+    it; draw the resolved `value` instead.
     """
     style = resolve_semantic_style(palette, _initial_role(placed.measured.ref, placed.measured.payload))
     stages = {
@@ -234,7 +250,7 @@ def _build_answer_stages(placed, palette: str):
     }
     for mobject in stages.values():
         _apply_style(mobject, style)
-    return stages["unknown"], stages
+    return stages["unknown" if staged else "value"], stages
 
 
 def _initial_role(ref: str, payload) -> str:

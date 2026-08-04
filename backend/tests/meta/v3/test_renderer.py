@@ -22,11 +22,14 @@ def _reveal(mobject):
     return FadeIn(mobject)
 
 
-def _resolved_scene_with(visuals: list[PlacedVisual]) -> ResolvedScene:
+def _resolved_scene_with(visuals: list[PlacedVisual], timeline=()) -> ResolvedScene:
     return ResolvedScene(
         visuals=visuals,
         relations=[],
-        timeline=[],
+        # A scene holding an answer visual has to pass its staging actions: the
+        # renderer reads the timeline to decide which stage to draw, and a
+        # program that stages nothing draws the resolved value instead.
+        timeline=list(timeline),
         total_duration_seconds=1.0,
         style_recipe=StyleRecipeDocument(
             palette="ocean", composition="vertical_lesson", motion_variant="smooth",
@@ -464,7 +467,10 @@ def test_the_answer_renders_every_stage_and_transforms_between_them():
         paths={},
         payload={"stages": stages},
     )
-    scene = _resolved_scene_with([PlacedVisual(measured, Point(0, 0), 1.0)])
+    action = _resolved_action_for(
+        ShowAnswerStageAction(target=TargetRef(visual_ref="evaluated_answer"), stage="work"),
+    )
+    scene = _resolved_scene_with([PlacedVisual(measured, Point(0, 0), 1.0)], timeline=[action])
 
     rendered = _build_vertical_lesson(scene, "ocean")
 
@@ -473,14 +479,13 @@ def test_the_answer_renders_every_stage_and_transforms_between_them():
         rendered.answer_stages["evaluated_answer"]["unknown"]
     )
 
-    action = _resolved_action_for(
-        ShowAnswerStageAction(target=TargetRef(visual_ref="evaluated_answer"), stage="work"),
-    )
     assert isinstance(_action_animation(action, rendered, _reveal, "ocean"), Transform)
 
 
 def _answer_and_label_scene():
     """An answer visual plus an unrelated label, both placed."""
+    from app.meta.dsl.scene_program import ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
     from app.meta.v3.geometry import Bounds, MeasuredVisual, PlacedVisual, Point
 
     answer = MeasuredVisual(
@@ -493,9 +498,15 @@ def _answer_and_label_scene():
     label = MeasuredVisual(
         ref="hint", bounds=Bounds(-1, 1, 1, 1.4), parts={}, paths={}, payload={"text": "1 km"},
     )
-    return _resolved_scene_with([
-        PlacedVisual(answer, Point(0, 0), 1.0), PlacedVisual(label, Point(0, 0), 1.0),
-    ])
+    return _resolved_scene_with(
+        [PlacedVisual(answer, Point(0, 0), 1.0), PlacedVisual(label, Point(0, 0), 1.0)],
+        timeline=[
+            _resolved_action_for(ShowAnswerStageAction(
+                target=TargetRef(visual_ref="evaluated_answer"), stage=stage,
+            ))
+            for stage in ("work", "value")
+        ],
+    )
 
 
 def _play_slot(actions):
