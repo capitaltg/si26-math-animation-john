@@ -124,7 +124,7 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     # this change came straight out of the old wording).
     assert "the system supplies the answer statement and stages it for you" in prompt
     assert "resolves to the value only at conclude" in prompt
-    assert "never author a label standing in for the answer" in prompt
+    assert "never author a label or callout standing in for the answer" in prompt
     assert "simple collections reveal together" in prompt
     assert "perimeter explanations use boundary_trace" in prompt
     assert "median ordered values use item-specific targets" in prompt
@@ -236,6 +236,9 @@ def test_the_prompt_hands_answer_presentation_to_the_system():
 
     assert "answer_unit" in _DRAFT_SYSTEM_PROMPT
     assert 'never put "?" in a label' in _DRAFT_SYSTEM_PROMPT
+    # The gate was extended to cover `CalloutRelation.text` too, so the prompt
+    # must warn about that surface as well, not just labels.
+    assert 'never put "?" in a label or callout text' in _DRAFT_SYSTEM_PROMPT
     # A reworded reversion would pass the two negative assertions below;
     # this one pins the contract the prompt now has to state.
     assert "resolves to the value only at conclude" in _DRAFT_SYSTEM_PROMPT

@@ -292,6 +292,18 @@ rendered gate on any such program that still reads `?`, instead of skipping the
 comparison. A frozen program therefore renders its answer correctly with no
 recompilation.
 
+It does not, however, get the in-place progression: a frozen program's stored
+timeline carries no `show_answer_stage` actions to replay, so the answer
+appears already resolved rather than progressing through `?` and its
+arithmetic. Picking that up on a published template needs recompilation:
+reset the draft's status, re-run `revalidate_draft`, then
+`approve_draft_service` to republish. `revalidate_draft` rebuilds the draft's
+evidence by recompiling its stored teaching plan through the current compiler
+and quality gates -- it makes no Bedrock call -- so the fresh compile's
+`show_answer_stage` actions overwrite the draft's `scene_program_json`, and
+`approve_draft_service` republishes that recompiled draft as the enabled
+version.
+
 ## Verification
 
 Written test-first.
