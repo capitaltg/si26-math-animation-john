@@ -77,6 +77,19 @@ _CARDINALITY_FIELDS = {
     "partition": ("parts",),
 }
 
+#: One box per whole unit stops being legible past this, and a ninth box would
+#: not fit the 18.9-unit width limit with both labels inside it. `number_line`
+#: covers larger magnitudes.
+MAX_TAPE_BOXES = 8
+
+#: Per KIND, the field a reviewer would change, its cap, and how the part count
+#: is derived from that field's value. Separate from `_CARDINALITY_FIELDS`
+#: because a tape's count is ceil(value): the number to name in the failure and
+#: the number to compare against the cap are different numbers.
+_CARDINALITY_DERIVED = {
+    "unit_tape": ("value", MAX_TAPE_BOXES, lambda value: ceil(value)),
+}
+
 #: The largest part count any kind could ever need. The tightest pitch is a bar
 #: segment at 0.65 units, so the 18.9-unit width limit admits ~29; `object_set`
 #: packs five per row, so the 8.6-unit height limit admits ~65. This is a
@@ -84,12 +97,6 @@ _CARDINALITY_FIELDS = {
 #: looping past what fits, leaving `_require_renderable_extent` to decide
 #: precisely.
 MAX_PART_CARDINALITY = 128
-
-
-#: One box per whole unit stops being legible past this, and a ninth box would
-#: not fit the 18.9-unit width limit with both labels inside it. `number_line`
-#: covers larger magnitudes.
-MAX_TAPE_BOXES = 8
 
 _TAPE_BOX_HEIGHT = 1.1
 _TAPE_BOX_GAP = 0.08
@@ -136,6 +143,16 @@ def _require_renderable_cardinality(spec, values) -> None:
             continue
         raise _cardinality_failure(
             spec, name, _describe(values[name]), MAX_PART_CARDINALITY, f"unit of {name}",
+        )
+    derived = _CARDINALITY_DERIVED.get(spec.kind)
+    if derived is None:
+        return
+    name, cap, count_from = derived
+    if name not in values:
+        return
+    if count_from(values[name]) > cap:
+        raise _cardinality_failure(
+            spec, name, _describe(values[name]), cap, "whole unit",
         )
 
 

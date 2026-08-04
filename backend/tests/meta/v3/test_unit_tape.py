@@ -90,3 +90,50 @@ def test_a_tape_label_is_a_decimal_not_a_ratio():
 
     assert measured.payload["boxes"][-1]["source_label"] == "0.5 km"
     assert measured.payload["boxes"][-1]["target_label"] == "500 m"
+
+
+def test_a_tape_too_long_to_read_is_rejected_by_the_field_a_reviewer_can_change():
+    """The count is derived, so the failure has to name `value`, not `9`.
+
+    `_CARDINALITY_FIELDS` keys on field names present in the evaluated values,
+    but a tape's box count is ceil(value) -- no field holds it. A failure naming
+    the derived number would tell a reviewer to change something that is not in
+    the plan.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        _measure(Fraction(9))
+
+    failure = exc_info.value.failure
+    assert failure.code == "visual_extent_unrenderable"
+    assert failure.path == "visuals.trail_tape"
+    assert "value" in failure.hint
+    assert "8" in failure.hint
+    assert "number_line" in failure.hint
+
+
+def test_a_tape_at_the_cap_still_measures():
+    measured = _measure(Fraction(8))
+
+    assert len(measured.payload["boxes"]) == 8
+
+
+def test_the_tape_factory_never_runs_for_an_oversized_value():
+    """The guard runs before the factory, as it does for `bar`."""
+    from types import SimpleNamespace
+
+    from app.meta.v3.visual_registry import VisualRegistry
+
+    registry = VisualRegistry()
+
+    def must_not_run(*, spec, values, measurer):
+        raise AssertionError("the factory ran before the count was checked")
+
+    registry.register("unit_tape", must_not_run)
+
+    with pytest.raises(V3ValidationError):
+        registry.measure(
+            SimpleNamespace(kind="unit_tape", ref="huge"),
+            {"value": Fraction(10**6), "per_unit": Fraction(1000),
+             "source_unit": "km", "target_unit": "m"},
+            LabelMeasurer(),
+        )
