@@ -3,17 +3,49 @@ from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
-from manim import Line, Text
+from manim import FadeIn, Line, Text
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.scene_program import StyleRecipeDocument
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import _PART_CARDINALITY, compile_teaching_plan
-from app.meta.v3.geometry import PlacedVisual, Point
+from app.meta.v3.geometry import Bounds, PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
 from app.meta.v3.renderer import _build_visual, render_resolved_scene
-from app.meta.v3.resolver import resolve_scene
+from app.meta.v3.resolver import ResolvedAction, ResolvedScene, ResolvedTarget, resolve_scene
 from app.meta.v3.visual_registry import default_visual_registry
+
+
+def _reveal(mobject):
+    """Stand-in `motion` callback for tests that never actually play a reveal."""
+    return FadeIn(mobject)
+
+
+def _resolved_scene_with(visuals: list[PlacedVisual], timeline=()) -> ResolvedScene:
+    return ResolvedScene(
+        visuals=visuals,
+        relations=[],
+        # A scene holding an answer visual has to pass its staging actions: the
+        # renderer reads the timeline to decide which stage to draw, and a
+        # program that stages nothing draws the resolved value instead.
+        timeline=list(timeline),
+        total_duration_seconds=1.0,
+        style_recipe=StyleRecipeDocument(
+            palette="ocean", composition="vertical_lesson", motion_variant="smooth",
+        ),
+    )
+
+
+def _resolved_action_for(action) -> ResolvedAction:
+    return ResolvedAction(
+        at_seconds=0.0,
+        duration_seconds=1.0,
+        beat_id="beat",
+        action=action,
+        targets=[ResolvedTarget(ref=action.target, bounds=Bounds(0, 0, 0, 0))],
+        path=None,
+    )
 
 
 class LiteralTextMeasurer:
@@ -414,3 +446,138 @@ def test_rectangle_alias_edge_parts_render_the_same_lines_as_their_numbered_edge
         if isinstance(submobject, Line)
     ]
     assert len(lines) == 4
+
+
+def test_the_answer_renders_every_stage_and_transforms_between_them():
+    """The unknown stage is the mobject on screen; the transitions mutate it in
+    place, so `dynamic_render_worker._answer_visible` keeps finding the same
+    mobject in the final frame."""
+    from manim import Transform
+
+    from app.meta.dsl.scene_program import ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.geometry import Bounds, MeasuredVisual, PlacedVisual, Point
+    from app.meta.v3.renderer import _action_animation, _build_vertical_lesson
+
+    stages = {"unknown": "? m", "work": "2 × 3 = ? m", "value": "2 × 3 = 6 m"}
+    measured = MeasuredVisual(
+        ref="evaluated_answer",
+        bounds=Bounds(-1, 1, -0.2, 0.2),
+        parts={},
+        paths={},
+        payload={"stages": stages},
+    )
+    action = _resolved_action_for(
+        ShowAnswerStageAction(target=TargetRef(visual_ref="evaluated_answer"), stage="work"),
+    )
+    scene = _resolved_scene_with([PlacedVisual(measured, Point(0, 0), 1.0)], timeline=[action])
+
+    rendered = _build_vertical_lesson(scene, "ocean")
+
+    assert set(rendered.answer_stages["evaluated_answer"]) == {"unknown", "work", "value"}
+    assert rendered.visuals["evaluated_answer"] is (
+        rendered.answer_stages["evaluated_answer"]["unknown"]
+    )
+
+    assert isinstance(_action_animation(action, rendered, _reveal, "ocean"), Transform)
+
+
+def _answer_and_label_scene():
+    """An answer visual plus an unrelated label, both placed."""
+    from app.meta.dsl.scene_program import ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.geometry import Bounds, MeasuredVisual, PlacedVisual, Point
+
+    answer = MeasuredVisual(
+        ref="evaluated_answer",
+        bounds=Bounds(-1, 1, -0.2, 0.2),
+        parts={},
+        paths={},
+        payload={"stages": {"unknown": "? m", "work": "2 × 3 = ? m", "value": "2 × 3 = 6 m"}},
+    )
+    label = MeasuredVisual(
+        ref="hint", bounds=Bounds(-1, 1, 1, 1.4), parts={}, paths={}, payload={"text": "1 km"},
+    )
+    return _resolved_scene_with(
+        [PlacedVisual(answer, Point(0, 0), 1.0), PlacedVisual(label, Point(0, 0), 1.0)],
+        timeline=[
+            _resolved_action_for(ShowAnswerStageAction(
+                target=TargetRef(visual_ref="evaluated_answer"), stage=stage,
+            ))
+            for stage in ("work", "value")
+        ],
+    )
+
+
+def _play_slot(actions):
+    """Run one timeline slot through the renderer and return (animations, rendered)."""
+    from app.meta.v3.renderer import _build_vertical_lesson, _play_parallel_actions
+
+    scene = _answer_and_label_scene()
+    rendered = _build_vertical_lesson(scene, "ocean")
+    played = []
+    recorder = SimpleNamespace(play=lambda animation, **_kwargs: played.append(animation))
+    _play_parallel_actions(recorder, actions, rendered, _reveal, "ocean")
+    assert len(played) == 1, "a slot is one play call"
+    return played[0].animations, rendered
+
+
+def test_concluding_the_answer_recolours_and_resolves_it_in_one_animation():
+    """One mobject, one slot, one `Transform` -- or the value stage never shows.
+
+    The conclude beat emits `show_answer_stage(value)` and `set_role(conclusion)`
+    together on the answer. Rendered as two `Transform`s in one `AnimationGroup`
+    they both rewrite the same points every frame, and the recolour -- whose
+    target is a copy of the mobject as it stands at `begin()`, i.e. the WORK stage
+    -- wins because it is second. Every lesson ended on "2 × 3 = ? m" in the
+    conclusion colour: the resolved answer was rendered nowhere. Merging them is
+    the fix, so pin the merge, not just the count.
+    """
+    from app.meta.dsl.scene_program import SetRoleAction, ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.manim_primitives.style import resolve_semantic_style
+
+    target = TargetRef(visual_ref="evaluated_answer")
+    animations, rendered = _play_slot([
+        # Compiler order: the stage action comes first, which is what made a
+        # decide-as-you-go merge emit its animation before the `set_role`.
+        _resolved_action_for(ShowAnswerStageAction(target=target, stage="value")),
+        _resolved_action_for(SetRoleAction(target=target, role="conclusion")),
+    ])
+
+    assert len(animations) == 1
+    stages = rendered.answer_stages["evaluated_answer"]
+    destination = animations[0].target_mobject
+    # The one animation morphs the on-screen mobject into the VALUE stage...
+    assert animations[0].mobject is rendered.visuals["evaluated_answer"]
+    assert destination is stages["value"]
+    # `original_text`, not `text`: manim strips whitespace out of the latter.
+    assert destination.original_text == "2 × 3 = 6 m"
+    # ...wearing the conclusion role's colour, so the recolour is not simply lost.
+    expected = resolve_semantic_style("ocean", "conclusion")["color"].to_hex()
+    assert all(member.get_color().to_hex() == expected for member in destination.get_family())
+    # And the role bookkeeping later `set_role`s diff against still moved.
+    assert rendered.roles[("evaluated_answer", None, None)] == "conclusion"
+
+
+def test_a_role_change_beside_an_unrelated_answer_stage_keeps_both_animations():
+    """Merging is per mobject: a `set_role` on another visual must not absorb the
+    answer's stage change, and the un-co-slotted `work` stage (the derive beat)
+    must animate exactly as it always did."""
+    from app.meta.dsl.scene_program import SetRoleAction, ShowAnswerStageAction
+    from app.meta.dsl.v3_common import TargetRef
+
+    animations, rendered = _play_slot([
+        _resolved_action_for(ShowAnswerStageAction(
+            target=TargetRef(visual_ref="evaluated_answer"), stage="work",
+        )),
+        _resolved_action_for(SetRoleAction(target=TargetRef(visual_ref="hint"), role="focus")),
+    ])
+
+    assert len(animations) == 2
+    stages = rendered.answer_stages["evaluated_answer"]
+    destinations = [animation.target_mobject for animation in animations]
+    assert stages["work"] in destinations
+    assert rendered.roles[("hint", None, None)] == "focus"
+    # The answer's role is untouched: nothing in this slot addressed it.
+    assert rendered.roles[("evaluated_answer", None, None)] != "focus"

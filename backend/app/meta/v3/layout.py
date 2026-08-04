@@ -10,10 +10,12 @@ from app.meta.v3.geometry import (
 SAFE_FRAME = Bounds(-6.6, 6.6, -3.6, 3.6)
 MIN_TEXT_SCALE = 0.7
 GAP = 0.45
-CONCLUSION_BAND = Bounds(SAFE_FRAME.left, SAFE_FRAME.right, SAFE_FRAME.bottom, -2.4)
-INSTRUCTIONAL_FRAME = Bounds(
-    SAFE_FRAME.left, SAFE_FRAME.right, CONCLUSION_BAND.top, SAFE_FRAME.top,
-)
+#: The answer used to be placed in a reserved strip at the bottom of the frame,
+#: which read as a caption stapled under the lesson rather than as its outcome.
+#: It is now arranged with everything else, so the instructional frame is the
+#: whole safe frame.
+INSTRUCTIONAL_FRAME = SAFE_FRAME
+ANSWER_REF = "evaluated_answer"
 
 
 def scale_measured_visual(item: MeasuredVisual, scale: float) -> MeasuredVisual:
@@ -51,14 +53,8 @@ class _Arrangement:
 
 
 def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[PlacedVisual]:
-    instructional = [item for item in measured_visuals if item.ref != "evaluated_answer"]
-    conclusion = [item for item in measured_visuals if item.ref == "evaluated_answer"]
-    arrangement = _arrange(instructional)
-    scale = min(
-        1.0,
-        _fit_instructional_scale(arrangement, INSTRUCTIONAL_FRAME),
-        _fit_scale(conclusion, CONCLUSION_BAND),
-    )
+    arrangement = _arrange(measured_visuals)
+    scale = min(1.0, _fit_instructional_scale(arrangement, INSTRUCTIONAL_FRAME))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
             code="below_minimum_text_scale",
@@ -69,10 +65,7 @@ def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[Pl
         ))
     placed_by_ref = {
         item.measured.ref: item
-        for item in [
-            *_place_instructional(arrangement, INSTRUCTIONAL_FRAME, scale),
-            *_place_centered_stack(conclusion, CONCLUSION_BAND, scale),
-        ]
+        for item in _place_instructional(arrangement, INSTRUCTIONAL_FRAME, scale)
     }
     return [placed_by_ref[item.ref] for item in measured_visuals]
 
@@ -89,15 +82,26 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
 
     The split is decided on unscaled measurements so it does not depend on the
     scale being solved for.
+
+    The answer is exempt from the split: it takes the last row whenever there is
+    anything else to arrange, and becomes the primary itself when it is alone.
+    Left to `_balanced_pair`, a wide answer statement would be sorted into
+    `above` by extent and end up over the lesson it concludes.
     """
     if not instructional:
         return _Arrangement(None, [], [], [], [])
-    primary, *supporting = instructional
+    answer = next((item for item in instructional if item.ref == ANSWER_REF), None)
+    rest = [item for item in instructional if item is not answer]
+    if not rest:
+        return _Arrangement(answer, [], [], [], [])
+    primary, *supporting = rest
     budget = _side_budget(primary, INSTRUCTIONAL_FRAME)
     beside = [item for item in supporting if _width(item) <= budget]
     stacked = [item for item in supporting if _width(item) > budget]
     left, right = _balanced_pair(beside, _stack_width)
     above, below = _balanced_pair(stacked, lambda items: _stack_height(items, GAP))
+    if answer is not None:
+        below = [*below, answer]
     return _Arrangement(primary, left, right, above, below)
 
 
@@ -112,11 +116,6 @@ def _width(item: MeasuredVisual) -> float:
 
 def _height(item: MeasuredVisual) -> float:
     return item.bounds.top - item.bounds.bottom
-
-
-def _fit_scale(items: Sequence[MeasuredVisual], frame: Bounds) -> float:
-    height = _stack_height(items, GAP)
-    return (frame.top - frame.bottom) / height if height else 1.0
 
 
 def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
@@ -255,22 +254,4 @@ def _place_supporting_side(
             scale,
         ))
         cursor += direction * (width + GAP * scale)
-    return placed
-
-
-def _place_centered_stack(
-    items: Sequence[MeasuredVisual], frame: Bounds, scale: float,
-) -> list[PlacedVisual]:
-    scaled = [scale_measured_visual(item, scale) for item in items]
-    cursor = frame.center.y + _stack_height(scaled, GAP * scale) / 2
-    placed = []
-    for item in scaled:
-        height = item.bounds.top - item.bounds.bottom
-        center_y = cursor - height / 2
-        placed.append(PlacedVisual(
-            item,
-            Point(-item.bounds.center.x, center_y - item.bounds.center.y),
-            scale,
-        ))
-        cursor -= height + GAP * scale
     return placed

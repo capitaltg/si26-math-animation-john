@@ -75,6 +75,8 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "state_events": list,
         "declared_state_events": list,
         "final_answer_visible": bool,
+        "final_answer_text": (str, type(None)),
+        "declared_answer_text": (str, type(None)),
         "answer_anchor": (str, type(None)),
         "derivation_visible": bool,
     }
@@ -319,6 +321,17 @@ def check_dimension_attachments(manifest: dict) -> QualityCheck:
 def check_final_answer_persistence(manifest: dict) -> QualityCheck:
     if not manifest.get("final_answer_visible", False):
         return _failed("final_answer_not_persistent", "final_answer_visible", "evaluated answer is absent from the final frame")
+    # Present is not the same as resolved. This check used to end above, and passed
+    # on every lesson while the frame read "2.75 x 1000 = ? meters": the conclude
+    # beat's recolour and its `show_answer_stage(value)` were two competing
+    # transforms on one mobject, so the answer never resolved on screen. Hold the
+    # final frame to what the last staging action says it should say.
+    observed, declared = manifest.get("final_answer_text"), manifest.get("declared_answer_text")
+    if declared is not None and observed != declared:
+        return _failed(
+            "final_answer_not_persistent", "final_answer_text",
+            "final frame does not show the resolved answer",
+        )
     return _passed("final_answer_not_persistent", "final_answer_visible")
 
 

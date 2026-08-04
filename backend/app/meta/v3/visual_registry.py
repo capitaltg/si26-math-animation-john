@@ -271,6 +271,20 @@ def _measure_label(*, spec, values, measurer):
     )
 
 
+def _measure_answer(*, spec, values, measurer):
+    """Reserve the widest stage, so resolving the answer never reflows the lesson."""
+    stages = values["stages"]
+    measured = [measurer.measure(text, "label") for text in stages.values()]
+    width = max(width for width, _height in measured)
+    height = max(height for _width, height in measured)
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(-width / 2, width / 2, -height / 2, height / 2),
+        parts={},
+        payload={"stages": stages},
+    )
+
+
 def _measure_ordered_values(*, spec, values, measurer):
     return measure_ordered_values(
         ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45,
@@ -295,4 +309,5 @@ def default_visual_registry() -> VisualRegistry:
     registry.register("bar", _measure_bar)
     registry.register("object_set", _measure_object_set)
     registry.register("label", _measure_label)
+    registry.register("answer_expression", _measure_answer)
     return registry

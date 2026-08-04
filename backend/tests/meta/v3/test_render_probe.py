@@ -2,8 +2,9 @@ import pytest
 
 from app.meta.artifacts import artifact_exists
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.scene_program import RevealAction
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
-from app.meta.dsl.v3_common import CompileContext
+from app.meta.dsl.v3_common import CompileContext, TargetRef
 from app.meta.preview_render import render_preview_and_probe
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
@@ -63,6 +64,10 @@ def valid_manifest():
             {"target": "values.item[3]", "role": "focus"},
         ],
         "final_answer_visible": True,
+        # What the final frame's answer statement reads as, beside what the last
+        # `show_answer_stage` says it should. Equal here: a passing manifest.
+        "final_answer_text": "2 × 3 = 6 m",
+        "declared_answer_text": "2 × 3 = 6 m",
         "answer_anchor": None,
         "derivation_visible": True,
     }
@@ -77,6 +82,7 @@ def valid_manifest():
     ("path", "undeclared_path_event"),
     ("dimension", "dimension_anchor_mismatch"),
     ("answer", "final_answer_not_persistent"),
+    ("unresolved_answer", "final_answer_not_persistent"),
     ("outside_safe_frame", "frame_out_of_bounds"),
     ("overlapping_visuals", "visual_overlap"),
     ("unlabelled_dimension", "dimension_label_missing"),
@@ -133,6 +139,10 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["dimension_anchor_checks"] = {"rectangle.edge[0]": False}
     elif mutation == "answer":
         manifest["final_answer_visible"] = False
+    elif mutation == "unresolved_answer":
+        # The answer is on screen, but still reads as the unresolved work stage --
+        # the defect `final_answer_visible` alone passed happily on.
+        manifest["final_answer_text"] = "2 × 3 = ? m"
 
     report = validate_rendered_quality(manifest)
 
@@ -185,7 +195,7 @@ def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
 
 @pytest.mark.parametrize("field", [
     "relations", "state_events", "path_events", "dimension_anchor_checks", "final_answer_visible",
-    "answer_anchor",
+    "final_answer_text", "declared_answer_text", "answer_anchor",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
     del valid_manifest[field]
@@ -251,14 +261,98 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
     assert manifest["final_answer_visible"] is True
 
 
-def _overcrowded_program():
-    """Three measured rectangles: more than SAFE_FRAME can hold.
+def _legacy_shaped_program():
+    """A compiled program rewritten into the shape stored before answer staging.
 
-    Each rectangle's measured box is 6.58 x 2.71 (shape plus dimension labels),
-    far too wide to sit beside another, so all three take full-width rows --
-    9.03 units of height against the 6.0-high instructional frame.
-    `place_vertical_lesson` raises `below_minimum_text_scale` at 0.67 while
-    resolving, before any frame is drawn.
+    A `scene_version: 3` program frozen before `show_answer_stage` existed
+    reveals `evaluated_answer` in its conclude beat and stages it nowhere.
+    `dynamic_templates.load` replays such a program verbatim -- no recompilation,
+    no static gate -- so the renderer has to resolve its answer with no staging
+    action to follow.
+    """
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle area by multiplying its sides.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "multiply_sides", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "multiply the two side lengths"},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the area"},
+        ],
+        "variation_seed": "legacy-answer-probe",
+    })
+    program = compile_teaching_plan(
+        plan, MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    conclusion = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "conclusion"
+    )
+    timeline = []
+    for entry in program.timeline:
+        if entry.action.kind == "show_answer_stage" or (
+            entry.action.kind == "reveal"
+            and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+        ):
+            continue
+        if entry is conclusion:
+            # The pre-branch conclude beat revealed the answer card and gave it
+            # the conclusion role in one slot, so reuse this entry's timing.
+            timeline.append(entry.model_copy(update={
+                "action": RevealAction(
+                    targets=[TargetRef(visual_ref="evaluated_answer")], mode="together",
+                ),
+            }))
+        timeline.append(entry)
+    return program.model_copy(update={"timeline": timeline})
+
+
+def test_a_program_that_stages_nothing_resolves_its_answer_on_screen():
+    """A stored program's replay must not end on the unresolved "?".
+
+    Nothing recompiles a published template, and neither static nor rendered
+    gates saw this: with the answer drawn as its `unknown` stage and no
+    `show_answer_stage` to transform it, the final frame read "?" while
+    `final_answer_visible` reported success and the text comparison was skipped.
+    """
+    manifest = run_probe_subprocess(ProbeRequest(
+        scene_program=_legacy_shaped_program(),
+        known_fields=["length", "width"],
+        field_values={"length": 8, "width": 3},
+    )).manifest
+
+    # This fixture's answer expression is length x width and its plan names no
+    # `answer_unit`, so the resolved statement reads "8 × 3 = 24".
+    assert manifest["final_answer_text"] == "8 × 3 = 24"
+    assert manifest["declared_answer_text"] == "8 × 3 = 24"
+    assert validate_rendered_quality(manifest).passed is True
+
+
+def _overcrowded_program():
+    """Four measured rectangles: more than SAFE_FRAME can hold.
+
+    Each rectangle's measured box is 6.75 x 2.68 (shape plus dimension labels),
+    far too wide to sit beside another, so all four take full-width rows --
+    with the answer's own row and the gap before each, 12.88 units of height
+    against the 7.2-high instructional frame. `place_vertical_lesson` raises
+    `below_minimum_text_scale` at 0.56 while resolving, before any frame is
+    drawn.
+
+    Three rectangles used to be enough, against a 6.0-high frame. Once the
+    answer moved into the lesson column the instructional frame grew to the full
+    safe frame, and three rectangles plus the answer row scaled to 0.74 -- above
+    the 0.7 floor, so this fixture stopped reaching the failure path the test
+    below exists to exercise. Hence the fourth.
     """
     def rectangle(ref):
         return {
@@ -269,16 +363,17 @@ def _overcrowded_program():
 
     plan = TeachingPlanDocument.model_validate({
         "plan_version": 3,
-        "learning_objective": "Compare the perimeters of three rectangles.",
+        "learning_objective": "Compare the perimeters of four rectangles.",
         "primary_visual": rectangle("first"),
-        "supporting_visuals": [rectangle("second"), rectangle("third")],
+        "supporting_visuals": [rectangle("second"), rectangle("third"), rectangle("fourth")],
         "strategy": "boundary_trace",
         "beats": [
             {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "first"}],
              "intent": "show the first rectangle"},
             {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "second"}],
              "intent": "show the second rectangle"},
-            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "third"}],
+            {"id": "derive", "kind": "derive",
+             "targets": [{"visual_ref": "third"}, {"visual_ref": "fourth"}],
              "intent": "apply the perimeter formula to each"},
             {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "first"}],
              "intent": "state the perimeter"},

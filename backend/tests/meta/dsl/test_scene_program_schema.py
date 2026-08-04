@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.scene_program import SceneProgramDocument
+from app.meta.dsl.v3_common import TargetRef
 
 
 def _program():
@@ -93,3 +94,31 @@ def test_all_program_models_forbid_extra_fields():
     invalid["visuals"][0]["extra"] = True
     with pytest.raises(ValidationError):
         SceneProgramDocument.model_validate(invalid)
+
+
+def test_a_show_answer_stage_action_parses_from_the_program_action_union():
+    from pydantic import TypeAdapter
+
+    from app.meta.dsl.scene_program import ProgramAction, ShowAnswerStageAction
+
+    action = TypeAdapter(ProgramAction).validate_python({
+        "kind": "show_answer_stage",
+        "target": {"visual_ref": "evaluated_answer"},
+        "stage": "work",
+    })
+
+    assert isinstance(action, ShowAnswerStageAction)
+    assert action.stage == "work"
+
+
+def test_the_unknown_stage_is_not_an_addressable_stage():
+    """The unknown text is what the visual is DRAWN as, so the ordinary reveal
+    puts it on screen. Only the two transitions away from it are actions."""
+    from pydantic import ValidationError
+
+    from app.meta.dsl.scene_program import ShowAnswerStageAction
+
+    with pytest.raises(ValidationError):
+        ShowAnswerStageAction(
+            target=TargetRef(visual_ref="evaluated_answer"), stage="unknown",
+        )

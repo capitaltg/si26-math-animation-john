@@ -85,6 +85,18 @@ def valid_program():
     return Candidate(plan, _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)}))
 
 
+def _perimeter_candidate():
+    plan = _perimeter_plan()
+    return Candidate(
+        plan,
+        _compile(
+            plan,
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+            {"length", "width"},
+        ),
+    )
+
+
 def apply_literal_test_mutation(candidate, mutation):
     program = candidate.program
     if mutation == "split_group_reveal":
@@ -295,6 +307,11 @@ def test_answer_revealed_in_a_non_final_conclude_beat_fails_premature_answer_emp
     on premature answer emphasis. Before the fix this exact program returned
     `passed=True` with zero failing checks.
 
+    The unresolved answer is now always revealed in the first beat, so a
+    premature `conclude` no longer manifests as an early reveal -- every
+    `conclude` beat resolves the value instead, so it is the `value` stage
+    that lands early here.
+
     The failing input is a real compiled `SceneProgramDocument` from
     `compile_teaching_plan`, not a `model_copy`-mutated one, so the assertion
     below is about what the gate does to compiler output.
@@ -304,19 +321,18 @@ def test_answer_revealed_in_a_non_final_conclude_beat_fails_premature_answer_emp
         plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
     )
 
-    # Confirm the compiler really did emit the premature reveal -- the whole
-    # point is that this is reachable output, not a hypothetical shape.
-    answer_reveals = [
+    # Confirm the compiler really did emit the premature value resolution --
+    # the whole point is that this is reachable output, not a hypothetical shape.
+    value_stages = [
         (entry.beat_id, entry.at_seconds) for entry in program.timeline
-        if entry.action.kind == "reveal"
-        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
     ]
-    assert answer_reveals[0][0] == "blurt_answer" != plan.beats[-1].id
+    assert value_stages[0][0] == "blurt_answer" != plan.beats[-1].id
     first_focus = min(
         entry.at_seconds for entry in program.timeline
         if entry.action.kind == "set_role" and entry.action.role == "focus"
     )
-    assert answer_reveals[0][1] < first_focus
+    assert value_stages[0][1] < first_focus
 
     report = validate_static_quality(plan, program)
 
@@ -657,3 +673,250 @@ def test_a_beat_that_produces_no_action_is_named_rather_than_reported_as_idle_ti
         "the named cause must be reported before the idle-interval symptom"
     )
     assert "second_look" in failed[0].detail
+
+
+def test_the_first_beat_placeholder_reveal_does_not_trip_the_conclusion_hold():
+    """`check_conclusion_hold` used to take the minimum duration across EVERY
+    entry naming `evaluated_answer`. The first-beat reveal is far shorter than
+    the 1.5s floor, so the check failed on a correct lesson."""
+    candidate = _perimeter_candidate()
+
+    report = validate_static_quality(candidate.plan, candidate.program)
+
+    hold = next(check for check in report.checks if check.code == "conclusion_hold_too_short")
+    assert hold.passed, hold.detail
+
+
+def test_an_answer_revealed_late_is_rejected():
+    candidate = _perimeter_candidate()
+    reveal_index = next(
+        index for index, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+    )
+    moved = candidate.program.timeline[reveal_index].model_copy(
+        update={"beat_id": candidate.plan.beats[-1].id},
+    )
+    timeline = list(candidate.program.timeline)
+    timeline[reveal_index] = moved
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    report = validate_static_quality(candidate.plan, program)
+
+    assert not report.passed
+    assert any(check.code == "answer_placeholder_missing" for check in report.checks)
+
+
+def test_the_resolved_value_may_not_appear_before_conclude():
+    candidate = _perimeter_candidate()
+    value_index = next(
+        index for index, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
+    )
+    moved = candidate.program.timeline[value_index].model_copy(
+        update={"beat_id": candidate.plan.beats[0].id},
+    )
+    timeline = list(candidate.program.timeline)
+    timeline[value_index] = moved
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    report = validate_static_quality(candidate.plan, program)
+
+    assert not report.passed
+    assert any(
+        check.code == "premature_answer_emphasis" and not check.passed
+        for check in report.checks
+    )
+
+
+def test_a_staged_perimeter_candidate_passes_every_gate():
+    candidate = _perimeter_candidate()
+
+    report = validate_static_quality(candidate.plan, candidate.program)
+
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_a_label_using_a_question_mark_as_the_answer_is_rejected():
+    """The kilometers draft authored `? meters` while the compiler appended its
+    own answer, so the lesson showed two answers, one of them dead."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [*program.visuals, LabelProgramVisual(ref="answer_label", text="? meters")],
+    })
+
+    check = check_answer_stand_in(program)
+
+    assert not check.passed
+    assert check.code == "answer_stand_in_label"
+
+
+def test_a_question_prompt_label_is_left_alone():
+    """A stand-in uses "?" as a value, so the mark sits mid-string; a question
+    ends with it."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [
+            *program.visuals,
+            LabelProgramVisual(ref="prompt", text="What is the perimeter?"),
+        ],
+    })
+
+    assert check_answer_stand_in(program).passed
+
+
+def test_an_answer_with_arithmetic_must_show_its_work():
+    from app.meta.v3.quality import check_answer_work_shown
+
+    program = _perimeter_candidate().program
+    timeline = [
+        entry for entry in program.timeline
+        if not (entry.action.kind == "show_answer_stage" and entry.action.stage == "work")
+    ]
+    stripped = program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_work_shown(stripped)
+
+    assert not check.passed
+    assert check.code == "answer_work_not_shown"
+
+
+def test_a_staged_candidate_shows_its_work():
+    from app.meta.v3.quality import check_answer_work_shown
+
+    assert check_answer_work_shown(_perimeter_candidate().program).passed
+
+
+def test_a_bare_question_mark_label_is_rejected():
+    """The purest stand-in: "?" alone, with no unit to push the mark mid-string."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [*program.visuals, LabelProgramVisual(ref="gap", text="?")],
+    })
+
+    assert not check_answer_stand_in(program).passed
+
+
+def _perimeter_program_with_callout(text):
+    program = _perimeter_candidate().program
+    return program.model_copy(update={
+        "relations": [
+            *program.relations,
+            CalloutRelation(
+                ref="hint",
+                target=AnchorRef(visual_ref="rectangle", part="edge", index=0, anchor="bottom"),
+                text=text,
+            ),
+        ],
+    })
+
+
+def test_a_callout_using_a_question_mark_as_the_answer_is_rejected():
+    """Relation text is the other model-authored text surface in the DSL, so a
+    model told never to put "?" in a label can author the same dead placeholder
+    as a callout instead."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    check = check_answer_stand_in(_perimeter_program_with_callout("? meters"))
+
+    assert not check.passed
+    assert check.code == "answer_stand_in_label"
+    assert check.path == "relations[0].text"
+
+
+def test_a_question_prompt_callout_is_left_alone():
+    from app.meta.v3.quality import check_answer_stand_in
+
+    assert check_answer_stand_in(
+        _perimeter_program_with_callout("What is the perimeter?"),
+    ).passed
+
+
+def test_an_unresolved_answer_without_any_stages_fails():
+    """Defence in depth: a program with evaluated_answer but no show_answer_stage
+    entries at all must be rejected, even though the evaluated_answer is revealed
+    in the first beat and nothing wrong appears until timeline is examined."""
+    from app.meta.v3.quality import check_answer_timing
+
+    candidate = _perimeter_candidate()
+    timeline = [
+        entry for entry in candidate.program.timeline
+        if entry.action.kind != "show_answer_stage"
+    ]
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_timing(candidate.plan, program)
+
+    assert not check.passed
+    assert check.code == "premature_answer_emphasis"
+
+
+def test_a_show_answer_stage_targeting_the_wrong_visual_is_rejected():
+    """`ShowAnswerStageAction.target` is a plain `TargetRef` that the action's
+    own schema does not constrain to the answer visual; `_action_animation`
+    (`app/meta/v3/renderer.py`) would otherwise `KeyError` on
+    `rendered.answer_stages[target.visual_ref]` instead of failing a
+    structured check."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    candidate = _perimeter_candidate()
+    index = next(
+        i for i, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
+    )
+    entry = candidate.program.timeline[index]
+    misdirected = entry.model_copy(update={
+        "action": entry.action.model_copy(update={
+            "target": entry.action.target.model_copy(update={"visual_ref": "rectangle"}),
+        }),
+    })
+    timeline = list(candidate.program.timeline)
+    timeline[index] = misdirected
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_stage_target(program)
+
+    assert not check.passed
+    assert check.code == "answer_stage_undefined"
+
+
+def test_a_work_stage_on_an_answer_with_no_operation_is_rejected():
+    """`work` only exists in the resolver's `stages` dict when `has_operation`
+    is true (`resolver.evaluate_program_visual`'s `answer_expression` branch),
+    so a stored program whose answer expression was edited down to a bare
+    field reference but still requests `work` would otherwise `KeyError` at
+    render time."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    candidate = _perimeter_candidate()
+    visuals = [
+        visual.model_copy(update={"expression": FieldRefNode(field="length")})
+        if visual.ref == "evaluated_answer" else visual
+        for visual in candidate.program.visuals
+    ]
+    program = candidate.program.model_copy(update={"visuals": visuals})
+
+    check = check_answer_stage_target(program)
+
+    assert not check.passed
+    assert check.code == "answer_stage_undefined"
+
+
+def test_pair_elimination_declares_no_answer_stage_so_the_check_passes():
+    """`pair_elimination`'s median plan declares no `evaluated_answer` visual,
+    and `beat_expander` emits no `show_answer_stage` action for it -- so the
+    loop over `program.timeline` never finds one to check, and the check
+    trivially passes."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    plan = _median_plan()
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+
+    assert not any(entry.action.kind == "show_answer_stage" for entry in program.timeline)
+    assert check_answer_stage_target(program).passed

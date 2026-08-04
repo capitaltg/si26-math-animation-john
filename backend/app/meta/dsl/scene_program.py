@@ -133,10 +133,21 @@ class MoveAction(BaseModel):
     path_ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_.]{0,95}$")
 
 
+class ShowAnswerStageAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["show_answer_stage"] = "show_answer_stage"
+    #: Always the answer visual. Carried explicitly, rather than being implied,
+    #: so every existing consumer that discovers targets generically --
+    #: `resolver.action_targets`, `quality._targets`,
+    #: `quality.check_unused_visual` -- sees this action without modification.
+    target: TargetRef
+    stage: Literal["work", "value"]
+
+
 ProgramAction = Annotated[
     Union[
         RevealAction, SetRoleAction, TraceAction, ShowRelationAction,
-        DrawAction, TransformAction, MoveAction,
+        DrawAction, TransformAction, MoveAction, ShowAnswerStageAction,
     ],
     Field(discriminator="kind"),
 ]

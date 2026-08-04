@@ -238,3 +238,17 @@ def test_other_strategies_may_still_restore_the_whole_primary_visual():
         {"kind": "restore", "target": {"visual_ref": "values"}},
     ]
     assert TeachingPlanDocument.model_validate(plan).strategy == "short_stagger"
+
+
+def test_answer_unit_defaults_to_empty_so_stored_plans_still_parse():
+    plan = TeachingPlanDocument.model_validate(_median_plan())
+
+    assert plan.answer_unit == ""
+
+
+def test_answer_unit_carries_the_unit_of_the_result():
+    raw = _median_plan()
+    raw["answer_unit"] = "meters"
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    assert plan.answer_unit == "meters"

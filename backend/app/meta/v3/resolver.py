@@ -9,6 +9,7 @@ from app.meta.dsl.scene_program import (
 )
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.expression_display import expression_display, format_number, has_operation
 from app.meta.v3.geometry import (
     Bounds, PlacedVisual, Point, TextMeasurer, translate_bounds, translate_point,
 )
@@ -132,9 +133,15 @@ def evaluate_program_visual(
     if kind == "label":
         return _evaluated_spec(visual), {"text": visual.text}
     if kind == "answer_expression":
-        return SimpleNamespace(kind="label", ref=visual.ref), {
-            "text": f"{visual.prefix}{_format_value(_evaluate(visual.expression, values))}{visual.suffix}",
-        }
+        value = format_number(_evaluate(visual.expression, values))
+        stages = {"unknown": f"{visual.prefix}?{visual.suffix}"}
+        if has_operation(visual.expression):
+            work = expression_display(visual.expression, values)
+            stages["work"] = f"{visual.prefix}{work} = ?{visual.suffix}"
+            stages["value"] = f"{visual.prefix}{work} = {value}{visual.suffix}"
+        else:
+            stages["value"] = f"{visual.prefix}{value}{visual.suffix}"
+        return _evaluated_spec(visual), {"stages": stages}
     raise ValueError(f"unknown program visual {kind}")
 
 
@@ -280,7 +287,7 @@ def _action_target_items(action, index):
     root = f"timeline[{index}].action"
     if action.kind == "reveal":
         return [(target, f"{root}.targets[{target_index}]") for target_index, target in enumerate(action.targets)]
-    if action.kind in {"set_role", "draw", "move"}:
+    if action.kind in {"set_role", "draw", "move", "show_answer_stage"}:
         return [(action.target, f"{root}.target")]
     if action.kind == "transform":
         return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]

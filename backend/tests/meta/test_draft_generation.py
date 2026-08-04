@@ -116,8 +116,15 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     assert "three to five teaching beats" in prompt
     assert "prefer semantic strategy over custom actions" in prompt
     assert "only inside their owning beat" in prompt
-    assert "answer-related visuals start neutral" in prompt
-    assert "introduced only during conclude" in prompt
+    # The answer contract the prompt used to state -- answer visuals start neutral
+    # and are introduced only during conclude -- is now the system's job, not the
+    # model's: the answer statement is staged for the plan. Pin the three clauses
+    # that replaced it: who owns the statement, when it resolves, and that the
+    # model must not author its own stand-in (the `? meters` label that motivated
+    # this change came straight out of the old wording).
+    assert "the system supplies the answer statement and stages it for you" in prompt
+    assert "resolves to the value only at conclude" in prompt
+    assert "never author a label or callout standing in for the answer" in prompt
     assert "simple collections reveal together" in prompt
     assert "perimeter explanations use boundary_trace" in prompt
     assert "median ordered values use item-specific targets" in prompt
@@ -222,3 +229,20 @@ def test_refinement_rejects_incomplete_structured_quality_feedback(mock_call):
         )
 
     mock_call.assert_not_called()
+
+
+def test_the_prompt_hands_answer_presentation_to_the_system():
+    from app.meta.draft_generation import _DRAFT_SYSTEM_PROMPT
+
+    assert "answer_unit" in _DRAFT_SYSTEM_PROMPT
+    assert 'never put "?" in a label' in _DRAFT_SYSTEM_PROMPT
+    # The gate was extended to cover `CalloutRelation.text` too, so the prompt
+    # must warn about that surface as well, not just labels.
+    assert 'never put "?" in a label or callout text' in _DRAFT_SYSTEM_PROMPT
+    # A reworded reversion would pass the two negative assertions below;
+    # this one pins the contract the prompt now has to state.
+    assert "resolves to the value only at conclude" in _DRAFT_SYSTEM_PROMPT
+    # The old instruction is false now: the unresolved answer appears from the
+    # first beat, and only its VALUE waits for conclude.
+    assert "introduced only during\nconclude" not in _DRAFT_SYSTEM_PROMPT
+    assert "the final evaluated answer is introduced only during" not in _DRAFT_SYSTEM_PROMPT

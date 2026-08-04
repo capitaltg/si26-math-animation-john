@@ -8,6 +8,7 @@ from app.meta.dsl.v3_common import (
     MIN_SCENE_SECONDS,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.expression_display import has_operation
 
 # Semantic parts that name a rectangle's length/width dimension edges (see
 # `app/meta/v3/rectangle_measurement.py`). Used by
@@ -56,6 +57,9 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_duration(program),
         check_grouped_simple_reveals(plan, program),
         check_answer_timing(plan, program),
+        check_answer_stand_in(program),
+        check_answer_work_shown(program),
+        check_answer_stage_target(program),
         check_conclusion_hold(program),
         # Before the idle-interval check: an empty beat IS the cause of the gap,
         # and `require_passed` reports the first failure, so the named cause has
@@ -99,44 +103,83 @@ def check_grouped_simple_reveals(plan, program) -> QualityCheck:
 
 
 def check_answer_timing(plan, program) -> QualityCheck:
-    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
-    if answer is not None and getattr(answer, "initial_role", "neutral") != "neutral":
-        return _failed("premature_answer_emphasis", "visuals.evaluated_answer.initial_role", "the evaluated answer must begin neutral")
+    """The answer is posed early as "? unit" and resolved only at conclude.
 
-    # Only the FINAL beat may be `conclude`
-    # (`TeachingPlanDocument.require_focus_and_conclusion_order`), so the one
-    # beat in which the evaluated answer may legally appear is the last one.
-    # Building this set from *every* `conclude` beat instead made any
-    # mid-scene conclusion a legal place to reveal the answer -- so the check
-    # named `premature_answer_emphasis` passed on exactly the premature
-    # emphasis it exists to catch. Kept as an independent second layer: if the
-    # plan schema's beat-order rule is ever relaxed, this check still fails
-    # the candidate rather than silently reporting success.
-    conclusions = {plan.beats[-1].id} if plan.beats[-1].kind == "conclude" else set()
-    premature = [
+    This check used to require the opposite -- that `evaluated_answer` appear
+    ONLY in conclude -- because the answer was a card drawn at the end. Now the
+    unresolved placeholder is what the first beat reveals, and the resolved
+    value is a stage transition, so the timing contract moves with it.
+    """
+    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
+    if answer is None:
+        # `pair_elimination` states its answer with one of its own values.
+        return _passed("premature_answer_emphasis", "visuals")
+    if getattr(answer, "initial_role", "neutral") != "neutral":
+        return _failed(
+            "premature_answer_emphasis", "visuals.evaluated_answer.initial_role",
+            "the evaluated answer must begin neutral",
+        )
+
+    reveals = [
         index for index, entry in enumerate(program.timeline)
         if entry.action.kind == "reveal"
         and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
-        and entry.beat_id not in conclusions
     ]
-    if premature:
-        return _failed("premature_answer_emphasis", f"timeline[{premature[0]}].beat_id", "the evaluated answer may only appear in conclude")
+    # The first beat that ACTS, not `plan.beats[0]`: a beat compiling to nothing
+    # contributes no timeline entry at all, so the reveal of a correct lesson can
+    # sit in a later plan beat than the zeroth. What catches a silent beat 0 is
+    # `check_every_beat_acts`, in this same report -- so relaxing that check would
+    # also let this one accept a late placeholder.
+    first_beat_id = program.timeline[0].beat_id
+    if len(reveals) != 1 or program.timeline[reveals[0]].beat_id != first_beat_id:
+        return _failed(
+            "answer_placeholder_missing", "timeline",
+            "the unresolved answer must be revealed exactly once, in the first beat, "
+            "so the lesson poses its question before answering it",
+        )
+
+    # Only the FINAL beat may be `conclude`
+    # (`TeachingPlanDocument.require_focus_and_conclusion_order`), so that is the
+    # one beat in which the resolved value may appear. Kept as an independent
+    # second layer: if the plan schema's beat-order rule is ever relaxed, this
+    # check still fails the candidate rather than silently reporting success.
+    conclusion_id = plan.beats[-1].id if plan.beats[-1].kind == "conclude" else None
+    seen = []
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "show_answer_stage":
+            continue
+        stage = entry.action.stage
+        if stage in seen:
+            return _failed(
+                "premature_answer_emphasis", f"timeline[{index}].action.stage",
+                f"the {stage} stage is shown more than once",
+            )
+        seen.append(stage)
+        if stage == "value" and entry.beat_id != conclusion_id:
+            return _failed(
+                "premature_answer_emphasis", f"timeline[{index}].beat_id",
+                "the resolved answer may only appear in conclude",
+            )
+    if seen not in (["value"], ["work", "value"]):
+        return _failed(
+            "premature_answer_emphasis", "timeline",
+            f"answer stages must be shown before resolving; found {seen}",
+        )
     return _passed("premature_answer_emphasis", "visuals.evaluated_answer")
 
 
 def check_conclusion_hold(program) -> QualityCheck:
-    answer_entries = [
-        entry for entry in program.timeline
-        if _targets(entry.action) and any(target.visual_ref == "evaluated_answer" for target in _targets(entry.action))
-    ]
-    if not answer_entries:
-        # A lesson whose answer is one of its own values declares no
-        # `evaluated_answer`, and passing vacuously here would leave its
-        # conclusion unheld. Hold the final beat's own actions to the floor.
-        final_beat_id = program.timeline[-1].beat_id
-        answer_entries = [entry for entry in program.timeline if entry.beat_id == final_beat_id]
-    conclusion_end = max(entry.at_seconds + entry.duration_seconds for entry in answer_entries)
-    shortest_conclusion_action = min(entry.duration_seconds for entry in answer_entries)
+    """Every action of the final acting beat must hold for the floor.
+
+    Scoped to that beat rather than to every entry naming `evaluated_answer`:
+    the answer is now revealed in the FIRST beat too, and that short reveal
+    would otherwise set the minimum and fail the check on a correct lesson.
+    `timeline.schedule_beats` identifies its own conclusion the same way.
+    """
+    final_beat_id = program.timeline[-1].beat_id
+    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == final_beat_id]
+    conclusion_end = max(entry.at_seconds + entry.duration_seconds for entry in conclusion_entries)
+    shortest_conclusion_action = min(entry.duration_seconds for entry in conclusion_entries)
     if (
         shortest_conclusion_action + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS
         or conclusion_end > program.total_duration_seconds + 1e-9
@@ -335,6 +378,99 @@ def check_unused_visual(program) -> QualityCheck:
                 "every declared visual must be named by a timeline action",
             )
     return _passed("unused_visual", "visuals")
+
+
+def check_answer_stand_in(program) -> QualityCheck:
+    """No model-authored text may stand in for the answer.
+
+    The system supplies the answer statement, so a label like "? meters" is a
+    second, dead answer competing with it -- which is exactly what the
+    kilometers draft produced. A question prompt is legitimate teaching, and a
+    stand-in is distinguishable from one without reading the wording: a stand-in
+    uses "?" as a value, so the mark sits mid-string (or is the whole of it),
+    while a question ends with it.
+
+    Relation text is held to the same rule. `CalloutRelation.text` is the DSL's
+    only other model-authored text surface, so a callout reading "? meters"
+    anchored to the primary visual produces the identical dead placeholder while
+    passing a check that only walked `program.visuals`.
+    """
+    for index, visual in enumerate(program.visuals):
+        if visual.kind != "label":
+            continue
+        if _stands_in_for_the_answer(visual.text):
+            return _failed(
+                "answer_stand_in_label", f"visuals[{index}].text",
+                "this label stands in for the answer; the system supplies the answer "
+                "statement, so remove the label and name the unit in answer_unit",
+            )
+    for index, relation in enumerate(program.relations):
+        if _stands_in_for_the_answer(relation.text):
+            return _failed(
+                "answer_stand_in_label", f"relations[{index}].text",
+                "this callout stands in for the answer; the system supplies the answer "
+                "statement, so word the callout as teaching and name the unit in answer_unit",
+            )
+    return _passed("answer_stand_in_label", "visuals")
+
+
+def check_answer_work_shown(program) -> QualityCheck:
+    """An answer with arithmetic must show that arithmetic before resolving.
+
+    Without this, a `derive` beat whose targets already hold their role compiles
+    to a bare recolour and the lesson states its answer having demonstrated
+    nothing -- the kilometers lesson's original failing.
+    """
+    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
+    if answer is None or not has_operation(answer.expression):
+        return _passed("answer_work_not_shown", "timeline")
+    if not any(
+        entry.action.kind == "show_answer_stage" and entry.action.stage == "work"
+        for entry in program.timeline
+    ):
+        return _failed(
+            "answer_work_not_shown", "timeline",
+            "the answer's arithmetic is never shown; give the lesson a derive or focus "
+            "beat before its conclusion so the calculation appears before the answer",
+        )
+    return _passed("answer_work_not_shown", "timeline")
+
+
+def check_answer_stage_target(program) -> QualityCheck:
+    """A `show_answer_stage` action must name a stage that actually exists.
+
+    `ShowAnswerStageAction.target` is a plain `TargetRef`, unconstrained by the
+    action's own schema, and `resolver.evaluate_program_visual` only ever builds
+    a `stages` dict for the `answer_expression` visual -- `work` is even in that
+    dict only when `has_operation` is true (see `evaluate_program_visual`'s
+    `answer_expression` branch). `_action_animation`
+    (`app/meta/v3/renderer.py`) looks the stage up with
+    `rendered.answer_stages[target.visual_ref][stage]`, so a target that isn't
+    that visual, or a `work` stage on an expression with no operation, is a
+    `KeyError` at render time rather than a reported failure. Catch both here,
+    the same way every other cross-reference in this module is caught.
+    """
+    answer = next((visual for visual in program.visuals if visual.kind == "answer_expression"), None)
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "show_answer_stage":
+            continue
+        target_ref = entry.action.target.visual_ref
+        if answer is None or target_ref != answer.ref:
+            return _failed(
+                "answer_stage_undefined", f"timeline[{index}].action.target",
+                f"show_answer_stage must target the declared answer visual, not {target_ref!r}",
+            )
+        if entry.action.stage == "work" and not has_operation(answer.expression):
+            return _failed(
+                "answer_stage_undefined", f"timeline[{index}].action.stage",
+                "the work stage does not exist for an answer with no operation to show",
+            )
+    return _passed("answer_stage_undefined", "timeline")
+
+
+def _stands_in_for_the_answer(text: str) -> bool:
+    stripped = text.strip()
+    return stripped == "?" or "?" in stripped[:-1]
 
 
 def _targets(action):

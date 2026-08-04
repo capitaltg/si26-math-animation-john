@@ -104,6 +104,7 @@ def _render_probe(
             self.rendered = None
             self.render_events = []
             self.final_answer_visible = False
+            self.final_answer_text = None
             self.beat_end_times = {
                 beat_id: max(
                     action.at_seconds + action.duration_seconds
@@ -132,6 +133,7 @@ def _render_probe(
         def construct(self):
             self.rendered = render_resolved_scene(self, resolved)
             self.final_answer_visible = _answer_visible(self, self.rendered, resolved)
+            self.final_answer_text = _final_answer_text(self.rendered, resolved)
             self._capture_completed_beats(force=True)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             self.camera.get_image().save(output_path)
@@ -256,6 +258,12 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "state_events": state_events,
         "declared_state_events": _declared_state_events(resolved),
         "final_answer_visible": scene.final_answer_visible,
+        # What the answer statement SAYS in the final frame, beside what it should
+        # say. `final_answer_visible` only proves the mobject survived; it passed
+        # happily while every lesson ended on "... = ?" because a co-slotted
+        # recolour overwrote the value stage.
+        "final_answer_text": scene.final_answer_text,
+        "declared_answer_text": _declared_answer_text(resolved),
         "answer_anchor": _target_label(resolved.answer_anchor) if resolved.answer_anchor else None,
         "derivation_visible": bool(path_events) or any(event["role"] == "focus" for event in state_events),
     }
@@ -354,6 +362,74 @@ def _answer_visible(scene, rendered, resolved) -> bool:
         return answer is not None and _mobject_is_visible(scene, answer)
     mobject = rendered.targets.get((anchor.visual_ref, anchor.part, anchor.index))
     return mobject is not None and _mobject_is_visible(scene, mobject)
+
+
+_ANSWER_REF = "evaluated_answer"
+
+
+def _final_answer_text(rendered, resolved) -> str | None:
+    """What the answer statement reads as in the final frame.
+
+    Identified from the DRAWN GEOMETRY, deliberately, not from the mobject's
+    `original_text`: `Transform` copies points, not python attributes, so the
+    mobject still reports the `unknown` stage's string long after it has been
+    morphed into the resolved value. Reading the attribute would report success
+    for precisely the bug this evidence exists to catch -- a stage transform
+    silently overwritten by a co-slotted recolour, which leaves the `work` text on
+    screen while the timeline says `value`.
+
+    Each stage was built as its own mobject centred on the same point, so the
+    drawn width identifies which one the frame shows; a width is the same kind of
+    observation as every other entry in `visual_bounds`. Returns `None` for a
+    lesson that draws no answer statement (`answer_anchor` carries the answer
+    instead), and `None` when no single stage matches, which fails the gate rather
+    than guessing.
+    """
+    stages = rendered.answer_stages.get(_ANSWER_REF)
+    if not stages:
+        return None
+    drawn = rendered.visuals[_ANSWER_REF]
+    texts = resolved.visual(_ANSWER_REF).measured.payload["stages"]
+    # Only the stages the drawn mobject could have been MORPHED into are
+    # candidates. `unknown`'s mobject is the drawn one itself, so comparing it
+    # would match by identity in every frame.
+    matches = [
+        name for name, mobject in stages.items()
+        if mobject is not drawn and abs(mobject.width - drawn.width) < 1e-6
+    ]
+    if len(matches) > 1:
+        return None
+    if matches:
+        return texts[matches[0]]
+    # Nothing morphed it: the frame still shows the stage built onto the scene.
+    return next(text for name, text in texts.items() if stages[name] is drawn)
+
+
+def _declared_answer_text(resolved) -> str | None:
+    """The stage the timeline's last `show_answer_stage` claims to leave on screen.
+
+    A program that declares an answer statement but stages it nowhere -- a
+    document frozen before `show_answer_stage` existed -- is held to its `value`
+    stage anyway. Returning `None` there made
+    `render_probe.check_final_answer_persistence` skip the text comparison
+    entirely, so such a program could end on "?" with every gate green.
+    """
+    answer = next(
+        (
+            item for item in resolved.visuals
+            if item.measured.ref == _ANSWER_REF and "stages" in item.measured.payload
+        ),
+        None,
+    )
+    if answer is None:
+        return None
+    stages = answer.measured.payload["stages"]
+    staged = [
+        action for action in resolved.timeline if action.action.kind == "show_answer_stage"
+    ]
+    if not staged:
+        return stages["value"]
+    return stages[max(staged, key=lambda action: action.at_seconds).action.stage]
 
 
 def _mobject_has_color(mobject, expected) -> bool:

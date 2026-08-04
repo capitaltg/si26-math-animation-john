@@ -1,5 +1,5 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
@@ -35,6 +35,9 @@ class RenderedScene:
     targets: dict[tuple[str, str | None, int | None], object]
     relations: dict[str, object]
     roles: dict[tuple[str, str | None, int | None], str]
+    #: Answer visual ref -> stage name -> mobject. Deliberately NOT in
+    #: `targets`: a plan may address the answer, never one of its stages.
+    answer_stages: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene:
@@ -82,16 +85,29 @@ def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
     visuals: dict[str, object] = {}
     targets: dict[tuple[str, str | None, int | None], object] = {}
     roles: dict[tuple[str, str | None, int | None], str] = {}
+    answer_stages: dict[str, dict[str, object]] = {}
+    staged_refs = _staged_answer_refs(scene.timeline)
     for placed in scene.visuals:
-        root, children = _build_visual(placed, palette)
+        payload = placed.measured.payload
+        if isinstance(payload, dict) and "stages" in payload:
+            root, stages = _build_answer_stages(
+                placed, palette, staged=placed.measured.ref in staged_refs,
+            )
+            answer_stages[placed.measured.ref] = stages
+            children = {}
+        else:
+            root, children = _build_visual(placed, palette)
         visuals[placed.measured.ref] = root
         targets[(placed.measured.ref, None, None)] = root
         targets.update({(placed.measured.ref, part, index): child for (part, index), child in children.items()})
-        role = _initial_role(placed.measured.ref, placed.measured.payload)
+        role = _initial_role(placed.measured.ref, payload)
         roles[(placed.measured.ref, None, None)] = role
         roles.update({(placed.measured.ref, part, index): role for part, index in children})
     relations = {relation.ref: _build_relation(relation, palette) for relation in scene.relations}
-    return RenderedScene(visuals=visuals, targets=targets, relations=relations, roles=roles)
+    return RenderedScene(
+        visuals=visuals, targets=targets, relations=relations, roles=roles,
+        answer_stages=answer_stages,
+    )
 
 
 _COMPOSITIONS: dict[str, Callable[[ResolvedScene, str], RenderedScene]] = {
@@ -207,6 +223,36 @@ def _build_visual(placed, palette: str):
     return root, children
 
 
+def _staged_answer_refs(timeline) -> set[str]:
+    return {
+        action.targets[0].ref.visual_ref
+        for action in timeline if action.action.kind == "show_answer_stage"
+    }
+
+
+def _build_answer_stages(placed, palette: str, *, staged: bool):
+    """One Text per stage, all centred on the same point.
+
+    Every stage is built up front because `Transform` needs a target mobject to
+    morph into, and only the drawn stage is ever added to the scene: the
+    transitions mutate that one mobject rather than adding new ones.
+
+    `staged` is False for a program frozen before `show_answer_stage` existed --
+    it reveals the answer and never transforms it. Such a program replays
+    verbatim (`dynamic_templates.load`), so drawing the `unknown` stage would
+    leave a bare "?" as the lesson's final answer with nothing able to resolve
+    it; draw the resolved `value` instead.
+    """
+    style = resolve_semantic_style(palette, _initial_role(placed.measured.ref, placed.measured.payload))
+    stages = {
+        stage: _text(text, "label", placed.bounds.center, placed.scale)
+        for stage, text in placed.measured.payload["stages"].items()
+    }
+    for mobject in stages.values():
+        _apply_style(mobject, style)
+    return stages["unknown" if staged else "value"], stages
+
+
 def _initial_role(ref: str, payload) -> str:
     """The role a visual is drawn in before any `set_role` plays.
 
@@ -220,7 +266,7 @@ def _initial_role(ref: str, payload) -> str:
     declared = payload.get("initial_role") if isinstance(payload, dict) else None
     if declared is not None:
         return declared
-    if ref == "evaluated_answer" or "values" in payload or "text" in payload:
+    if ref == "evaluated_answer" or "stages" in payload or "values" in payload or "text" in payload:
         return "neutral"
     return "structure"
 
@@ -357,15 +403,44 @@ def _play_role_batches(scene, actions, rendered: RenderedScene, palette: str) ->
 
 
 def _play_parallel_actions(scene, actions, rendered: RenderedScene, motion, palette: str) -> None:
+    # A `set_role` and a `show_answer_stage` on the SAME mobject in one slot --
+    # exactly what the conclude beat emits on the answer -- became two competing
+    # `Transform`s in one `AnimationGroup`. Both rewrite that mobject's points
+    # every frame and the later one wins, and `build_role_transition`'s target is
+    # a recoloured copy of the mobject's state at `begin()` -- i.e. the work
+    # stage. So the recolour overwrote the value stage and every lesson ended on
+    # "2.75 x 1000 = ? meters" in the conclusion colour: the resolved answer was
+    # never drawn. They describe one visual event, so emit one animation.
+    staged = {
+        _target_tuple(action.targets[0].ref): action.action.stage
+        for action in actions if action.action.kind == "show_answer_stage"
+    }
+    role_targets = {
+        _target_tuple(target.ref)
+        for action in actions if action.action.kind == "set_role"
+        for target in action.targets
+    }
+    # Resolved before the loop, not during it: the compiler emits the stage action
+    # first, so deciding as we go would let it contribute its own animation before
+    # the `set_role` that absorbs it is ever seen -- two Transforms again.
+    merged = role_targets & staged.keys()
+
     animations = []
     for action in actions:
         if action.action.kind == "set_role":
             style = resolve_semantic_style(palette, action.action.role)
             target_keys = tuple(_target_tuple(target.ref) for target in action.targets)
-            animations.extend(build_role_transition(_target_mobject(rendered, target.ref), style) for target in action.targets)
+            for target, target_key in zip(action.targets, target_keys):
+                animations.append(
+                    _stage_transition(rendered, target.ref, staged[target_key], style)
+                    if target_key in merged
+                    else build_role_transition(_target_mobject(rendered, target.ref), style)
+                )
             rendered.roles.update({target_key: action.action.role for target_key in target_keys})
         elif action.action.kind == "reveal" and action.action.mode == "together":
             animations.extend(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
+        elif action.action.kind == "show_answer_stage" and _target_tuple(action.targets[0].ref) in merged:
+            continue  # already carried by the co-slotted `set_role` above
         else:
             animations.append(_action_animation(action, rendered, motion, palette))
     _play(
@@ -405,7 +480,24 @@ def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, p
         return Transform(_target_mobject(rendered, action.targets[0].ref), _target_mobject(rendered, action.targets[1].ref))
     if kind == "move":
         return build_move_along_path(_target_mobject(rendered, action.targets[0].ref), _path_mobject(action.path))
+    if kind == "show_answer_stage":
+        return _stage_transition(rendered, action.targets[0].ref, action.action.stage)
     raise ValueError(f"unsupported resolved action {kind}")
+
+
+def _stage_transition(rendered: RenderedScene, ref, stage: str, style: dict | None = None):
+    """Morph the answer text into one of its later stages.
+
+    `style` restyles the destination, for the case where a `set_role` shares the
+    slot: the role change and the stage change are then one event on one mobject
+    and must be one animation. Restyling the destination rather than dropping the
+    recolour also keeps the probe's `set_role` observation (`state_applied`,
+    which reads the mobject's colour) true, so `check_state_order` still agrees.
+    """
+    destination = rendered.answer_stages[ref.visual_ref][stage]
+    if style is not None:
+        _apply_style(destination, style)
+    return Transform(_target_mobject(rendered, ref), destination)
 
 
 def _action_target(action: ResolvedAction):

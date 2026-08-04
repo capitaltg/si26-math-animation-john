@@ -161,6 +161,25 @@ def test_trace_path_and_timeline_target_use_final_placed_geometry(perimeter_prog
     assert trace.path[0] == trace.path[-1]
 
 
+def test_show_answer_stage_resolves_the_answer_visual_as_its_target(perimeter_program, measurer):
+    """Naming this action's target is the resolver's job, not the renderer's.
+
+    The renderer reads `resolved.targets[0]` to find the answer text to
+    transform, so a resolver that did not list `show_answer_stage` among the
+    single-target kinds handed it an empty list -- which showed up only as an
+    `IndexError` inside a renderer test. Pin the contract where it lives.
+    """
+    scene = resolve_scene(perimeter_program, {"length": 8, "width": 3}, measurer)
+    answer = scene.visual("evaluated_answer")
+
+    staged = [action for action in scene.timeline if action.action.kind == "show_answer_stage"]
+
+    assert staged, "the compiled perimeter lesson stages its answer"
+    for action in staged:
+        assert [target.ref.visual_ref for target in action.targets] == ["evaluated_answer"]
+        assert action.targets[0].bounds == answer.bounds
+
+
 def test_relation_with_missing_semantic_part_has_structured_anchor_failure(program, measurer):
     relation = program.relations[0].model_copy(update={
         "target": AnchorRef(visual_ref="values", part="missing", index=3, anchor="bottom"),
@@ -202,18 +221,16 @@ def test_timeline_unknown_relation_has_structured_action_path(program, measurer)
     assert exc.value.failure.path == "timeline[0].action.relation_ref"
 
 
-def test_vertical_layout_centers_primary_and_reserves_conclusion_band():
+def test_vertical_layout_centers_the_column_including_the_answer():
     primary, conclusion = place_vertical_lesson([
         _measured_visual("primary", 2),
         _measured_visual("evaluated_answer", 0.6),
     ])
 
-    assert primary.bounds.center.y == pytest.approx(0.6)
-    assert primary.bounds.bottom >= -2.4
     assert primary.bounds.top <= SAFE_FRAME.top
     assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
-    assert conclusion.bounds.top <= -2.4
     assert conclusion.bounds.top < primary.bounds.bottom
+    assert (primary.bounds.top + conclusion.bounds.bottom) / 2 == pytest.approx(0.0)
 
 
 def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
@@ -244,9 +261,7 @@ def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_v
         _measured_visual("evaluated_answer", 0.6),
     ])
 
-    assert primary.bounds.center.y == pytest.approx(0.6)
     assert primary.bounds.left - supporting.bounds.right == pytest.approx(0.45)
-    assert conclusion.bounds.top <= -2.4
     for visual in (primary, supporting, conclusion):
         assert visual.bounds.bottom >= SAFE_FRAME.bottom
         assert visual.bounds.top <= SAFE_FRAME.top
@@ -255,9 +270,8 @@ def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_v
 def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
     conclusion, = place_vertical_lesson([_measured_visual("evaluated_answer", 0.6)])
 
-    assert conclusion.bounds.center.y == pytest.approx(-3.0)
+    assert conclusion.bounds.center.y == pytest.approx(0.0)
     assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
-    assert conclusion.bounds.top <= -2.4
 
 
 def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
@@ -275,10 +289,12 @@ def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
     ])
     by_ref = {visual.measured.ref: visual for visual in placed}
 
-    # Vertical binds: the primary's band (3) plus the stacked row (3) and the gap
-    # between them (0.45) is 6.45 against the 6.0-high instructional frame.
+    # Vertical binds: the primary's band (3), the stacked row (3) and the answer's
+    # own last row (0.6), plus a 0.45 gap before each of the latter two, is 7.5
+    # against the instructional frame -- which is now the full safe frame, since
+    # the answer is laid out in the column rather than in a reserved band below it.
     scale = (placed[0].bounds.top - placed[0].bounds.bottom) / 3
-    assert scale == pytest.approx(6.0 / 6.45, abs=1e-5)
+    assert scale == pytest.approx((SAFE_FRAME.top - SAFE_FRAME.bottom) / 7.5, abs=1e-5)
     # The split itself, which is this test's subject.
     primary_band = by_ref["primary"].bounds
     for ref in ("support_beside_0", "support_beside_1"):
@@ -291,3 +307,42 @@ def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
         assert visual.bounds.right <= SAFE_FRAME.right + 1e-9
         assert visual.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
         assert visual.bounds.top <= SAFE_FRAME.top + 1e-9
+
+
+def test_an_answer_expression_resolves_to_three_stages():
+    from app.meta.dsl.scene_program import AnswerProgramVisual
+    from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
+    from app.meta.v3.resolver import evaluate_program_visual
+
+    visual = AnswerProgramVisual(
+        ref="evaluated_answer",
+        expression=MultiplyNode(operands=[
+            FieldRefNode(field="distance_km"), LiteralNode(value=1000),
+        ]),
+        suffix=" meters",
+    )
+
+    spec, payload = evaluate_program_visual(visual, {"distance_km": Fraction(11, 4)})
+
+    assert spec.kind == "answer_expression"
+    assert payload["stages"] == {
+        "unknown": "? meters",
+        "work": "2.75 × 1000 = ? meters",
+        "value": "2.75 × 1000 = 2750 meters",
+    }
+
+
+def test_an_answer_with_no_arithmetic_has_no_work_stage():
+    """A bare field reference has nothing to show, so a work stage would just
+    print the value it is about to resolve to."""
+    from app.meta.dsl.scene_program import AnswerProgramVisual
+    from app.meta.dsl.expression import FieldRefNode
+    from app.meta.v3.resolver import evaluate_program_visual
+
+    visual = AnswerProgramVisual(
+        ref="evaluated_answer", expression=FieldRefNode(field="total"), suffix=" apples",
+    )
+
+    _spec, payload = evaluate_program_visual(visual, {"total": Fraction(7)})
+
+    assert payload["stages"] == {"unknown": "? apples", "value": "7 apples"}
