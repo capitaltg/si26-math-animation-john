@@ -203,7 +203,11 @@ def get_options(
     snapshot = None
     if settings.meta_dynamic_classifier_enabled:
         with meta_session() as meta_db_session:
-            snapshot = load_enabled_snapshot(meta_db_session)
+            # Scoped to this session: a template this teacher approved privately
+            # is theirs to be offered, and another teacher's is not.
+            snapshot = load_enabled_snapshot(
+                meta_db_session, owner_session_id=session.session_id
+            )
 
     for candidate_id, candidate in candidates:
         if snapshot is not None:

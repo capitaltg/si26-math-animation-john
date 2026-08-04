@@ -1328,3 +1328,33 @@ def test_render_chained_scene_uses_chained_render_path(tmp_path):
     assert clips[0]["clip_url"].startswith("/clips/")
     chained_render.assert_called_once()
     solo_render.assert_not_called()
+
+
+def test_options_loads_the_snapshot_for_the_requesting_session():
+    """A teacher's own approved templates must reach their own /options.
+
+    load_enabled_snapshot filters by owner, so passing the session id is what
+    makes a privately-approved template visible to the session that approved it
+    and invisible to everyone else.
+    """
+    from app.config import get_settings
+    from app.meta.dynamic_templates import EnabledSnapshot
+
+    client = _client()
+    _upload_candidate(client)
+    session_id = client.cookies.get("session_id")
+
+    settings = get_settings()
+    settings.meta_dynamic_classifier_enabled = True
+    try:
+        with patch("app.routes.meta_session") as mock_meta_session, patch(
+            "app.routes.load_enabled_snapshot", return_value=EnabledSnapshot(_entries={})
+        ) as mock_load_snapshot, patch(
+            "app.routes.classify_candidate", return_value=_classification()
+        ):
+            mock_meta_session.return_value.__enter__.return_value = object()
+            client.post("/options", json={"candidate_ids": ["c1"]})
+    finally:
+        settings.meta_dynamic_classifier_enabled = False
+
+    assert mock_load_snapshot.call_args.kwargs["owner_session_id"] == session_id

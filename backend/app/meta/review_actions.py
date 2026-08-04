@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from app.meta.jobs import mark_needs_manual
 from app.meta.models import (
     DRAFT_PENDING_REVIEW,
     DRAFT_REJECTED,
+    JOB_QUEUED,
     FallbackObservation,
     GenerationJob,
     TemplateDraft,
@@ -25,6 +27,62 @@ class DraftRefinementFailedError(Exception):
 
 
 _REFINABLE_STATUSES = {DRAFT_PENDING_REVIEW}
+
+
+@dataclass(frozen=True)
+class RefinementOutcome:
+    """Whether another attempt is coming, or automatic generation is out of road."""
+
+    requeued: bool
+
+
+def requeue_for_refinement(
+    draft_id: str, *, feedback: str, reviewer_label: str, max_refinements: int
+) -> RefinementOutcome:
+    """Record a rejection and hand the next attempt back to the worker.
+
+    The asynchronous counterpart to ``reject_and_refine``. That function calls
+    the model inline, which is fine for an admin CLI-ish panel and unusable for a
+    teacher: it would hold an HTTP request open for the minutes a generation
+    round takes. Here the rejection is durable immediately and the job returns to
+    the queue, so the same progress surface that showed the first attempt shows
+    the next one.
+
+    ``run_generation_job`` picks the refinement up by finding this job's
+    highest-revision rejected draft, so no refinement state needs storing beyond
+    what the revision chain already carries.
+    """
+    now = datetime.now(timezone.utc)
+    with meta_session() as session:
+        draft = session.get(TemplateDraft, draft_id)
+        if draft is None or draft.status not in _REFINABLE_STATUSES:
+            raise DraftNotRefinableError(f"draft {draft_id} is not in a refinable state")
+
+        record_review(
+            session, new_id=uuid4().hex, draft_id=draft.id, decision="reject",
+            reviewer_label=reviewer_label, feedback=feedback, now=now,
+        )
+        draft.status = DRAFT_REJECTED
+        draft.reviewer_feedback = feedback
+        draft.updated_at = now
+        session.flush()
+
+        if draft.revision >= max_refinements:
+            mark_needs_manual(session, job_id=draft.job_id, now=now)
+            return RefinementOutcome(requeued=False)
+
+        job = session.get(GenerationJob, draft.job_id)
+        job.status = JOB_QUEUED
+        # A job that failed earlier carries a future cooldown, and one that
+        # succeeded may still carry its last lease. Either would stop
+        # claim_next_job from picking this up promptly, or make it look like
+        # another worker's in-flight work.
+        job.cooldown_until = None
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.updated_at = now
+        session.flush()
+        return RefinementOutcome(requeued=True)
 
 
 def reject_and_refine(
