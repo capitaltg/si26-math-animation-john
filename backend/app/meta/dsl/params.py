@@ -171,22 +171,28 @@ class TemplateParamsBase(BaseModel):
 
 
 def _field_definition(spec) -> tuple[type, object]:
+    # The spec's `description` rides along into the JSON schema. It is the only
+    # thing that says what a field HOLDS: extraction hands the schema to a model,
+    # and a bare name like `object_name` reads as "some object", so the model
+    # guessed and declined a problem it could have extracted. Pydantic derives a
+    # `title` from the name, which carries no such information.
+    described = {"description": spec.description}
     if spec.type == "integer":
         py_type = int
         default_kwargs = {} if spec.required else {"default": spec.default}
-        field = Field(ge=spec.minimum, le=spec.maximum, **default_kwargs)
+        field = Field(ge=spec.minimum, le=spec.maximum, **described, **default_kwargs)
     elif spec.type == "decimal":
         py_type = float
         default_kwargs = {} if spec.required else {"default": spec.default}
-        field = Field(ge=spec.minimum, le=spec.maximum, **default_kwargs)
+        field = Field(ge=spec.minimum, le=spec.maximum, **described, **default_kwargs)
     elif spec.type == "string":
         py_type = str
         default_kwargs = {} if spec.required else {"default": spec.default}
-        field = Field(max_length=spec.max_length, **default_kwargs)
+        field = Field(max_length=spec.max_length, **described, **default_kwargs)
     elif spec.type == "enum":
         py_type = Literal[tuple(spec.choices)]
         default_kwargs = {} if spec.required else {"default": spec.default}
-        field = Field(**default_kwargs)
+        field = Field(**described, **default_kwargs)
     elif spec.type == "array":
         item_model = create_model(
             f"_{spec.name}_Item",
@@ -195,7 +201,9 @@ def _field_definition(spec) -> tuple[type, object]:
         )
         py_type = list[item_model]
         default_kwargs = {} if spec.required else {"default_factory": list}
-        field = Field(min_length=spec.min_items, max_length=spec.max_items, **default_kwargs)
+        field = Field(
+            min_length=spec.min_items, max_length=spec.max_items, **described, **default_kwargs
+        )
     else:
         raise ValueError(f"unknown field type: {spec.type}")
     if not spec.required and spec.type != "array":

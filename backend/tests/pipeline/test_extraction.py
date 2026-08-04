@@ -280,3 +280,79 @@ def test_bedrock_client_uses_credentials_loaded_from_settings(mock_settings, moc
         aws_secret_access_key="secret-key",
     )
     get_bedrock_client.cache_clear()
+
+
+def _dynamic_params_cls():
+    from app.meta.dsl.expression import FieldRefNode
+    from app.meta.dsl.guard import GuardDocument, PositivePredicate, compile_guard
+    from app.meta.dsl.params import (
+        DecimalFieldSpec, ParamsDocument, StringFieldSpec, compile_template_params,
+    )
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(
+                name="distance_km", label="Distance in kilometers",
+                description="The length of the object in kilometers",
+                minimum=0.1, maximum=9.99,
+            ),
+            StringFieldSpec(
+                name="object_name", label="Object name",
+                description="The name of the object being measured",
+                max_length=60,
+            ),
+        ],
+    )
+    guard = compile_guard(
+        GuardDocument(
+            guard_version=1,
+            predicates=[PositivePredicate(value=FieldRefNode(field="distance_km"))],
+        ),
+        known_fields=frozenset({"distance_km", "object_name"}),
+    )
+    return compile_template_params(document, guard)
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_dynamic_template_extraction_is_not_judged_by_static_schema_criteria(mock_call):
+    """A dynamic schema must not be offered the static templates' decline criteria.
+
+    The static prompt tells the model to decline when there is "no add or subtract
+    sequence for a step-based schema" or "non-whole operands for a whole-number
+    schema". A dynamic schema has neither notion, and a km-conversion template was
+    declined on both grounds -- the model quoted them back as its reason -- for a
+    problem whose values sat plainly in the text and inside the declared range.
+    """
+    from app.pipeline.extraction import extract_params
+
+    mock_call.return_value = (
+        "report_params",
+        {"distance_km": 2.75, "object_name": "hiking trail"},
+    )
+
+    extract_params(
+        "A hiking trail is 2.75 kilometers long. How many meters long is the trail?",
+        _dynamic_params_cls(),
+    )
+
+    prompt = mock_call.call_args.kwargs["system_prompt"]
+    assert "add or subtract sequence" not in prompt
+    assert "whole-number schema" not in prompt
+    assert "operand" not in prompt
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_static_template_extraction_keeps_its_tuned_prompt(mock_call):
+    """The six static templates keep the prompt their extraction was tuned against."""
+    from app.pipeline.extraction import _EXTRACTION_SYSTEM_PROMPT, extract_params
+    from app.templates.number_line.params import NumberLineParams
+
+    mock_call.return_value = (
+        "report_params",
+        {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+    )
+
+    extract_params("Sarah has 4 apples and buys 3 more.", NumberLineParams)
+
+    assert mock_call.call_args.kwargs["system_prompt"] == _EXTRACTION_SYSTEM_PROMPT
