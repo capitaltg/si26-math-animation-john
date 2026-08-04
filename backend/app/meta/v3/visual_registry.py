@@ -77,6 +77,13 @@ _CARDINALITY_FIELDS = {
     "partition": ("parts",),
 }
 
+#: Per KIND, part classes that are NOT on screen when the whole visual is
+#: revealed. The renderer keeps them out of the visual's root group, so they
+#: arrive by their own reveal -- which means the "revealing a visual reveals its
+#: parts" rule that `beat_expander._is_revealed` and `quality.check_repeated_reveal`
+#: both apply has to make an exception for them.
+DEFERRED_PARTS = {"unit_tape": ("target_label",)}
+
 #: One box per whole unit stops being legible past this, and a ninth box would
 #: not fit the 18.9-unit width limit with both labels inside it. `number_line`
 #: covers larger magnitudes.

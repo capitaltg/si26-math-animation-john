@@ -244,3 +244,52 @@ def test_the_tape_factory_never_runs_for_an_oversized_value():
              "source_unit": "km", "target_unit": "m"},
             LabelMeasurer(),
         )
+
+
+def _reveals(program):
+    return [
+        entry.action for entry in program.timeline if entry.action.kind == "reveal"
+    ]
+
+
+def test_the_compiler_reveals_every_target_label_at_the_derive_beat():
+    program = _compile(_tape_plan())
+
+    label_reveals = [
+        action for action in _reveals(program)
+        if any(target.part == "target_label" for target in action.targets)
+    ]
+    assert len(label_reveals) == 1
+    target = label_reveals[0].targets[0]
+    assert (target.visual_ref, target.part, target.index) == ("trail_tape", "target_label", None)
+    assert label_reveals[0].mode == "stagger"
+
+
+def test_the_label_reveal_is_not_suppressed_by_the_whole_visual_reveal():
+    """`_reveal_unrevealed` treats a part as revealed once its visual is.
+
+    That is right for every other kind -- the whole-visual reveal fades in a root
+    group containing the parts -- and wrong for a deferred part, which the
+    renderer deliberately leaves out of that group. Without the
+    `DEFERRED_PARTS` exception the staged reveal is silently dropped and the
+    metres never appear.
+    """
+    program = _compile(_tape_plan())
+
+    order = [
+        (target.part, target.index)
+        for action in _reveals(program) for target in action.targets
+        if target.visual_ref == "trail_tape"
+    ]
+    assert (None, None) in order
+    assert ("target_label", None) in order
+    assert order.index((None, None)) < order.index(("target_label", None))
+
+
+def test_a_group_reveal_tape_gets_no_staged_substitution():
+    program = _compile(_tape_plan(strategy="group_reveal"))
+
+    assert not [
+        action for action in _reveals(program)
+        if any(target.part == "target_label" for target in action.targets)
+    ]
