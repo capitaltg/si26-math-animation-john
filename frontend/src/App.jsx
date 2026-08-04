@@ -335,6 +335,7 @@ function MainApp() {
     const file = event.target.file.files[0]
     if (!file) return
     setError(null)
+    setBatchFailure(null)
     setLoading(true)
     setOptions(null)
     setPicks({})
@@ -397,6 +398,8 @@ function MainApp() {
   async function handleBuildStoryboard() {
     if (!options || options.some((item) => !picks[item.candidate_id])) return
     setError(null)
+    // A previous batch's failure belongs to a storyboard that no longer exists.
+    setBatchFailure(null)
     setLoading(true)
     try {
       const body = options.map((item) => ({

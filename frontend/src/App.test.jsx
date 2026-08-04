@@ -113,6 +113,7 @@ function installFetchMock({
   fallbackReason = null,
   patchStatus = 'ok',
   storyboardScenes = [pendingScene],
+  renderFails = false,
 } = {}) {
   let uploadCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
@@ -131,16 +132,17 @@ function installFetchMock({
       return jsonResponse({ candidates: [candidate] })
     }
     if (url === '/options') {
+      const requested = JSON.parse(init.body).candidate_ids
       return jsonResponse({
-        options: [{
-          candidate_id: 'c1',
+        options: requested.map((candidateId) => ({
+          candidate_id: candidateId,
           grade_level: 1,
           ambiguous: false,
           templates: [{
             template: 'number_line',
             rationale: 'shows addition as a jump',
           }],
-        }],
+        })),
       })
     }
     if (url === '/storyboard') {
@@ -177,6 +179,9 @@ function installFetchMock({
       return jsonResponse({ ...pendingScene, status: 'rejected' })
     }
     if (url === '/render') {
+      if (renderFails) {
+        return jsonResponse({ detail: 'Render timed out after 600s' }, 500)
+      }
       return jsonResponse({
         clips: [{
           scene_id: 's1',
@@ -523,6 +528,8 @@ async function reachOptions() {
   const checkbox = await screen.findByRole('checkbox')
   fireEvent.click(checkbox)
   fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await new Promise((r) => setTimeout(r, 50))
+  console.log('DEBUG BODY:', document.body.textContent.slice(0, 400))
   await screen.findByRole('heading', { name: 'Choose visualizations' })
 }
 
@@ -536,4 +543,32 @@ it('does not show the new-template hint when a structural template is offered', 
   installFetchMock()
   await reachOptions()
   expect(screen.queryByText(/may propose a brand-new visualization template/)).toBeNull()
+})
+
+it('clears a failed render alert once a new storyboard is built', async () => {
+  installFetchMock({ secondUpload: true, renderFails: true })
+  const { fileInput } = await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+  await screen.findByText(/The render did not finish/)
+
+  // Upload alone only unmounts the alert. The failure must not survive into the
+  // next storyboard, or a fresh pipeline opens under a stale alarm.
+  fireEvent.change(fileInput, {
+    target: { files: [new File(['deck2'], 'deck2.pptx')] },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+  // Click the label text, not the input: the input sits inside the label, so a
+  // direct click double-toggles and nets no selection.
+  await screen.findByRole('checkbox')
+  fireEvent.click(screen.getByText('Detected: 9 - 2'))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await screen.findByRole('heading', { name: 'Choose visualizations' })
+  fireEvent.click(screen.getByRole('button', { name: 'Build storyboard' }))
+  await screen.findByRole('heading', { name: 'Storyboard review' })
+
+  expect(screen.queryByText(/The render did not finish/)).toBeNull()
 })
