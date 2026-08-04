@@ -240,41 +240,15 @@ def test_other_strategies_may_still_restore_the_whole_primary_visual():
     assert TeachingPlanDocument.model_validate(plan).strategy == "short_stagger"
 
 
-def _minimal_plan_payload():
-    return {
-        "plan_version": 3,
-        "learning_objective": "Convert kilometres to metres.",
-        "primary_visual": {
-            "kind": "bar", "ref": "km_bar",
-            "value": {"node": "field_ref", "field": "distance_km"},
-            "maximum": {"node": "literal", "value": 10.0},
-        },
-        "strategy": "magnitude_comparison",
-        "beats": [
-            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "km_bar"}],
-             "intent": "show the distance as a bar"},
-            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "km_bar"}],
-             "intent": "multiply by one thousand"},
-            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "km_bar"}],
-             "intent": "state the length in metres"},
-        ],
-        "variation_seed": "km-to-m",
-    }
-
-
 def test_answer_unit_defaults_to_empty_so_stored_plans_still_parse():
-    from app.meta.dsl.teaching_plan import TeachingPlanDocument
-
-    plan = TeachingPlanDocument.model_validate(_minimal_plan_payload())
+    plan = TeachingPlanDocument.model_validate(_median_plan())
 
     assert plan.answer_unit == ""
 
 
 def test_answer_unit_carries_the_unit_of_the_result():
-    from app.meta.dsl.teaching_plan import TeachingPlanDocument
-
-    plan = TeachingPlanDocument.model_validate(
-        {**_minimal_plan_payload(), "answer_unit": "meters"},
-    )
+    raw = _median_plan()
+    raw["answer_unit"] = "meters"
+    plan = TeachingPlanDocument.model_validate(raw)
 
     assert plan.answer_unit == "meters"
