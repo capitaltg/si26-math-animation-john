@@ -25,12 +25,51 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "forcing an ill-fitting answer."
 )
 
+#: The six static templates share one schema vocabulary -- operands, step
+#: sequences, whole numbers -- and `_EXTRACTION_SYSTEM_PROMPT` names it directly,
+#: including in its decline guidance. A dynamic template's schema has none of
+#: those notions: it is an arbitrary set of described fields. Offered the static
+#: prompt, a km-conversion template was declined for having "no add or subtract
+#: sequence" and a "non-whole operand" -- the model quoted both criteria back as
+#: its reason -- even though the value sat plainly in the text and inside the
+#: field's declared range. So dynamic templates get a prompt that describes the
+#: schema it is actually handed, and declines only on the one ground that
+#: generalises: the problem does not contain these values.
+_DYNAMIC_EXTRACTION_SYSTEM_PROMPT = (
+    "Extract the values described by the given schema from the problem text. "
+    "Each field's description states what it holds -- follow it, and use the "
+    "field's stated bounds to decide whether a value belongs there. "
+    "Report values exactly as they appear in the text; never compute or state a "
+    "final answer, even when the problem asks for one. "
+    "Ignore answer choices, displayed answers, and diagram labels outside the "
+    "problem statement. "
+    "Call decline_extraction only if the problem does not contain the values this "
+    "schema describes. Do not decline because the problem's operation, wording, or "
+    "number format is not one you expected -- the schema is the only contract."
+)
+
 _DECLINE_TOOL_NAME = "decline_extraction"
 _DECLINE_TOOL_SCHEMA = {
     "type": "object",
     "properties": {"reason": {"type": "string"}},
     "required": ["reason"],
 }
+
+
+def _system_prompt_for(params_cls: Type[T]) -> str:
+    """Which extraction vocabulary this params class should be read against.
+
+    Keyed on the compiled dynamic base rather than on a template-name lookup, so
+    every future dynamic template gets the schema-driven prompt by construction
+    instead of by anyone remembering to register it. Imported lazily: `app.meta`
+    pulls in the DSL and its DB models, and the pipeline must not depend on that
+    at import time -- `app.templates.registry.get_template` defers the same way.
+    """
+    from app.meta.dsl.params import TemplateParamsBase
+
+    if isinstance(params_cls, type) and issubclass(params_cls, TemplateParamsBase):
+        return _DYNAMIC_EXTRACTION_SYSTEM_PROMPT
+    return _EXTRACTION_SYSTEM_PROMPT
 
 
 def _problem_statement(source_text: str) -> str:
@@ -41,7 +80,7 @@ def _problem_statement(source_text: str) -> str:
 def extract_params(source_text: str, params_cls: Type[T]) -> T:
     schema = params_cls.model_json_schema()
     tool_name, result = call_with_tool(
-        system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+        system_prompt=_system_prompt_for(params_cls),
         user_message=_problem_statement(source_text),
         tools=[
             {"name": "report_params", "schema": schema},

@@ -595,3 +595,62 @@ def test_a_guard_predicate_naming_an_array_without_an_item_field_fails_to_compil
 
     assert exc_info.value.code == "array_item_field_required"
     assert "value" in str(exc_info.value)
+
+
+def test_compiled_schema_carries_each_field_description():
+    """The extraction model is told what a field holds, not just its name.
+
+    A params document's `description` is the only thing that says what belongs in
+    a field -- `object_name` alone reads as "some object" and the model guessed at
+    it, declining a problem it could have extracted. Auto-derived titles do not
+    carry that; the description has to reach the JSON schema.
+    """
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            DecimalFieldSpec(
+                name="distance_km", label="Distance in kilometers",
+                description="The length of the hiking trail in kilometers",
+                minimum=0.1, maximum=9.99,
+            ),
+            StringFieldSpec(
+                name="object_name", label="Object name",
+                description="The name of the object being measured",
+                max_length=60,
+            ),
+        ],
+    )
+    schema = compile_template_params(document, _guard_for("distance_km")).model_json_schema()
+
+    assert schema["properties"]["distance_km"]["description"] == (
+        "The length of the hiking trail in kilometers"
+    )
+    assert schema["properties"]["object_name"]["description"] == (
+        "The name of the object being measured"
+    )
+
+
+def test_compiled_schema_carries_descriptions_for_array_item_fields():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            ArrayFieldSpec(
+                name="rows", label="Rows", description="One row per measurement",
+                min_items=1, max_items=4,
+                item_fields=[
+                    IntegerFieldSpec(
+                        name="count", label="Count",
+                        description="How many objects this row holds",
+                        minimum=1, maximum=20,
+                    ),
+                ],
+            ),
+        ],
+    )
+    schema = compile_template_params(document, _guard_for("rows")).model_json_schema()
+
+    assert schema["properties"]["rows"]["description"] == "One row per measurement"
+    item_schema = schema["$defs"]["_rows_Item"]
+    assert item_schema["properties"]["count"]["description"] == (
+        "How many objects this row holds"
+    )
