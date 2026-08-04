@@ -124,6 +124,11 @@ def check_answer_timing(plan, program) -> QualityCheck:
         if entry.action.kind == "reveal"
         and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
     ]
+    # The first beat that ACTS, not `plan.beats[0]`: a beat compiling to nothing
+    # contributes no timeline entry at all, so the reveal of a correct lesson can
+    # sit in a later plan beat than the zeroth. What catches a silent beat 0 is
+    # `check_every_beat_acts`, in this same report -- so relaxing that check would
+    # also let this one accept a late placeholder.
     first_beat_id = program.timeline[0].beat_id
     if len(reveals) != 1 or program.timeline[reveals[0]].beat_id != first_beat_id:
         return _failed(
@@ -375,24 +380,35 @@ def check_unused_visual(program) -> QualityCheck:
 
 
 def check_answer_stand_in(program) -> QualityCheck:
-    """No label may stand in for the answer.
+    """No model-authored text may stand in for the answer.
 
     The system supplies the answer statement, so a label like "? meters" is a
     second, dead answer competing with it -- which is exactly what the
     kilometers draft produced. A question prompt is legitimate teaching, and a
     stand-in is distinguishable from one without reading the wording: a stand-in
-    uses "?" as a value, so the mark sits mid-string, while a question ends with
-    it.
+    uses "?" as a value, so the mark sits mid-string (or is the whole of it),
+    while a question ends with it.
+
+    Relation text is held to the same rule. `CalloutRelation.text` is the DSL's
+    only other model-authored text surface, so a callout reading "? meters"
+    anchored to the primary visual produces the identical dead placeholder while
+    passing a check that only walked `program.visuals`.
     """
     for index, visual in enumerate(program.visuals):
         if visual.kind != "label":
             continue
-        stripped = visual.text.strip()
-        if stripped == "?" or "?" in stripped[:-1]:
+        if _stands_in_for_the_answer(visual.text):
             return _failed(
                 "answer_stand_in_label", f"visuals[{index}].text",
                 "this label stands in for the answer; the system supplies the answer "
                 "statement, so remove the label and name the unit in answer_unit",
+            )
+    for index, relation in enumerate(program.relations):
+        if _stands_in_for_the_answer(relation.text):
+            return _failed(
+                "answer_stand_in_label", f"relations[{index}].text",
+                "this callout stands in for the answer; the system supplies the answer "
+                "statement, so word the callout as teaching and name the unit in answer_unit",
             )
     return _passed("answer_stand_in_label", "visuals")
 
@@ -417,6 +433,11 @@ def check_answer_work_shown(program) -> QualityCheck:
             "beat before its conclusion so the calculation appears before the answer",
         )
     return _passed("answer_work_not_shown", "timeline")
+
+
+def _stands_in_for_the_answer(text: str) -> bool:
+    stripped = text.strip()
+    return stripped == "?" or "?" in stripped[:-1]
 
 
 def _targets(action):

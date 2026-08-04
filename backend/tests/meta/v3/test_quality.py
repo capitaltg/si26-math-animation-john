@@ -803,6 +803,41 @@ def test_a_bare_question_mark_label_is_rejected():
     assert not check_answer_stand_in(program).passed
 
 
+def _perimeter_program_with_callout(text):
+    program = _perimeter_candidate().program
+    return program.model_copy(update={
+        "relations": [
+            *program.relations,
+            CalloutRelation(
+                ref="hint",
+                target=AnchorRef(visual_ref="rectangle", part="edge", index=0, anchor="bottom"),
+                text=text,
+            ),
+        ],
+    })
+
+
+def test_a_callout_using_a_question_mark_as_the_answer_is_rejected():
+    """Relation text is the other model-authored text surface in the DSL, so a
+    model told never to put "?" in a label can author the same dead placeholder
+    as a callout instead."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    check = check_answer_stand_in(_perimeter_program_with_callout("? meters"))
+
+    assert not check.passed
+    assert check.code == "answer_stand_in_label"
+    assert check.path == "relations[0].text"
+
+
+def test_a_question_prompt_callout_is_left_alone():
+    from app.meta.v3.quality import check_answer_stand_in
+
+    assert check_answer_stand_in(
+        _perimeter_program_with_callout("What is the perimeter?"),
+    ).passed
+
+
 def test_an_unresolved_answer_without_any_stages_fails():
     """Defence in depth: a program with evaluated_answer but no show_answer_stage
     entries at all must be rejected, even though the evaluated_answer is revealed
