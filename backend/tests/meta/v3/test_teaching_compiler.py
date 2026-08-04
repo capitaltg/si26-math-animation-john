@@ -226,11 +226,16 @@ def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context)
     )
 
     trace = next(index for index, entry in enumerate(program.timeline) if entry.action.kind == "trace")
-    answer_reveal = next(
+    # The unresolved answer's own reveal is now the first thing on the
+    # timeline, ahead of the trace, so ordering the trace against IT no longer
+    # says anything about the boundary being taught before the answer is
+    # given. What still must hold is that the trace precedes the RESOLVED
+    # value, at conclude.
+    value_index = next(
         index for index, entry in enumerate(program.timeline)
-        if entry.action.kind == "reveal" and entry.action.targets[0].visual_ref == "evaluated_answer"
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
     )
-    assert trace < answer_reveal
+    assert trace < value_index
     assert program.timeline[trace].action.path_ref == "rectangle.perimeter"
 
 
@@ -486,7 +491,7 @@ def test_the_conclusion_creates_an_item_specific_median_callout(
     }]
 
 
-def test_answer_visual_is_revealed_only_by_the_conclusion(
+def test_answer_visual_is_revealed_once_in_the_first_beat(
     published_perimeter_plan, perimeter_answer, compile_context,
 ):
     program = compile_teaching_plan(
@@ -499,13 +504,19 @@ def test_answer_visual_is_revealed_only_by_the_conclusion(
         if entry.action.kind == "reveal" and entry.action.targets[0].visual_ref == "evaluated_answer"
     ]
     assert len(answer_entries) == 1
-    assert answer_entries[0].beat_id == "conclude"
+    assert answer_entries[0].beat_id == published_perimeter_plan.beats[0].id
 
 
 def test_conclusion_reveal_and_role_hold_together_for_at_least_one_and_a_half_seconds(
     published_perimeter_plan, perimeter_answer, compile_context,
 ):
-    """The answer card's reveal and its `conclusion` recolour must land together.
+    """The label's reveal, the resolved value, and the `conclusion` recolour
+    must land together.
+
+    The answer itself is no longer revealed here -- that happens in the first
+    beat -- but this plan's own `conclude` beat still names `answer_label`, a
+    supporting visual, so its reveal remains one of the actions that must
+    co-start with the value resolving and the role change.
 
     Asserted on a lesson that still draws an answer card: `pair_elimination`
     names one of the collection's own values instead, so its conclusion is a
@@ -518,7 +529,9 @@ def test_conclusion_reveal_and_role_hold_together_for_at_least_one_and_a_half_se
     )
     conclusion_entries = [entry for entry in program.timeline if entry.beat_id == "conclude"]
 
-    assert {entry.action.kind for entry in conclusion_entries} == {"reveal", "set_role"}
+    assert {entry.action.kind for entry in conclusion_entries} == {
+        "reveal", "show_answer_stage", "set_role",
+    }
     assert {entry.at_seconds for entry in conclusion_entries} == {conclusion_entries[0].at_seconds}
     assert all(entry.duration_seconds >= 1.5 for entry in conclusion_entries)
 
@@ -1250,3 +1263,83 @@ def test_a_custom_reveal_of_an_unrevealed_visual_still_reveals_it(answer, compil
     )
 
     assert len(_reveals_of(program, "caption")) == 1
+
+
+def test_the_unresolved_answer_is_revealed_in_the_first_beat(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    reveals = [
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+    ]
+    assert len(reveals) == 1
+    assert reveals[0].beat_id == published_perimeter_plan.beats[0].id
+
+
+def test_the_work_stage_lands_on_the_derive_beat_and_the_value_on_conclude(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    program = compile_teaching_plan(
+        published_perimeter_plan, perimeter_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    stages = {
+        entry.action.stage: entry.beat_id
+        for entry in program.timeline if entry.action.kind == "show_answer_stage"
+    }
+    work_beat = next(
+        beat.id for beat in reversed(published_perimeter_plan.beats[:-1])
+        if beat.kind in {"derive", "focus"}
+    )
+    assert stages == {"work": work_beat, "value": published_perimeter_plan.beats[-1].id}
+
+
+def test_the_answer_unit_becomes_the_answer_visual_suffix(
+    published_perimeter_plan, perimeter_answer, compile_context,
+):
+    plan = published_perimeter_plan.model_copy(update={"answer_unit": "cm"})
+
+    program = compile_teaching_plan(
+        plan, perimeter_answer, frozenset({"length", "width"}), compile_context,
+    )
+
+    answer, = [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+    assert answer.suffix == " cm"
+
+
+def test_an_answer_with_no_arithmetic_gets_no_work_stage(
+    published_perimeter_plan, compile_context,
+):
+    """`has_operation` is false for a bare field reference, so there is nothing
+    to show and the lesson goes straight from "?" to the value."""
+    bare_answer = FieldRefNode(field="length")
+
+    program = compile_teaching_plan(
+        published_perimeter_plan, bare_answer,
+        frozenset({"length", "width"}), compile_context,
+    )
+
+    stages = {
+        entry.action.stage for entry in program.timeline
+        if entry.action.kind == "show_answer_stage"
+    }
+    assert stages == {"value"}
+
+
+def test_pair_elimination_still_declares_no_answer_visual(
+    median_plan, answer, compile_context,
+):
+    program = compile_teaching_plan(
+        median_plan, answer, frozenset({f"v{i}" for i in range(1, 8)}), compile_context,
+    )
+
+    assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+    assert not [entry for entry in program.timeline if entry.action.kind == "show_answer_stage"]
+    assert program.answer_anchor is not None

@@ -287,7 +287,7 @@ def _action_target_items(action, index):
     root = f"timeline[{index}].action"
     if action.kind == "reveal":
         return [(target, f"{root}.targets[{target_index}]") for target_index, target in enumerate(action.targets)]
-    if action.kind in {"set_role", "draw", "move"}:
+    if action.kind in {"set_role", "draw", "move", "show_answer_stage"}:
         return [(action.target, f"{root}.target")]
     if action.kind == "transform":
         return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]

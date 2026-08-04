@@ -85,6 +85,18 @@ def valid_program():
     return Candidate(plan, _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)}))
 
 
+def _perimeter_candidate():
+    plan = _perimeter_plan()
+    return Candidate(
+        plan,
+        _compile(
+            plan,
+            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+            {"length", "width"},
+        ),
+    )
+
+
 def apply_literal_test_mutation(candidate, mutation):
     program = candidate.program
     if mutation == "split_group_reveal":
@@ -295,6 +307,11 @@ def test_answer_revealed_in_a_non_final_conclude_beat_fails_premature_answer_emp
     on premature answer emphasis. Before the fix this exact program returned
     `passed=True` with zero failing checks.
 
+    The unresolved answer is now always revealed in the first beat, so a
+    premature `conclude` no longer manifests as an early reveal -- every
+    `conclude` beat resolves the value instead, so it is the `value` stage
+    that lands early here.
+
     The failing input is a real compiled `SceneProgramDocument` from
     `compile_teaching_plan`, not a `model_copy`-mutated one, so the assertion
     below is about what the gate does to compiler output.
@@ -304,19 +321,18 @@ def test_answer_revealed_in_a_non_final_conclude_beat_fails_premature_answer_emp
         plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
     )
 
-    # Confirm the compiler really did emit the premature reveal -- the whole
-    # point is that this is reachable output, not a hypothetical shape.
-    answer_reveals = [
+    # Confirm the compiler really did emit the premature value resolution --
+    # the whole point is that this is reachable output, not a hypothetical shape.
+    value_stages = [
         (entry.beat_id, entry.at_seconds) for entry in program.timeline
-        if entry.action.kind == "reveal"
-        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
     ]
-    assert answer_reveals[0][0] == "blurt_answer" != plan.beats[-1].id
+    assert value_stages[0][0] == "blurt_answer" != plan.beats[-1].id
     first_focus = min(
         entry.at_seconds for entry in program.timeline
         if entry.action.kind == "set_role" and entry.action.role == "focus"
     )
-    assert answer_reveals[0][1] < first_focus
+    assert value_stages[0][1] < first_focus
 
     report = validate_static_quality(plan, program)
 
@@ -657,3 +673,65 @@ def test_a_beat_that_produces_no_action_is_named_rather_than_reported_as_idle_ti
         "the named cause must be reported before the idle-interval symptom"
     )
     assert "second_look" in failed[0].detail
+
+
+def test_the_first_beat_placeholder_reveal_does_not_trip_the_conclusion_hold():
+    """`check_conclusion_hold` used to take the minimum duration across EVERY
+    entry naming `evaluated_answer`. The first-beat reveal is far shorter than
+    the 1.5s floor, so the check failed on a correct lesson."""
+    candidate = _perimeter_candidate()
+
+    report = validate_static_quality(candidate.plan, candidate.program)
+
+    hold = next(check for check in report.checks if check.code == "conclusion_hold_too_short")
+    assert hold.passed, hold.detail
+
+
+def test_an_answer_revealed_late_is_rejected():
+    candidate = _perimeter_candidate()
+    reveal_index = next(
+        index for index, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
+    )
+    moved = candidate.program.timeline[reveal_index].model_copy(
+        update={"beat_id": candidate.plan.beats[-1].id},
+    )
+    timeline = list(candidate.program.timeline)
+    timeline[reveal_index] = moved
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    report = validate_static_quality(candidate.plan, program)
+
+    assert not report.passed
+    assert any(check.code == "answer_placeholder_missing" for check in report.checks)
+
+
+def test_the_resolved_value_may_not_appear_before_conclude():
+    candidate = _perimeter_candidate()
+    value_index = next(
+        index for index, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
+    )
+    moved = candidate.program.timeline[value_index].model_copy(
+        update={"beat_id": candidate.plan.beats[0].id},
+    )
+    timeline = list(candidate.program.timeline)
+    timeline[value_index] = moved
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    report = validate_static_quality(candidate.plan, program)
+
+    assert not report.passed
+    assert any(
+        check.code == "premature_answer_emphasis" and not check.passed
+        for check in report.checks
+    )
+
+
+def test_a_staged_perimeter_candidate_passes_every_gate():
+    candidate = _perimeter_candidate()
+
+    report = validate_static_quality(candidate.plan, candidate.program)
+
+    assert report.passed, [check for check in report.checks if not check.passed]

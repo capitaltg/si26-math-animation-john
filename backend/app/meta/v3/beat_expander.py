@@ -4,10 +4,11 @@ from app.meta.dsl.scene_program import (
     AnswerProgramVisual, BarProgramVisual, CalloutRelation, DrawAction,
     GridProgramVisual, LabelProgramVisual, MoveAction, NumberLineProgramVisual,
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
-    ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction, ShowRelationAction,
-    TraceAction, TransformAction,
+    ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
+    ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
 )
 from app.meta.dsl.v3_common import TargetRef
+from app.meta.v3.expression_display import has_operation
 
 
 @dataclass(frozen=True)
@@ -63,9 +64,11 @@ class BeatExpander:
             # screen. Suppressed at declaration rather than at reveal because
             # `quality.check_unused_visual` fails any visual absent from the
             # timeline.
-            visuals.append(
-                AnswerProgramVisual(ref="evaluated_answer", expression=self.answer_expression)
-            )
+            visuals.append(AnswerProgramVisual(
+                ref="evaluated_answer",
+                expression=self.answer_expression,
+                suffix=f" {plan.answer_unit}" if plan.answer_unit else "",
+            ))
         initial_roles = {visual.ref: visual.initial_role for visual in visuals}
         # Keyed by `_target_key`, not by bare ref, so a part-level lookup can
         # fall back to its whole visual's role -- the renderer initialises every
@@ -77,6 +80,9 @@ class BeatExpander:
         expanded = []
         revealed = set()
         boundary_trace_beat_id = self._boundary_trace_beat_id(plan)
+        answer_declared = any(visual.ref == "evaluated_answer" for visual in visuals)
+        answer_target = TargetRef(visual_ref="evaluated_answer")
+        work_beat_id = self._work_beat_id(plan) if answer_declared else None
 
         for beat_index, beat in enumerate(plan.beats):
             actions = self._standard_actions(
@@ -94,6 +100,17 @@ class BeatExpander:
                     previous_roles=previous_roles,
                     revealed=revealed,
                 ))
+            if answer_declared and beat_index == 0:
+                # The unresolved "? unit" is on screen from the start, so the
+                # lesson poses its question before answering it. A separate
+                # reveal rather than an extra target on the beat: folding it in
+                # would also subject the answer to the beat kind's own role
+                # change, focusing it before anything has been derived.
+                actions.extend(self._reveal_unrevealed(plan, [answer_target], revealed))
+            if beat.id == work_beat_id:
+                actions.append(
+                    ShowAnswerStageAction(target=answer_target, stage="work")
+                )
             minimum_seconds, weight = self._beat_timing(plan, beat)
             expanded.append(ExpandedBeat(
                 beat_id=beat.id,
@@ -117,6 +134,21 @@ class BeatExpander:
             # leaves. Born `neutral`, every dim is a grey-to-grey transform.
             initial_role = "structure"
         return program_type.model_validate({**spec.model_dump(), "initial_role": initial_role})
+
+    def _work_beat_id(self, plan):
+        """The beat that shows the answer's arithmetic, if there is any to show.
+
+        `TeachingPlanDocument.require_focus_and_conclusion_order` guarantees a
+        `focus` or `derive` beat before `conclude`, so a slot always exists. The
+        last one is chosen so the work appears as late as possible while still
+        preceding the conclusion.
+        """
+        if not has_operation(self.answer_expression):
+            return None
+        return next(
+            beat.id for beat in reversed(plan.beats[:-1])
+            if beat.kind in {"derive", "focus"}
+        )
 
     @staticmethod
     def _beat_timing(plan, beat):
@@ -242,10 +274,11 @@ class BeatExpander:
         if beat.kind == "conclude":
             if plan.strategy == "pair_elimination":
                 return self._median_callout(plan, beat, relations)
+            # The answer is already on screen as "? unit", revealed in the first
+            # beat, so conclude resolves it rather than introducing it.
             answer_target = TargetRef(visual_ref="evaluated_answer")
-            revealed.add(self._target_key(answer_target))
             return [
-                RevealAction(targets=[answer_target], mode="together"),
+                ShowAnswerStageAction(target=answer_target, stage="value"),
                 *self._role_change(answer_target, "conclusion", current_roles),
             ]
 

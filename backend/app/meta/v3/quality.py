@@ -99,44 +99,78 @@ def check_grouped_simple_reveals(plan, program) -> QualityCheck:
 
 
 def check_answer_timing(plan, program) -> QualityCheck:
-    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
-    if answer is not None and getattr(answer, "initial_role", "neutral") != "neutral":
-        return _failed("premature_answer_emphasis", "visuals.evaluated_answer.initial_role", "the evaluated answer must begin neutral")
+    """The answer is posed early as "? unit" and resolved only at conclude.
 
-    # Only the FINAL beat may be `conclude`
-    # (`TeachingPlanDocument.require_focus_and_conclusion_order`), so the one
-    # beat in which the evaluated answer may legally appear is the last one.
-    # Building this set from *every* `conclude` beat instead made any
-    # mid-scene conclusion a legal place to reveal the answer -- so the check
-    # named `premature_answer_emphasis` passed on exactly the premature
-    # emphasis it exists to catch. Kept as an independent second layer: if the
-    # plan schema's beat-order rule is ever relaxed, this check still fails
-    # the candidate rather than silently reporting success.
-    conclusions = {plan.beats[-1].id} if plan.beats[-1].kind == "conclude" else set()
-    premature = [
+    This check used to require the opposite -- that `evaluated_answer` appear
+    ONLY in conclude -- because the answer was a card drawn at the end. Now the
+    unresolved placeholder is what the first beat reveals, and the resolved
+    value is a stage transition, so the timing contract moves with it.
+    """
+    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
+    if answer is None:
+        # `pair_elimination` states its answer with one of its own values.
+        return _passed("premature_answer_emphasis", "visuals")
+    if getattr(answer, "initial_role", "neutral") != "neutral":
+        return _failed(
+            "premature_answer_emphasis", "visuals.evaluated_answer.initial_role",
+            "the evaluated answer must begin neutral",
+        )
+
+    reveals = [
         index for index, entry in enumerate(program.timeline)
         if entry.action.kind == "reveal"
         and any(target.visual_ref == "evaluated_answer" for target in entry.action.targets)
-        and entry.beat_id not in conclusions
     ]
-    if premature:
-        return _failed("premature_answer_emphasis", f"timeline[{premature[0]}].beat_id", "the evaluated answer may only appear in conclude")
+    first_beat_id = program.timeline[0].beat_id
+    if len(reveals) != 1 or program.timeline[reveals[0]].beat_id != first_beat_id:
+        return _failed(
+            "answer_placeholder_missing", "timeline",
+            "the unresolved answer must be revealed exactly once, in the first beat, "
+            "so the lesson poses its question before answering it",
+        )
+
+    # Only the FINAL beat may be `conclude`
+    # (`TeachingPlanDocument.require_focus_and_conclusion_order`), so that is the
+    # one beat in which the resolved value may appear. Kept as an independent
+    # second layer: if the plan schema's beat-order rule is ever relaxed, this
+    # check still fails the candidate rather than silently reporting success.
+    conclusion_id = plan.beats[-1].id if plan.beats[-1].kind == "conclude" else None
+    seen = []
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "show_answer_stage":
+            continue
+        stage = entry.action.stage
+        if stage in seen:
+            return _failed(
+                "premature_answer_emphasis", f"timeline[{index}].action.stage",
+                f"the {stage} stage is shown more than once",
+            )
+        seen.append(stage)
+        if stage == "value" and entry.beat_id != conclusion_id:
+            return _failed(
+                "premature_answer_emphasis", f"timeline[{index}].beat_id",
+                "the resolved answer may only appear in conclude",
+            )
+    if seen not in ([], ["value"], ["work", "value"]):
+        return _failed(
+            "premature_answer_emphasis", "timeline",
+            f"answer stages must run work then value; found {seen}",
+        )
     return _passed("premature_answer_emphasis", "visuals.evaluated_answer")
 
 
 def check_conclusion_hold(program) -> QualityCheck:
-    answer_entries = [
-        entry for entry in program.timeline
-        if _targets(entry.action) and any(target.visual_ref == "evaluated_answer" for target in _targets(entry.action))
-    ]
-    if not answer_entries:
-        # A lesson whose answer is one of its own values declares no
-        # `evaluated_answer`, and passing vacuously here would leave its
-        # conclusion unheld. Hold the final beat's own actions to the floor.
-        final_beat_id = program.timeline[-1].beat_id
-        answer_entries = [entry for entry in program.timeline if entry.beat_id == final_beat_id]
-    conclusion_end = max(entry.at_seconds + entry.duration_seconds for entry in answer_entries)
-    shortest_conclusion_action = min(entry.duration_seconds for entry in answer_entries)
+    """Every action of the final acting beat must hold for the floor.
+
+    Scoped to that beat rather than to every entry naming `evaluated_answer`:
+    the answer is now revealed in the FIRST beat too, and that short reveal
+    would otherwise set the minimum and fail the check on a correct lesson.
+    `timeline.schedule_beats` identifies its own conclusion the same way.
+    """
+    final_beat_id = program.timeline[-1].beat_id
+    conclusion_entries = [entry for entry in program.timeline if entry.beat_id == final_beat_id]
+    conclusion_end = max(entry.at_seconds + entry.duration_seconds for entry in conclusion_entries)
+    shortest_conclusion_action = min(entry.duration_seconds for entry in conclusion_entries)
     if (
         shortest_conclusion_action + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS
         or conclusion_end > program.total_duration_seconds + 1e-9
