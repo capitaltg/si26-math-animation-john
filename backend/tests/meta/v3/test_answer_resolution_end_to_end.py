@@ -107,3 +107,23 @@ def test_the_answer_is_not_pinned_to_the_bottom_of_the_frame():
     assert answer.bounds.top <= primary.bounds.bottom + 1e-9
     # The old reserved band was y in [-3.6, -2.4]; nothing pins the answer there.
     assert answer.bounds.bottom > -2.4
+
+
+def test_the_rendered_final_frame_actually_shows_the_resolved_answer(tmp_path):
+    """The one assertion that reaches all the way to drawn pixels.
+
+    Everything above reads the compiled program and the resolved scene, and all
+    of it passed while the rendered video ended on "2.75 × 1000 = ? meters": the
+    conclude beat's `show_answer_stage(value)` and its `set_role(conclusion)` were
+    two competing `Transform`s on one mobject, and the recolour -- whose target is
+    a copy of the mobject as it stands, i.e. the work stage -- won. Nothing short
+    of rendering observed it.
+    """
+    from app.meta.preview_render import render_preview_and_probe
+
+    _artifact_hash, manifest = render_preview_and_probe(
+        _program(), frozenset({"distance_km"}), {"distance_km": 2.75}, tmp_path,
+    )
+
+    assert manifest["final_answer_text"] == "2.75 × 1000 = 2750 meters"
+    assert manifest["declared_answer_text"] == "2.75 × 1000 = 2750 meters"

@@ -63,6 +63,10 @@ def valid_manifest():
             {"target": "values.item[3]", "role": "focus"},
         ],
         "final_answer_visible": True,
+        # What the final frame's answer statement reads as, beside what the last
+        # `show_answer_stage` says it should. Equal here: a passing manifest.
+        "final_answer_text": "2 × 3 = 6 m",
+        "declared_answer_text": "2 × 3 = 6 m",
         "answer_anchor": None,
         "derivation_visible": True,
     }
@@ -77,6 +81,7 @@ def valid_manifest():
     ("path", "undeclared_path_event"),
     ("dimension", "dimension_anchor_mismatch"),
     ("answer", "final_answer_not_persistent"),
+    ("unresolved_answer", "final_answer_not_persistent"),
     ("outside_safe_frame", "frame_out_of_bounds"),
     ("overlapping_visuals", "visual_overlap"),
     ("unlabelled_dimension", "dimension_label_missing"),
@@ -133,6 +138,10 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["dimension_anchor_checks"] = {"rectangle.edge[0]": False}
     elif mutation == "answer":
         manifest["final_answer_visible"] = False
+    elif mutation == "unresolved_answer":
+        # The answer is on screen, but still reads as the unresolved work stage --
+        # the defect `final_answer_visible` alone passed happily on.
+        manifest["final_answer_text"] = "2 × 3 = ? m"
 
     report = validate_rendered_quality(manifest)
 
@@ -185,7 +194,7 @@ def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
 
 @pytest.mark.parametrize("field", [
     "relations", "state_events", "path_events", "dimension_anchor_checks", "final_answer_visible",
-    "answer_anchor",
+    "final_answer_text", "declared_answer_text", "answer_anchor",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
     del valid_manifest[field]
