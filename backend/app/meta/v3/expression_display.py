@@ -24,6 +24,7 @@ _SYMBOLS = {"add": "+", "subtract": "-", "multiply": "×", "divide": "÷"}
 #: alone cannot detect: both nodes sit in the same tier.
 _NON_ASSOCIATIVE = frozenset({"subtract", "divide", "fraction"})
 
+
 def has_operation(node) -> bool:
     """Whether the expression contains work worth showing.
 
