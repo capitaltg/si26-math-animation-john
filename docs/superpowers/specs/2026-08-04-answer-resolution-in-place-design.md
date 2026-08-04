@@ -223,6 +223,10 @@ acting beat's entries — which is what the check already means, and which is ho
 
 - `initial_role` remains `neutral` (unchanged)
 - the `reveal` of `evaluated_answer` must be in the **first** beat
+- a `value` stage is **required**, not merely constrained in where it may
+  appear: the accepted stage sequences are exactly `["value"]` and
+  `["work", "value"]`. An earlier form of the whitelist also accepted "no stages
+  at all", which passed a program that reveals the `?` and never resolves it
 - `show_answer_stage` with `stage="value"` may appear only in the final
   `conclude` beat
 - the reveal precedes any `work` stage, which precedes the `value` stage, and
@@ -235,12 +239,16 @@ contain a `work` stage. A separate check rather than a clause inside
 (`answer_work_not_shown`) rather than borrowing `static_process_visual`, which
 would name the wrong problem in the repair feedback the model reads.
 
-**New `check_answer_stand_in`.** A `label` visual is rejected when its text
-contains `?` anywhere other than as its final character. This is precisely the
-kilometers fault — a model-authored `? meters` label competing with the
+**New `check_answer_stand_in`.** A `label` visual is rejected when its stripped
+text is exactly `?`, or when `?` appears anywhere other than as its final
+character. Relation text (`CalloutRelation.text`) is held to the same rule: it is
+the DSL's only other model-authored text surface, so the identical dead
+placeholder can be authored as a callout on the primary visual. This is precisely
+the kilometers fault — a model-authored `? meters` label competing with the
 compiler's own answer — while leaving a legitimate question prompt
-("What is the perimeter?") alone. The discriminator is objective: a stand-in
-uses `?` as a value, so the mark sits mid-string; a question ends with it.
+("What is the perimeter?") alone. The discriminator is objective: a stand-in uses
+`?` as a value, so the mark sits mid-string or is the whole of the text; a
+question ends with it.
 
 A failed check's `code`, `path` and `hint` are fed back to the model as repair
 feedback (`draft_generation._reviewer_feedback_context`), so each new hint must
@@ -270,12 +278,19 @@ deserialise unchanged.
 
 Two templates are published. The `median_of_seven` lesson declares no answer
 visual and is unaffected. The `rectangle_perimeter` lesson's frozen program has
-a single reveal at `conclude` and no `show_answer_stage` actions, so its staging
-stays two-state — but because layout is recomputed per render, its answer moves
-out of the deleted bottom strip into the lesson column on its next render. To
-pick up the new staging it must be recompiled: reset the draft's status, run
-`revalidate_draft`, then `approve_draft_service`, which republishes without a
-Bedrock call.
+a single reveal at `conclude` and no `show_answer_stage` actions, and because
+layout is recomputed per render its answer moves out of the deleted bottom strip
+into the lesson column on its next render.
+
+Such a program has no staging to replay, which is not the same as staying
+two-state: with nothing in the timeline to transform the answer, drawing the
+`unknown` stage would leave a bare `?` on screen as the lesson's final answer.
+So the renderer reads the timeline and draws the resolved `value` stage as the
+answer's root when no `show_answer_stage` names it, and the render probe declares
+that same `value` stage as the text the final frame must show — which fails the
+rendered gate on any such program that still reads `?`, instead of skipping the
+comparison. A frozen program therefore renders its answer correctly with no
+recompilation.
 
 ## Verification
 
@@ -297,6 +312,9 @@ Written test-first.
   `answer_unit: "meters"` and assert three stages in the timeline, no label
   containing `?`, and a passing `validate_static_quality` report
 - regression: the stored `median_of_seven` plan compiles unchanged
+- replay: a program in the pre-branch shape — an `answer_expression` visual, one
+  `reveal` of it at conclude, no `show_answer_stage` — is probed through a real
+  render, and its final frame reads the resolved value rather than `?`
 
 Success criterion: the kilometers lesson renders `? meters` →
 `2.75 × 1000 = ? meters` → `2.75 × 1000 = 2750 meters`, laid out in the lesson

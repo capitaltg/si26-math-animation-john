@@ -83,9 +83,10 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
     The split is decided on unscaled measurements so it does not depend on the
     scale being solved for.
 
-    The answer is exempt from the split: it always takes the last row. Left to
-    `_balanced_pair`, a wide answer statement would be sorted into `above` by
-    extent and end up over the lesson it concludes.
+    The answer is exempt from the split: it takes the last row whenever there is
+    anything else to arrange, and becomes the primary itself when it is alone.
+    Left to `_balanced_pair`, a wide answer statement would be sorted into
+    `above` by extent and end up over the lesson it concludes.
     """
     if not instructional:
         return _Arrangement(None, [], [], [], [])

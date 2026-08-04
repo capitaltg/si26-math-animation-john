@@ -203,8 +203,9 @@ Open `http://localhost:5173/?meta-review`, enter reviewer token
    traced as one closed loop, with the two dimension callouts **`length`**
    attached beneath the bottom edge and **`width`** attached at the left edge —
    each anchored to the edge it measures, not floating near the shape's centre.
-   The evaluated answer appears only in the conclusion band at the bottom, and
-   resolves to `22`.
+   The evaluated answer is the last row of the lesson column, directly under the
+   rectangle rather than in a band of its own at the bottom of the frame, and in
+   this final frame it reads as the whole statement `2 × (8 + 3) = 22`.
 4. Inspect the fixture results and predicate coverage. The panel separates the
    one real example you must verify ("Fixtures to verify") from the
    system-generated, read-only "Guard cases" — you only fill in the former.
@@ -327,9 +328,12 @@ job, and repeat the seed, worker, review, and publish sequence.
    neutral style, with no value emphasized and no answer visible yet.
 8. The median callout arrow lands under the `8` itself, not under the centre of
    the row.
-9. Each lesson's evaluated answer appears only in the conclusion band, only at
-   the end, and holds there for at least a second and a half: `22` for
-   perimeter, `8` for median.
+9. Each lesson resolves its answer only at the end, and holds it there for at
+   least a second and a half. The perimeter answer is a statement in the lesson
+   column that resolves in place — `?` from the first beat, `2 × (8 + 3) = ?`
+   once the edges are paired, `2 × (8 + 3) = 22` at the conclusion. The median
+   lesson draws no answer statement at all: it states `8` by focusing the middle
+   value already on screen.
 10. Saving the known answer for **unchanged** params keeps the draft approvable;
     **Approve and publish** then becomes available once every approval gate
     passes.
