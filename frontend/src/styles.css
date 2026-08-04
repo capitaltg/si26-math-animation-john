@@ -1358,3 +1358,104 @@ h3 {
   margin: 0 0 0.3rem;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Admin review panel ----------
+   Dev-only, behind a bearer token, but on the same system as everything else:
+   rows are tinted blocks inside a band rather than a second card level, and
+   state is carried by the stamp vocabulary rather than by inline colour. */
+
+.admin__token {
+  margin: 0;
+  flex: 1 1 14rem;
+}
+
+.admin__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.admin__row-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-base);
+  color: var(--ink);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin__row-note {
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  margin: 0.2rem 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.admin__subhead {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-xl);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 1.25rem 0 0.5rem;
+}
+
+.admin__bullet {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: 74ch;
+}
+
+.admin__objective {
+  font-size: var(--t-lg);
+  color: var(--ink);
+  margin: 0 0 0.6rem;
+  max-width: 62ch;
+}
+
+.admin__lead {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0 0 0.9rem;
+  max-width: 74ch;
+}
+
+.admin__hint {
+  display: block;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  margin-bottom: 0.2rem;
+}
+
+.admin__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.admin__fixture {
+  background-color: var(--board-quiet);
+  border-radius: var(--r-md);
+  padding: 0.9rem 1.1rem;
+}
+
+.admin__fixture-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+
+.admin__preview {
+  margin-top: 1.25rem;
+  max-width: 34rem;
+}

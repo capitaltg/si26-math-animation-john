@@ -104,6 +104,7 @@ const v3DraftDetail = {
 
 function installV3FetchMock() {
   const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -121,6 +122,7 @@ function installV3FetchMock() {
 
 function installFetchMock({ fixtureResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -173,6 +175,7 @@ const approvableDraftDetail = {
 
 function installApprovableFetchMock({ approveResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -636,6 +639,7 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
   }
   let draftDetailCalls = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -768,6 +772,7 @@ it('revokes the previous preview blob URL when a fresh preview replaces it', asy
   }
   let draftDetailCallCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -810,6 +815,7 @@ it('discards an out-of-order preview resolution and revokes its now-stale blob U
 
   let draftDetailCallCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -903,6 +909,7 @@ it('revokes a preview blob URL created by a fetch that resolves after the compon
   const previewFetchPromise = new Promise((resolve) => { resolvePreviewFetch = resolve })
 
   const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -938,6 +945,7 @@ it('revokes a preview blob URL whose fetch was still in flight when Back to list
   const previewFetchPromise = new Promise((resolve) => { resolvePreviewFetch = resolve })
 
   const fetchMock = vi.fn(async (url) => {
+    if (url === '/meta/versions') return { ok: true, json: async () => [] }
     if (url === '/meta/drafts?status=pending_review') {
       return { ok: true, json: async () => [draftSummary] }
     }
@@ -995,4 +1003,100 @@ it('shows approve errors from the server', async () => {
   await waitFor(() =>
     expect(screen.getByText('Draft has too few verified real fixtures to publish')).not.toBeNull(),
   )
+})
+
+// ------------------------------------------------- shared template library
+
+const ownedVersion = {
+  id: 'tv-own', template_name: 'leftover_pair', fingerprint_key: 'k-own',
+  owner_session_id: 'session-a1f', created_at: '2026-08-04T00:00:00Z',
+}
+const sharedVersion = {
+  id: 'tv-shared', template_name: 'boundary_trace', fingerprint_key: 'k-shared',
+  owner_session_id: null, created_at: '2026-08-03T00:00:00Z',
+}
+
+function installLibraryFetchMock({ versions = [ownedVersion, sharedVersion], promoteResponse } = {}) {
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/drafts?status=pending_review') {
+      return { ok: true, json: async () => [] }
+    }
+    if (url === '/meta/versions') return { ok: true, json: async () => versions }
+    if (url === '/meta/versions/tv-own/promote' && init.method === 'POST') {
+      return promoteResponse || {
+        ok: true, json: async () => ({ ...ownedVersion, owner_session_id: null }),
+      }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+it('lists the live template library with who owns each version', async () => {
+  installLibraryFetchMock()
+
+  render(<MetaReviewPanel />)
+
+  await screen.findByText('leftover_pair')
+  expect(screen.getByText(/session-a1f/)).not.toBeNull()
+  expect(screen.getByText('boundary_trace')).not.toBeNull()
+})
+
+it('offers to share only the versions still private to one session', async () => {
+  installLibraryFetchMock()
+
+  render(<MetaReviewPanel />)
+
+  await screen.findByText('leftover_pair')
+  expect(screen.getAllByRole('button', { name: /Share with everyone/ })).toHaveLength(1)
+})
+
+it('says a shared version is already shared instead of offering it again', async () => {
+  installLibraryFetchMock({ versions: [sharedVersion] })
+
+  render(<MetaReviewPanel />)
+
+  await screen.findByText('boundary_trace')
+  expect(screen.getByText('Shared with everyone')).not.toBeNull()
+  expect(screen.queryByRole('button', { name: /Share with everyone/ })).toBeNull()
+})
+
+it('shares a version with everyone', async () => {
+  const fetchMock = installLibraryFetchMock()
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByRole('button', { name: /Share with everyone/ }))
+
+  await waitFor(() => {
+    const posted = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/meta/versions/tv-own/promote' && init?.method === 'POST',
+    )
+    expect(posted).not.toBeUndefined()
+  })
+})
+
+it('reports why sharing was refused', async () => {
+  installLibraryFetchMock({
+    promoteResponse: {
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail: 'This template has too few verified real examples to share (1 of 5)',
+      }),
+    },
+  })
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByRole('button', { name: /Share with everyone/ }))
+
+  expect(await screen.findByText(/too few verified real examples/)).not.toBeNull()
+})
+
+it('says so when the library is empty', async () => {
+  installLibraryFetchMock({ versions: [] })
+
+  render(<MetaReviewPanel />)
+
+  expect(await screen.findByText('No templates are live yet.')).not.toBeNull()
 })
