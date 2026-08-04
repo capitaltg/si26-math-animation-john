@@ -142,7 +142,7 @@ def _tape_plan(strategy="unit_substitution", extra_beat_actions=None):
              "intent": "One kilometre is one thousand metres.",
              "custom_actions": extra_beat_actions or [
                  {"kind": "callout",
-                  "target": {"visual_ref": "trail_tape", "part": "box", "index": 0, "anchor": "bottom"},
+                  "target": {"visual_ref": "trail_tape", "part": "box", "index": 0, "anchor": "top"},
                   "text": "1 km = 1000 m"},
              ]},
             {"id": "rename_boxes", "kind": "derive",
@@ -333,3 +333,76 @@ def test_revealing_a_deferred_part_twice_is_still_a_repeat():
     doubled = program.model_copy(update={"timeline": [*program.timeline, label_entry]})
 
     assert not check_repeated_reveal(doubled).passed
+
+
+def _observation():
+    from datetime import datetime, timezone
+
+    from app.meta import models
+
+    return models.FallbackObservation(
+        id="obs-trail",
+        candidate_id="candidate-trail",
+        source_excerpt="A hiking trail is 2.75 kilometers long. How many meters long is the trail?",
+        grade_level=4,
+        observation_kind="unsupported_shape",
+        excluded=False,
+        created_at=datetime(2026, 8, 4, tzinfo=timezone.utc),
+    )
+
+
+def _draft_proposal():
+    from app.meta.draft_generation import DraftProposal, ProposedFixture
+    from app.meta.dsl.expression import FieldRefNode
+    from app.meta.dsl.guard import GuardDocument, PositivePredicate
+    from app.meta.dsl.params import DecimalFieldSpec, ParamsDocument
+
+    return DraftProposal(
+        params_document=ParamsDocument(
+            params_version=1,
+            fields=[DecimalFieldSpec(
+                name="distance_km", label="Distance in kilometres", description="",
+                minimum=0.0, maximum=8.0,
+            )],
+        ),
+        guard_document=GuardDocument(
+            guard_version=1,
+            predicates=[PositivePredicate(value=FieldRefNode(field="distance_km"))],
+        ),
+        answer_expression=_answer_expression(),
+        teaching_plan_document=_tape_plan(),
+        classifier_bullet="Use for converting a decimal quantity from one metric unit to a smaller one.",
+        fixtures=[
+            ProposedFixture(
+                kind="positive", expected_outcome="accept",
+                observation_id="obs-trail", params={"distance_km": 2.75},
+            ),
+            ProposedFixture(
+                kind="negative", expected_outcome="reject", params={"distance_km": 0.0},
+            ),
+        ],
+    )
+
+
+def test_the_kilometre_conversion_lesson_passes_every_gate(tmp_path):
+    """Demo slide 4, the lesson that dead-ended as needs_manual_authoring.
+
+    Job 645f54b89af444fca04ea00a25d876cc, for the observation "A hiking trail is
+    2.75 kilometers long. How many meters long is the trail?", exhausted its
+    retries on `visual_extent_unrenderable` after proposing a bar with
+    maximum=10000. This is the shape the generator should now be able to produce.
+    """
+    from app.meta.dsl.v3_common import CompileContext
+    from app.meta.validation_pipeline import validate_candidate
+
+    observation = _observation()
+
+    candidate = validate_candidate(
+        _draft_proposal(),
+        observations_by_id={observation.id: observation},
+        artifact_root=tmp_path,
+        compile_context=CompileContext(concept_family="transform_other", grade_band="3-5"),
+    )
+
+    assert candidate.quality_report["passed"]
+    assert candidate.scene_program.visuals[0].kind == "unit_tape"

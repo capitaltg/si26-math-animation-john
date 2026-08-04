@@ -280,9 +280,17 @@ median lesson:
 
 ### 7. Optional slide 4
 
-If time permits, slide 4 asks for a unit conversion and has answer `2750`. Begin
-from a clean rehearsal state or use a fingerprint that has not already produced a
-job, and repeat the seed, worker, review, and publish sequence.
+If time permits, slide 4 asks for a unit conversion ("A hiking trail is 2.75
+kilometers long. How many meters long is the trail?") and has answer `2750`.
+Begin from a clean rehearsal state or use a fingerprint that has not already
+produced a job, and repeat the seed, worker, review, and publish sequence.
+
+Expect a `unit_tape` lesson using the `unit_substitution` strategy, four beats
+long: show the tape (whole kilometres, plus a partial box for the remainder),
+name the rate (one kilometre is one thousand metres), rename every box in
+metres, then state the total. Confirm the boxes' labels actually switch from
+kilometres to metres before the conclusion, name the template, confirm the
+mathematics, and publish.
 
 ## Presenter talk track
 
