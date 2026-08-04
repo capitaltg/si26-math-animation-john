@@ -293,3 +293,43 @@ def test_a_group_reveal_tape_gets_no_staged_substitution():
         action for action in _reveals(program)
         if any(target.part == "target_label" for target in action.targets)
     ]
+
+
+def test_the_quality_gate_requires_the_substitution_reveal():
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan()
+    program = _compile(plan)
+    stripped = program.model_copy(update={
+        "timeline": [
+            entry for entry in program.timeline
+            if not (
+                entry.action.kind == "reveal"
+                and any(target.part == "target_label" for target in entry.action.targets)
+            )
+        ],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, stripped).passed
+
+
+def test_revealing_a_deferred_part_after_its_visual_is_not_a_repeat():
+    from app.meta.v3.quality import check_repeated_reveal
+
+    assert check_repeated_reveal(_compile(_tape_plan())).passed
+
+
+def test_revealing_a_deferred_part_twice_is_still_a_repeat():
+    """The exception is for the FIRST reveal of a deferred part, not for every one."""
+    from app.meta.v3.quality import check_repeated_reveal
+
+    program = _compile(_tape_plan())
+    label_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    doubled = program.model_copy(update={"timeline": [*program.timeline, label_entry]})
+
+    assert not check_repeated_reveal(doubled).passed

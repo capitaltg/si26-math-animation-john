@@ -9,6 +9,7 @@ from app.meta.dsl.v3_common import (
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.expression_display import has_operation
+from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 # Semantic parts that name a rectangle's length/width dimension edges (see
 # `app/meta/v3/rectangle_measurement.py`). Used by
@@ -221,6 +222,21 @@ def check_unexplained_idle_time(program) -> QualityCheck:
 
 
 def check_strategy_affordance(plan, program) -> QualityCheck:
+    if plan.strategy == "unit_substitution":
+        # The lesson's whole move is the exchange, so the target unit's labels
+        # have to reach the screen. The compiler stages this reveal; the check
+        # exists because a strategy whose affordance is optional is decorative.
+        has_substitution = any(
+            entry.action.kind == "reveal"
+            and any(target.part == "target_label" for target in entry.action.targets)
+            for entry in program.timeline
+        )
+        if not has_substitution:
+            return _failed(
+                "static_process_visual", "timeline",
+                "unit-substitution instruction needs the target unit's labels revealed",
+            )
+        return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":
         return _passed("static_process_visual", "strategy")
     has_boundary_trace = any(
@@ -338,15 +354,20 @@ def check_repeated_reveal(program) -> QualityCheck:
     # already revealed, so two beats naming one visual produced two fade-ins.
     revealed = set()
     revealed_wholes = set()
+    deferred = {
+        visual.ref: DEFERRED_PARTS.get(visual.kind, ()) for visual in program.visuals
+    }
     for index, entry in enumerate(program.timeline):
         if entry.action.kind != "reveal":
             continue
         for target in entry.action.targets:
             key = (target.visual_ref, target.part, target.index)
             # A whole-visual reveal brings its children on screen with it, so a
-            # later reveal of one of those parts is a repeat. Comparing only exact
-            # keys treated whole and part as unrelated and let that through.
-            if key in revealed or target.visual_ref in revealed_wholes:
+            # later reveal of one of those parts is a repeat -- unless the visual
+            # declares that part deferred, in which case the whole-visual reveal
+            # never showed it and this is its first appearance.
+            is_deferred = target.part in deferred.get(target.visual_ref, ())
+            if key in revealed or (target.visual_ref in revealed_wholes and not is_deferred):
                 return _failed(
                     "repeated_reveal", f"timeline[{index}].action.targets",
                     "a target may only be revealed once, and revealing a visual "
