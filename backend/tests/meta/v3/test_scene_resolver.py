@@ -161,6 +161,25 @@ def test_trace_path_and_timeline_target_use_final_placed_geometry(perimeter_prog
     assert trace.path[0] == trace.path[-1]
 
 
+def test_show_answer_stage_resolves_the_answer_visual_as_its_target(perimeter_program, measurer):
+    """Naming this action's target is the resolver's job, not the renderer's.
+
+    The renderer reads `resolved.targets[0]` to find the answer text to
+    transform, so a resolver that did not list `show_answer_stage` among the
+    single-target kinds handed it an empty list -- which showed up only as an
+    `IndexError` inside a renderer test. Pin the contract where it lives.
+    """
+    scene = resolve_scene(perimeter_program, {"length": 8, "width": 3}, measurer)
+    answer = scene.visual("evaluated_answer")
+
+    staged = [action for action in scene.timeline if action.action.kind == "show_answer_stage"]
+
+    assert staged, "the compiled perimeter lesson stages its answer"
+    for action in staged:
+        assert [target.ref.visual_ref for target in action.targets] == ["evaluated_answer"]
+        assert action.targets[0].bounds == answer.bounds
+
+
 def test_relation_with_missing_semantic_part_has_structured_anchor_failure(program, measurer):
     relation = program.relations[0].model_copy(update={
         "target": AnchorRef(visual_ref="values", part="missing", index=3, anchor="bottom"),
@@ -270,10 +289,12 @@ def test_vertical_layout_reuses_support_partition_for_fit_and_placement():
     ])
     by_ref = {visual.measured.ref: visual for visual in placed}
 
-    # Vertical binds: the primary's band (3) plus the stacked row (3) and the gap
-    # between them (0.45) is 6.45 against the 6.0-high instructional frame.
+    # Vertical binds: the primary's band (3), the stacked row (3) and the answer's
+    # own last row (0.6), plus a 0.45 gap before each of the latter two, is 7.5
+    # against the instructional frame -- which is now the full safe frame, since
+    # the answer is laid out in the column rather than in a reserved band below it.
     scale = (placed[0].bounds.top - placed[0].bounds.bottom) / 3
-    assert scale == pytest.approx(6.0 / 6.45, abs=1e-5)
+    assert scale == pytest.approx((SAFE_FRAME.top - SAFE_FRAME.bottom) / 7.5, abs=1e-5)
     # The split itself, which is this test's subject.
     primary_band = by_ref["primary"].bounds
     for ref in ("support_beside_0", "support_beside_1"):

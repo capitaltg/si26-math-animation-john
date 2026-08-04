@@ -252,13 +252,20 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
 
 
 def _overcrowded_program():
-    """Three measured rectangles: more than SAFE_FRAME can hold.
+    """Four measured rectangles: more than SAFE_FRAME can hold.
 
-    Each rectangle's measured box is 6.58 x 2.71 (shape plus dimension labels),
-    far too wide to sit beside another, so all three take full-width rows --
-    9.03 units of height against the 6.0-high instructional frame.
-    `place_vertical_lesson` raises `below_minimum_text_scale` at 0.67 while
-    resolving, before any frame is drawn.
+    Each rectangle's measured box is 6.75 x 2.68 (shape plus dimension labels),
+    far too wide to sit beside another, so all four take full-width rows --
+    with the answer's own row and the gap before each, 12.88 units of height
+    against the 7.2-high instructional frame. `place_vertical_lesson` raises
+    `below_minimum_text_scale` at 0.56 while resolving, before any frame is
+    drawn.
+
+    Three rectangles used to be enough, against a 6.0-high frame. Once the
+    answer moved into the lesson column the instructional frame grew to the full
+    safe frame, and three rectangles plus the answer row scaled to 0.74 -- above
+    the 0.7 floor, so this fixture stopped reaching the failure path the test
+    below exists to exercise. Hence the fourth.
     """
     def rectangle(ref):
         return {
@@ -269,16 +276,17 @@ def _overcrowded_program():
 
     plan = TeachingPlanDocument.model_validate({
         "plan_version": 3,
-        "learning_objective": "Compare the perimeters of three rectangles.",
+        "learning_objective": "Compare the perimeters of four rectangles.",
         "primary_visual": rectangle("first"),
-        "supporting_visuals": [rectangle("second"), rectangle("third")],
+        "supporting_visuals": [rectangle("second"), rectangle("third"), rectangle("fourth")],
         "strategy": "boundary_trace",
         "beats": [
             {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "first"}],
              "intent": "show the first rectangle"},
             {"id": "organize", "kind": "organize", "targets": [{"visual_ref": "second"}],
              "intent": "show the second rectangle"},
-            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "third"}],
+            {"id": "derive", "kind": "derive",
+             "targets": [{"visual_ref": "third"}, {"visual_ref": "fourth"}],
              "intent": "apply the perimeter formula to each"},
             {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "first"}],
              "intent": "state the perimeter"},

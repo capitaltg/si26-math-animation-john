@@ -116,8 +116,15 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     assert "three to five teaching beats" in prompt
     assert "prefer semantic strategy over custom actions" in prompt
     assert "only inside their owning beat" in prompt
-    assert "answer-related visuals start neutral" in prompt
-    assert "introduced only during conclude" in prompt
+    # The answer contract the prompt used to state -- answer visuals start neutral
+    # and are introduced only during conclude -- is now the system's job, not the
+    # model's: the answer statement is staged for the plan. Pin the three clauses
+    # that replaced it: who owns the statement, when it resolves, and that the
+    # model must not author its own stand-in (the `? meters` label that motivated
+    # this change came straight out of the old wording).
+    assert "the system supplies the answer statement and stages it for you" in prompt
+    assert "resolves to the value only at conclude" in prompt
+    assert "never author a label standing in for the answer" in prompt
     assert "simple collections reveal together" in prompt
     assert "perimeter explanations use boundary_trace" in prompt
     assert "median ordered values use item-specific targets" in prompt

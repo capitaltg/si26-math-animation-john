@@ -182,9 +182,7 @@ class BeatExpander:
         visual the beat named with no action at all.
         """
         actions = self._reveal_unrevealed(plan, beat.targets, revealed)
-        actions.extend(
-            self._beat_kind_actions(plan, beat, relations, current_roles, revealed)
-        )
+        actions.extend(self._beat_kind_actions(plan, beat, relations, current_roles))
         if plan.strategy == "boundary_trace" and beat.id == boundary_trace_beat_id:
             actions.append(TraceAction(path_ref=f"{plan.primary_visual.ref}.perimeter"))
         if not actions and not beat.custom_actions:
@@ -240,7 +238,7 @@ class BeatExpander:
             or (target.visual_ref, None, None) in revealed
         )
 
-    def _beat_kind_actions(self, plan, beat, relations, current_roles, revealed):
+    def _beat_kind_actions(self, plan, beat, relations, current_roles):
         if beat.kind in {"orient", "reveal"}:
             return []  # `_reveal_unrevealed` has already staged the reveal
 

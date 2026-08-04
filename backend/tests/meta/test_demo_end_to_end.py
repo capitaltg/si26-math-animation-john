@@ -577,17 +577,26 @@ def rendered_perimeter(client, tmp_path):
 
 
 def _answer_text(resolved) -> str:
-    """The answer as the resolved scene states it, wherever the lesson puts it.
+    """The value the resolved scene resolves its answer to, wherever it lives.
 
     A lesson whose answer is one of its own values draws no `evaluated_answer`
-    card -- that would repeat a number already on screen -- and names the value
-    carrying it in the program's `answer_anchor` instead. Read the answer off
-    that anchor when there is one, so the re-resolution assertions below hold
+    statement -- that would repeat a number already on screen -- and names the
+    value carrying it in the program's `answer_anchor` instead. Read the answer
+    off that anchor when there is one, so the re-resolution assertions below hold
     both shapes of conclusion to the same contract.
+
+    The answer now resolves in place, so its `value` stage carries the whole
+    statement -- "2 x (8 + 3) = 22", not "22". Neither demo lesson names an
+    `answer_unit`, so the text after the final " = " is the resolved value alone,
+    which is what re-resolution for a new parameter set has to reproduce. (The
+    statement's own shape is asserted by `tests/meta/v3/test_scene_resolver.py`
+    and the kilometers end-to-end test; here it would only restate the display
+    rules.)
     """
     anchor = resolved.answer_anchor
     if anchor is None:
-        return resolved.visual("evaluated_answer").measured.payload["text"]
+        stages = resolved.visual("evaluated_answer").measured.payload["stages"]
+        return stages["value"].rsplit(" = ", 1)[-1]
     return resolved.visual(anchor.visual_ref).measured.payload["values"][anchor.index]
 
 
