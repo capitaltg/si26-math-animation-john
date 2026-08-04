@@ -87,7 +87,8 @@ class BarVisual(BaseModel):
         f"per unit, at most {MAX_PART_CARDINALITY}, and only about 29 fit the "
         f"frame. This is NOT an axis maximum -- a quantity like 2750 out of "
         f"10000 must not be a bar. Show a magnitude that large on a number_line, "
-        f"whose maximum is a scale."
+        f"whose maximum is a scale, or on a unit_tape when the lesson converts "
+        f"between two units."
     ))
 
 
@@ -102,6 +103,34 @@ class ObjectSetVisual(BaseModel):
     ))
 
 
+class UnitTapeVisual(BaseModel):
+    """A quantity in one unit, drawn as one box per whole unit, named in two units.
+
+    The teaching visual for a conversion: each box carries the source unit's name
+    and, revealed later by `unit_substitution`, the target unit's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["unit_tape"] = "unit_tape"
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    value: ExpressionNode = Field(description=(
+        "How many source units the quantity is, e.g. 2.75 for 2.75 kilometres. "
+        "One box is drawn per whole unit plus one for any remainder, at most 8 "
+        "boxes; for a larger magnitude use a number_line."
+    ))
+    per_unit: ExpressionNode = Field(description=(
+        "How many target units make one source unit, e.g. 1000 for kilometres to "
+        "metres. This is a label number, not a count -- nothing is drawn per "
+        "target unit -- so it may be as large as the conversion requires."
+    ))
+    source_unit: ProseText = Field(min_length=1, max_length=20, description=(
+        "The unit the quantity is given in, as it should read on screen: \"km\"."
+    ))
+    target_unit: ProseText = Field(min_length=1, max_length=20, description=(
+        "The unit being converted to, as it should read on screen: \"m\"."
+    ))
+
+
 class LabelVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["label"] = "label"
@@ -113,6 +142,7 @@ SemanticVisualSpec = Annotated[
     Union[
         OrderedValuesVisual, RectangleMeasurementVisual, NumberLineVisual,
         GridVisual, PartitionVisual, BarVisual, ObjectSetVisual, LabelVisual,
+        UnitTapeVisual,
     ],
     Field(discriminator="kind"),
 ]

@@ -130,6 +130,13 @@ def evaluate_program_visual(
         }
     if kind == "object_set":
         return _evaluated_spec(visual), {"count": _evaluate(visual.count, values)}
+    if kind == "unit_tape":
+        return _evaluated_spec(visual), {
+            "value": _evaluate(visual.value, values),
+            "per_unit": _evaluate(visual.per_unit, values),
+            "source_unit": visual.source_unit,
+            "target_unit": visual.target_unit,
+        }
     if kind == "label":
         return _evaluated_spec(visual), {"text": visual.text}
     if kind == "answer_expression":
