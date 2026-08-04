@@ -37,6 +37,15 @@ def test_format_number_prefers_a_terminating_decimal(value, expected):
     assert format_number(value) == expected
 
 
+def test_format_number_does_not_round_a_terminating_decimal_needing_more_than_40_significant_digits():
+    # Both operands are within the DSL's own limits (MAX_NUMERIC_MAGNITUDE and
+    # `_to_fraction`'s 10**9 denominator cap), so this is reachable input. The
+    # value needs 42 significant digits; a fixed-precision `Decimal` context
+    # would silently round the last two away.
+    value = Fraction(999999999999) + Fraction(1, 2**30)
+    assert format_number(value) == "999999999999.000000000931322574615478515625"
+
+
 def test_a_field_reference_shows_its_value_as_a_decimal():
     # `resolver._format_value` would render this Fraction as "11/4"; a lesson
     # about 2.75 kilometres has to say 2.75.

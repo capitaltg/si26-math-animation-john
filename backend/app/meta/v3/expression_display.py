@@ -6,7 +6,6 @@ should read like a textbook rather than like a parser's output.
 """
 
 from collections.abc import Mapping
-from decimal import Decimal, localcontext
 from fractions import Fraction
 
 from app.meta.dsl.expression import _evaluate
@@ -25,11 +24,6 @@ _SYMBOLS = {"add": "+", "subtract": "-", "multiply": "×", "divide": "÷"}
 #: alone cannot detect: both nodes sit in the same tier.
 _NON_ASSOCIATIVE = frozenset({"subtract", "divide", "fraction"})
 
-#: Enough digits for any terminating decimal this DSL can produce.
-#: `_to_fraction` caps denominators at 10**9, so at most ~30 decimal places.
-_DECIMAL_PRECISION = 40
-
-
 def has_operation(node) -> bool:
     """Whether the expression contains work worth showing.
 
@@ -46,16 +40,36 @@ def format_number(value: Fraction) -> str:
     2.75 into a displayed expression would print "11/4". A fraction terminates
     in base ten exactly when its reduced denominator's only prime factors are 2
     and 5, so test for that rather than rounding and hoping.
+
+    Once that holds, the reduced denominator is `2**twos * 5**fives`, so
+    `10**exponent` (with `exponent = max(twos, fives)`) is an exact multiple of
+    it. Scaling the numerator by that multiple turns the division into an
+    integer with no remainder, so the decimal expansion comes from string
+    slicing, not from a rounding step with a precision constant that could be
+    too small for a given value -- there is no such constant, at any fixed
+    value, for every value this DSL's numerator/denominator limits allow.
     """
     remainder = value.denominator
-    for factor in (2, 5):
-        while remainder % factor == 0:
-            remainder //= factor
+    twos = fives = 0
+    while remainder % 2 == 0:
+        remainder //= 2
+        twos += 1
+    while remainder % 5 == 0:
+        remainder //= 5
+        fives += 1
     if remainder != 1:
         return f"{value.numerator}/{value.denominator}"
-    with localcontext() as context:
-        context.prec = _DECIMAL_PRECISION
-        return str(Decimal(value.numerator) / Decimal(value.denominator))
+
+    exponent = max(twos, fives)
+    scaled = abs(value.numerator) * (10**exponent // value.denominator)
+    digits = str(scaled).zfill(exponent + 1)
+    sign = "-" if value.numerator < 0 else ""
+    if exponent == 0:
+        return f"{sign}{digits}"
+    integer_part, fractional_part = digits[:-exponent], digits[-exponent:].rstrip("0")
+    if not fractional_part:
+        return f"{sign}{integer_part}"
+    return f"{sign}{integer_part}.{fractional_part}"
 
 
 def expression_display(node, values: Mapping[str, object]) -> str:
