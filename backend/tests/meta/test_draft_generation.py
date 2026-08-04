@@ -222,3 +222,14 @@ def test_refinement_rejects_incomplete_structured_quality_feedback(mock_call):
         )
 
     mock_call.assert_not_called()
+
+
+def test_the_prompt_hands_answer_presentation_to_the_system():
+    from app.meta.draft_generation import _DRAFT_SYSTEM_PROMPT
+
+    assert "answer_unit" in _DRAFT_SYSTEM_PROMPT
+    assert 'never put "?" in a label' in _DRAFT_SYSTEM_PROMPT
+    # The old instruction is false now: the unresolved answer appears from the
+    # first beat, and only its VALUE waits for conclude.
+    assert "introduced only during\nconclude" not in _DRAFT_SYSTEM_PROMPT
+    assert "the final evaluated answer is introduced only during" not in _DRAFT_SYSTEM_PROMPT
