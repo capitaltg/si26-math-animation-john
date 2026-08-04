@@ -84,6 +84,31 @@ _CARDINALITY_FIELDS = {
 MAX_PART_CARDINALITY = 128
 
 
+#: What to reach for when a count-driven visual is too large. `number_line`
+#: places markers inside fixed +/-2.75 bounds, so its `maximum` is a scale and a
+#: line from 0 to a million costs nothing to draw.
+_LARGE_MAGNITUDE_ALTERNATIVE = "a number_line, whose maximum is a scale rather than a part count"
+
+
+def _cardinality_failure(spec, field_name, observed, cap, unit_word) -> V3ValidationError:
+    """A refusal that names the cap, the field, and what to use instead.
+
+    The hint carries all three because it is the only one of these fields the
+    generation retry loop forwards to the model
+    (`draft_generation._STABLE_REPAIR_FEEDBACK_FIELDS`).
+    """
+    return V3ValidationError(V3Failure(
+        code="visual_extent_unrenderable",
+        path=f"visuals.{spec.ref}",
+        expected=f"a {spec.kind} of at most {cap} parts",
+        observed=f"{spec.ref} would draw {observed} parts ({field_name}={observed})",
+        hint=(
+            f"{spec.kind} draws one part per {unit_word}, at most {cap}; "
+            f"reduce {field_name} (currently {observed}) or use {_LARGE_MAGNITUDE_ALTERNATIVE}"
+        ),
+    ))
+
+
 def _require_renderable_cardinality(spec, values) -> None:
     for name in _CARDINALITY_FIELDS.get(spec.kind, ()):
         if name not in values:
@@ -91,14 +116,9 @@ def _require_renderable_cardinality(spec, values) -> None:
         count = _whole(values[name], name) if _is_whole(values[name]) else None
         if count is not None and count <= MAX_PART_CARDINALITY:
             continue
-        observed = _describe(values[name])
-        raise V3ValidationError(V3Failure(
-            code="visual_extent_unrenderable",
-            path=f"visuals.{spec.ref}",
-            expected=f"a {spec.kind} of at most {MAX_PART_CARDINALITY} parts",
-            observed=f"{spec.ref} would draw {observed} parts ({name}={observed})",
-            hint=f"reduce the value driving this visual's size ({name}={observed})",
-        ))
+        raise _cardinality_failure(
+            spec, name, _describe(values[name]), MAX_PART_CARDINALITY, f"unit of {name}",
+        )
 
 
 def _is_whole(value) -> bool:

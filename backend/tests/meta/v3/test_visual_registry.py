@@ -191,3 +191,26 @@ def test_the_answer_visual_is_measured_at_its_widest_stage():
     widest, _height = LiteralTextMeasurer().measure(stages["value"], "label")
     assert measured.bounds.right - measured.bounds.left == pytest.approx(widest)
     assert measured.payload["stages"] == stages
+
+
+def test_the_cardinality_hint_carries_the_cap_and_an_alternative_kind():
+    """The retry loop only forwards `code`, `path` and `hint`.
+
+    `generation_pipeline.generate_and_validate_revision` builds its repair
+    feedback from those three fields, so a ceiling stated only in `expected`
+    never reaches the model. Two Bedrock attempts on job
+    645f54b89af444fca04ea00a25d876cc both proposed `maximum=10000` unchanged,
+    because "reduce the value driving this visual's size" named no target and no
+    alternative -- and no value of `maximum` can draw 2750-out-of-10000 anyway.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="bar", ref="m_bar"),
+            {"value": Fraction(2750), "maximum": Fraction(10000)},
+            LiteralTextMeasurer(),
+        )
+
+    hint = exc_info.value.failure.hint
+    assert "128" in hint
+    assert "number_line" in hint
+    assert "maximum" in hint
