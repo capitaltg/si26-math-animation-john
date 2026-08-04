@@ -229,6 +229,10 @@ _MEASURABLE_VALUES = {
     "bar": {"value": Fraction(3), "maximum": Fraction(5)},
     "object_set": {"count": 6},
     "label": {"text": "Answer"},
+    "unit_tape": {
+        "value": Fraction(11, 4), "per_unit": Fraction(1000),
+        "source_unit": "km", "target_unit": "m",
+    },
 }
 
 

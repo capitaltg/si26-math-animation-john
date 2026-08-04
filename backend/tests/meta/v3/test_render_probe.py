@@ -420,6 +420,27 @@ def test_a_structured_failure_inside_the_probe_reaches_the_caller_intact():
     assert "below_minimum_text_scale" in " ".join(str(arg) for arg in logged[0])
 
 
+def test_a_unit_tape_lesson_renders_through_the_probe():
+    """Compile and static gates pass on plans the renderer cannot draw.
+
+    `vertex` targets and `object_set` both got through every static check and
+    then raised inside `_build_visual` -- surfacing only as
+    `render_probe_failed`. A real render is the only proof the payload keys and
+    the renderer agree.
+    """
+    from test_unit_tape import _compile, _tape_plan
+
+    program = _compile(_tape_plan())
+
+    manifest = run_probe_subprocess(ProbeRequest(
+        scene_program=program,
+        known_fields=["distance_km"],
+        field_values={"distance_km": 2.75},
+    )).manifest
+
+    assert "trail_tape" in manifest["visual_bounds"]
+
+
 def test_a_number_line_lesson_renders_with_its_marker_labels():
     """Labels are built from the payload inside the renderer, so only a real
     render proves the keys line up. The `vertex` and `object_set` bugs both
