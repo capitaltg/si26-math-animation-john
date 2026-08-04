@@ -231,3 +231,107 @@ def test_enqueue_is_a_noop_when_an_enabled_version_already_exists(session):
         trigger_observation_ids=["obs-k1-0"], threshold=5, new_id="job-1", now=_now(),
     )
     assert job is None
+
+
+def _enabled_version(session, *, version_id, key, name, owner):
+    session.add(models.TemplateVersion(
+        id=version_id, fingerprint_key=key, template_name=name, draft_id=None,
+        artifact_hash="sha256:x", status=models.TEMPLATE_VERSION_ENABLED,
+        owner_session_id=owner, created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+
+def _on_demand(session, *, owner="session-a", new_id="job-1", key="k1", ids=None):
+    return jobs.enqueue_on_demand(
+        session,
+        fingerprint_key=key,
+        fingerprint_version=1,
+        fingerprint_json="{}",
+        trigger_observation_ids=ids if ids is not None else ["obs-k1-0"],
+        owner_session_id=owner,
+        new_id=new_id,
+        now=_now(),
+    )
+
+
+def test_on_demand_enqueue_ignores_the_observation_threshold(session):
+    ids = _seed_cluster(session, "k1", 1)
+
+    job = _on_demand(session, ids=ids)
+
+    assert job is not None
+    assert job.status == models.JOB_QUEUED
+    assert job.owner_session_id == "session-a"
+    assert json.loads(job.trigger_observation_ids) == ids
+
+
+def test_on_demand_enqueue_refuses_when_a_shared_version_exists(session):
+    _seed_cluster(session, "k1", 1)
+    _enabled_version(session, version_id="tv-shared", key="k1", name="x", owner=None)
+
+    assert _on_demand(session) is None
+
+
+def test_on_demand_enqueue_refuses_when_the_requester_already_owns_one(session):
+    _seed_cluster(session, "k1", 1)
+    _enabled_version(session, version_id="tv-a", key="k1", name="x", owner="session-a")
+
+    assert _on_demand(session, owner="session-a") is None
+
+
+def test_on_demand_enqueue_allows_a_build_another_session_owns_privately(session):
+    _seed_cluster(session, "k1", 1)
+    _enabled_version(session, version_id="tv-b", key="k1", name="x", owner="session-b")
+
+    job = _on_demand(session, owner="session-a")
+
+    assert job is not None
+    assert job.owner_session_id == "session-a"
+
+
+def test_on_demand_enqueue_refuses_while_another_job_is_active(session):
+    _seed_cluster(session, "k1", 1)
+    session.add(models.GenerationJob(
+        id="running-job", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", trigger_observation_ids="[]",
+        status=models.JOB_RUNNING, attempt=0, owner_session_id="session-b",
+        created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    assert _on_demand(session, owner="session-a") is None
+
+
+def test_on_demand_enqueue_retries_after_a_succeeded_job(session):
+    """A teacher asking is a fresh intent, unlike the threshold trigger.
+
+    evaluate_and_enqueue deliberately never re-triggers a fingerprint whose job
+    already succeeded; an explicit request must not inherit that.
+    """
+    _seed_cluster(session, "k1", 1)
+    session.add(models.GenerationJob(
+        id="done-job", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", trigger_observation_ids="[]",
+        status=models.JOB_SUCCEEDED, attempt=0,
+        created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    assert _on_demand(session, new_id="job-2") is not None
+
+
+def test_on_demand_enqueue_retries_after_generation_needed_manual_authoring(session):
+    _seed_cluster(session, "k1", 1)
+    session.add(models.GenerationJob(
+        id="manual-job", fingerprint_key="k1", fingerprint_version=1,
+        fingerprint_json="{}", trigger_observation_ids="[]",
+        status=models.JOB_NEEDS_MANUAL, attempt=5,
+        created_at=_now(), updated_at=_now(),
+    ))
+    session.flush()
+
+    job = _on_demand(session, new_id="job-2")
+
+    assert job is not None
+    assert job.attempt == 0

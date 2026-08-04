@@ -70,6 +70,26 @@ def has_enabled_version(session: Session, fingerprint_key: str) -> bool:
     return int(session.execute(stmt).scalar_one()) > 0
 
 
+def has_version_available_to(
+    session: Session, fingerprint_key: str, owner_session_id: str
+) -> bool:
+    """Whether this session can already reach an enabled version.
+
+    Deliberately narrower than has_enabled_version: another session's private
+    version is invisible to this one, so it must not block this session from
+    building its own.
+    """
+    stmt = select(func.count()).select_from(TemplateVersion).where(
+        TemplateVersion.fingerprint_key == fingerprint_key,
+        TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+        or_(
+            TemplateVersion.owner_session_id.is_(None),
+            TemplateVersion.owner_session_id == owner_session_id,
+        ),
+    )
+    return int(session.execute(stmt).scalar_one()) > 0
+
+
 def latest_job(session: Session, fingerprint_key: str) -> GenerationJob | None:
     return session.execute(
         select(GenerationJob)
@@ -130,6 +150,57 @@ def evaluate_and_enqueue(
     except IntegrityError:
         # Another writer inserted the active job first; the partial unique index
         # rejected ours. Roll back to the last savepoint and treat as a no-op.
+        session.rollback()
+        return None
+    return job
+
+
+def enqueue_on_demand(
+    session: Session,
+    *,
+    fingerprint_key: str,
+    fingerprint_version: int,
+    fingerprint_json: str,
+    trigger_observation_ids: list[str],
+    owner_session_id: str,
+    new_id: str,
+    now: datetime,
+) -> GenerationJob | None:
+    """Queue a build one session explicitly asked for.
+
+    Unlike ``evaluate_and_enqueue`` this ignores the observation threshold and
+    the terminal-status guards: a teacher pressing the button is a fresh intent,
+    not the accumulation of evidence, so a fingerprint whose earlier job
+    succeeded or needed manual authoring is eligible again and the attempt count
+    starts over.
+
+    Returns None when the request is pointless (this session can already reach a
+    version) or premature (a build is already in flight); the caller turns that
+    into a stated refusal.
+    """
+    if has_version_available_to(session, fingerprint_key, owner_session_id):
+        return None
+    if has_active_job(session, fingerprint_key):
+        return None
+
+    job = GenerationJob(
+        id=new_id,
+        fingerprint_key=fingerprint_key,
+        fingerprint_version=fingerprint_version,
+        fingerprint_json=fingerprint_json,
+        trigger_observation_ids=json.dumps(trigger_observation_ids),
+        status=JOB_QUEUED,
+        owner_session_id=owner_session_id,
+        attempt=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(job)
+    try:
+        session.flush()
+    except IntegrityError:
+        # Lost the race to another writer's active job for this fingerprint,
+        # exactly as evaluate_and_enqueue treats it.
         session.rollback()
         return None
     return job

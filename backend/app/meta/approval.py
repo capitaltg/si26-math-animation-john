@@ -32,6 +32,7 @@ from app.meta.models import (
     TEMPLATE_VERSION_DISABLED,
     TEMPLATE_VERSION_ENABLED,
     TEMPLATE_VERSION_REVOKED,
+    GenerationJob,
     TemplateDraft,
     TemplateDraftFixture,
     TemplateVersion,
@@ -39,6 +40,17 @@ from app.meta.models import (
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
 _TEMPLATE_NAME_RE = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def _same_owner(owner_session_id: str | None):
+    """Match versions belonging to exactly this owner.
+
+    ``IS NULL`` rather than ``= NULL`` for the shared case, so the shared scope
+    is a real scope rather than a comparison that matches nothing.
+    """
+    if owner_session_id is None:
+        return TemplateVersion.owner_session_id.is_(None)
+    return TemplateVersion.owner_session_id == owner_session_id
 
 
 class ApprovalError(Exception):
@@ -69,11 +81,33 @@ class ApprovalConflictError(ApprovalError):
     """Lost a race with a concurrent approval (maps to HTTP 409)."""
 
 
+def _required_fixture_count(session, draft: TemplateDraft, owner_session_id: str | None) -> int:
+    """How many verified real fixtures this approval demands.
+
+    A shared version always demands the configured count. A session-scoped one
+    demands a fixture per real example the draft was actually built from, capped
+    at the configured count: a teacher who hit one novel problem cannot produce
+    five examples of it, and holding them to evidence that cannot exist would
+    make private approval impossible.
+
+    Read from the job's frozen ``trigger_observation_ids`` rather than counting
+    the fingerprint's observations live, so excluding an observation after
+    generation can never lower the bar a draft is held to.
+    """
+    configured = get_settings().meta_required_fixture_count
+    if owner_session_id is None:
+        return configured
+    job = session.get(GenerationJob, draft.job_id)
+    built_from = len(json.loads(job.trigger_observation_ids)) if job else 0
+    return min(configured, max(1, built_from))
+
+
 def approve_draft_service(
     draft_id: str,
     template_name: str,
     reviewer_label: str,
     math_semantics_confirmed: bool,
+    owner_session_id: str | None = None,
 ) -> TemplateVersion:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -157,7 +191,7 @@ def approve_draft_service(
                     TemplateDraftFixture.structural_check_passed.is_(True),
                 )
             ).scalar_one()
-            if verified_fixtures < settings.meta_required_fixture_count:
+            if verified_fixtures < _required_fixture_count(session, draft, owner_session_id):
                 raise ApprovalPreconditionError(
                     "Draft has too few verified real fixtures to publish"
                 )
@@ -182,6 +216,9 @@ def approve_draft_service(
                 raise TemplateNameConflictError(
                     f"Invalid template name {template_name!r}"
                 )
+            # Scoped to the same owner: two teachers may independently settle on
+            # the same obvious name for their own private template, and neither
+            # can see the other's.
             name_collision = session.execute(
                 select(func.count())
                 .select_from(TemplateVersion)
@@ -189,6 +226,7 @@ def approve_draft_service(
                     TemplateVersion.template_name == template_name,
                     TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
                     TemplateVersion.fingerprint_key != draft.fingerprint_key,
+                    _same_owner(owner_session_id),
                 )
             ).scalar_one()
             if name_collision:
@@ -213,14 +251,17 @@ def approve_draft_service(
                     "draft approval was claimed by another request"
                 )
 
-            # 2. Disable any prior enabled version for this fingerprint before
-            #    inserting the new one, so the partial unique index never sees
-            #    two enabled rows at once.
+            # 2. Disable this owner's prior enabled version for this fingerprint
+            #    before inserting the new one, so the partial unique index never
+            #    sees two enabled rows at once. Scoped to the same owner: another
+            #    session's private version, and the shared one, are not ours to
+            #    disable.
             session.execute(
                 update(TemplateVersion)
                 .where(
                     TemplateVersion.fingerprint_key == draft.fingerprint_key,
                     TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+                    _same_owner(owner_session_id),
                 )
                 .values(status=TEMPLATE_VERSION_DISABLED, updated_at=now)
             )
@@ -234,6 +275,7 @@ def approve_draft_service(
                 draft_id=draft.id,
                 artifact_hash=draft.artifact_hash,
                 status=TEMPLATE_VERSION_ENABLED,
+                owner_session_id=owner_session_id,
                 created_at=now,
                 updated_at=now,
             )

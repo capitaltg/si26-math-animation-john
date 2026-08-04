@@ -24,6 +24,17 @@ def text_template_version_enabled():
     return text("status = 'enabled'")
 
 
+def text_owner_scope():
+    """The owner half of an owner-scoped unique index.
+
+    ``coalesce`` rather than the bare column because SQLite treats NULLs as
+    distinct inside a UNIQUE index — indexing ``owner_session_id`` directly
+    would let two shared (NULL-owner) versions coexist for one fingerprint.
+    See migration 0007_template_ownership.
+    """
+    return text("coalesce(owner_session_id, '')")
+
+
 class FallbackObservation(Base):
     __tablename__ = "fallback_observations"
     __table_args__ = (
@@ -75,6 +86,7 @@ class GenerationJob(Base):
             unique=True,
             sqlite_where=text_status_active(),
         ),
+        Index("ix_generation_jobs_owner_session_id", "owner_session_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -83,6 +95,9 @@ class GenerationJob(Base):
     fingerprint_json: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_observation_ids: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: NULL means threshold-triggered and ownerless — an admin reviews it. Set
+    #: means one session asked for this build and owns the resulting drafts.
+    owner_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -179,12 +194,14 @@ class TemplateVersion(Base):
         Index(
             "uq_enabled_version_per_fingerprint",
             "fingerprint_key",
+            text_owner_scope(),
             unique=True,
             sqlite_where=text_template_version_enabled(),
         ),
         Index(
             "uq_enabled_version_per_template_name",
             "template_name",
+            text_owner_scope(),
             unique=True,
             sqlite_where=text_template_version_enabled(),
         ),
@@ -198,5 +215,8 @@ class TemplateVersion(Base):
     )
     artifact_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: NULL means shared with every session. Set means enabled only for the
+    #: session that approved it.
+    owner_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
