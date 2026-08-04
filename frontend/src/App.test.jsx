@@ -113,6 +113,7 @@ function installFetchMock({
   fallbackReason = null,
   patchStatus = 'ok',
   storyboardScenes = [pendingScene],
+  renderFails = false,
 } = {}) {
   let uploadCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
@@ -131,16 +132,17 @@ function installFetchMock({
       return jsonResponse({ candidates: [candidate] })
     }
     if (url === '/options') {
+      const requested = JSON.parse(init.body).candidate_ids
       return jsonResponse({
-        options: [{
-          candidate_id: 'c1',
+        options: requested.map((candidateId) => ({
+          candidate_id: candidateId,
           grade_level: 1,
           ambiguous: false,
           templates: [{
             template: 'number_line',
             rationale: 'shows addition as a jump',
           }],
-        }],
+        })),
       })
     }
     if (url === '/storyboard') {
@@ -177,6 +179,9 @@ function installFetchMock({
       return jsonResponse({ ...pendingScene, status: 'rejected' })
     }
     if (url === '/render') {
+      if (renderFails) {
+        return jsonResponse({ detail: 'Render timed out after 600s' }, 500)
+      }
       return jsonResponse({
         clips: [{
           scene_id: 's1',
@@ -208,10 +213,10 @@ async function reachStoryboard() {
 
   const checkbox = await screen.findByRole('checkbox')
   fireEvent.click(checkbox)
-  fireEvent.click(screen.getByRole('button', { name: 'Get options.' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
 
   await screen.findByRole('heading', { name: 'Choose visualizations' })
-  fireEvent.click(screen.getByRole('button', { name: 'Review storyboard.' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Build storyboard' }))
   await screen.findByRole('heading', { name: 'Storyboard review' })
   return { container, fileInput }
 }
@@ -230,7 +235,7 @@ it('blocks rendering when an approved scene has unsaved edits', async () => {
   const renderButton = screen.getByRole('button', { name: 'Render approved' })
   await waitFor(() => expect(renderButton.disabled).toBe(false))
 
-  fireEvent.change(screen.getByLabelText('Start:'), { target: { value: '5' } })
+  fireEvent.change(screen.getByLabelText('Start'), { target: { value: '5' } })
 
   expect(renderButton.disabled).toBe(true)
 })
@@ -244,7 +249,7 @@ it('does not combine selected scenes while one has unsaved edits', async () => {
   }
   expect(screen.getByRole('button', { name: 'Combine 2 into one scene' })).not.toBeNull()
 
-  fireEvent.change(screen.getAllByLabelText('Start:')[0], { target: { value: '5' } })
+  fireEvent.change(screen.getAllByLabelText('Start')[0], { target: { value: '5' } })
 
   expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
 })
@@ -271,7 +276,7 @@ it('combines eligible scenes and ungroups them back into their original position
   await reachStoryboard()
 
   fireEvent.click(screen.getAllByRole('button', { name: 'Save edits' })[0])
-  await screen.findByText('start: must be non-negative')
+  await screen.findByText('Start: must be non-negative')
 
   for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
     fireEvent.click(checkbox)
@@ -288,7 +293,7 @@ it('combines eligible scenes and ungroups them back into their original position
     within(screen.getByText(chainedScene.detected_summary).parentElement)
       .queryByRole('button', { name: 'Retry' }),
   ).toBeNull()
-  expect(screen.queryByText('start: must be non-negative')).toBeNull()
+  expect(screen.queryByText('Start: must be non-negative')).toBeNull()
   expect(
     screen.getByText(chainedScene.detected_summary).compareDocumentPosition(
       screen.getByText(manualSourceScene.source_excerpt),
@@ -308,7 +313,7 @@ it('combines eligible scenes and ungroups them back into their original position
       .getByRole('button', { name: 'Retry' }),
   ).not.toBeNull()
   expect(screen.queryByRole('button', { name: 'Ungroup' })).toBeNull()
-  expect(screen.queryByText('start: must be non-negative')).toBeNull()
+  expect(screen.queryByText('Start: must be non-negative')).toBeNull()
   expect(
     screen.getByText(pendingScene2.detected_summary).compareDocumentPosition(
       screen.getByText(manualSourceScene.source_excerpt),
@@ -423,7 +428,7 @@ it('saves edits and clears the dirty flag', async () => {
   installFetchMock()
   await reachStoryboard()
 
-  fireEvent.change(screen.getByLabelText('Start:'), { target: { value: '5' } })
+  fireEvent.change(screen.getByLabelText('Start'), { target: { value: '5' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
   await waitFor(() => expect(screen.queryByText('Unsaved edits — Save first')).toBeNull())
@@ -436,14 +441,14 @@ it('rejects a scene', async () => {
   const sceneContainer = screen.getByText(pendingScene.detected_summary).parentElement
   fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
 
-  await waitFor(() => expect(sceneContainer.style.background).toContain('254, 242, 242'))
+  await waitFor(() => expect(sceneContainer.getAttribute('data-status')).toBe('rejected'))
 })
 
 it('updates the grade level', async () => {
   installFetchMock()
   await reachStoryboard()
 
-  fireEvent.change(screen.getByLabelText('Grade:'), { target: { value: '3' } })
+  fireEvent.change(screen.getByLabelText('Grade'), { target: { value: '3' } })
 
   await waitFor(() => expect(document.body.textContent).toContain('(overridden)'))
 })
@@ -454,7 +459,7 @@ it('surfaces 422 field errors from a PATCH without crashing', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
-  await screen.findByText('start: must be non-negative')
+  await screen.findByText('Start: must be non-negative')
 })
 
 it('shows a save error when a 422 response has no field errors array', async () => {
@@ -522,7 +527,9 @@ async function reachOptions() {
   fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
   const checkbox = await screen.findByRole('checkbox')
   fireEvent.click(checkbox)
-  fireEvent.click(screen.getByRole('button', { name: 'Get options.' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await new Promise((r) => setTimeout(r, 50))
+  console.log('DEBUG BODY:', document.body.textContent.slice(0, 400))
   await screen.findByRole('heading', { name: 'Choose visualizations' })
 }
 
@@ -536,4 +543,32 @@ it('does not show the new-template hint when a structural template is offered', 
   installFetchMock()
   await reachOptions()
   expect(screen.queryByText(/may propose a brand-new visualization template/)).toBeNull()
+})
+
+it('clears a failed render alert once a new storyboard is built', async () => {
+  installFetchMock({ secondUpload: true, renderFails: true })
+  const { fileInput } = await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+  const renderButton = screen.getByRole('button', { name: 'Render approved' })
+  await waitFor(() => expect(renderButton.disabled).toBe(false))
+  fireEvent.click(renderButton)
+  await screen.findByText(/The render did not finish/)
+
+  // Upload alone only unmounts the alert. The failure must not survive into the
+  // next storyboard, or a fresh pipeline opens under a stale alarm.
+  fireEvent.change(fileInput, {
+    target: { files: [new File(['deck2'], 'deck2.pptx')] },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+  // Click the label text, not the input: the input sits inside the label, so a
+  // direct click double-toggles and nets no selection.
+  await screen.findByRole('checkbox')
+  fireEvent.click(screen.getByText('Detected: 9 - 2'))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await screen.findByRole('heading', { name: 'Choose visualizations' })
+  fireEvent.click(screen.getByRole('button', { name: 'Build storyboard' }))
+  await screen.findByRole('heading', { name: 'Storyboard review' })
+
+  expect(screen.queryByText(/The render did not finish/)).toBeNull()
 })

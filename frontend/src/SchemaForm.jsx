@@ -30,8 +30,8 @@ function Field({ name, schema, root, value, onChange, disabled }) {
   // Enum (Literal) -> dropdown
   if (resolved.enum) {
     return (
-      <label style={{ display: 'block', margin: '0.3rem 0' }}>
-        {label}:{' '}
+      <label className="field">
+        <span className="field__label">{label}</span>
         <select value={value ?? ''} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
           {resolved.enum.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
@@ -44,8 +44,8 @@ function Field({ name, schema, root, value, onChange, disabled }) {
   // Number
   if (resolved.type === 'integer' || resolved.type === 'number') {
     return (
-      <label style={{ display: 'block', margin: '0.3rem 0' }}>
-        {label}:{' '}
+      <label className="field">
+        <span className="field__label">{label}</span>
         <input
           type="number"
           value={value ?? ''}
@@ -68,10 +68,10 @@ function Field({ name, schema, root, value, onChange, disabled }) {
     const itemIsObject = itemSchema.type === 'object' || !!itemSchema.properties
 
     return (
-      <fieldset style={{ margin: '0.4rem 0' }} disabled={disabled}>
+      <fieldset className="subform" disabled={disabled}>
         <legend>{label}</legend>
         {rows.map((row, i) => (
-          <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div className="subform__row" key={i}>
             {itemIsObject ? (
               <SchemaForm
                 schema={itemSchema}
@@ -101,10 +101,11 @@ function Field({ name, schema, root, value, onChange, disabled }) {
             {rows.length > minItems && (
               <button
                 type="button"
+                className="btn btn--quiet btn--tiny"
                 disabled={disabled}
                 onClick={() => onChange(rows.filter((_, j) => j !== i))}
               >
-                remove
+                Remove
               </button>
             )}
           </div>
@@ -112,10 +113,11 @@ function Field({ name, schema, root, value, onChange, disabled }) {
         {rows.length < maxItems && (
           <button
             type="button"
+            className="btn btn--tiny"
             disabled={disabled}
             onClick={() => onChange([...rows, blankValue(itemSchema, root)])}
           >
-            add item
+            Add another
           </button>
         )}
       </fieldset>
@@ -124,8 +126,8 @@ function Field({ name, schema, root, value, onChange, disabled }) {
 
   // String fallback
   return (
-    <label style={{ display: 'block', margin: '0.3rem 0' }}>
-      {label}:{' '}
+    <label className="field">
+      <span className="field__label">{label}</span>
       <input
         type="text"
         value={value ?? ''}
