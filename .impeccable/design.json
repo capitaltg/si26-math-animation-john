@@ -1,0 +1,631 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-04T00:00:00Z",
+  "title": "Design System: Bright Board",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#fffdf8",
+        "tonalRamp": ["#2a2823", "#453f36", "#615a4d", "#7f7666", "#a09684", "#c2b8a5", "#e2dbcb", "#fffdf8"]
+      },
+      "paper-warm": {
+        "role": "neutral",
+        "displayName": "Paper Warm",
+        "canonical": "#fffaf0",
+        "tonalRamp": ["#2a2418", "#453b28", "#61533a", "#7f6d4c", "#a08964", "#c2a982", "#e2cfad", "#fffaf0"]
+      },
+      "board": {
+        "role": "neutral",
+        "displayName": "Board Tan",
+        "canonical": "#f4e8ce",
+        "tonalRamp": ["#2b2418", "#463b28", "#63533a", "#816d4c", "#a28b64", "#c4ac83", "#dfcda6", "#f4e8ce"]
+      },
+      "board-hover": {
+        "role": "neutral",
+        "displayName": "Board Hover",
+        "canonical": "#f7edd6",
+        "tonalRamp": ["#2c2619", "#473d29", "#64553b", "#826f4d", "#a38e65", "#c5b084", "#e0d2a9", "#f7edd6"]
+      },
+      "board-quiet": {
+        "role": "neutral",
+        "displayName": "Board Quiet",
+        "canonical": "#faf3e4",
+        "tonalRamp": ["#2d281a", "#48402b", "#65593d", "#83744f", "#a49368", "#c6b587", "#e1d8ad", "#faf3e4"]
+      },
+      "board-deep": {
+        "role": "neutral",
+        "displayName": "Board Deep",
+        "canonical": "#e9d6ab",
+        "tonalRamp": ["#291f0f", "#43341c", "#5f4b2a", "#7d6439", "#9c8049", "#bb9d61", "#d5ba86", "#e9d6ab"]
+      },
+      "slate": {
+        "role": "neutral",
+        "displayName": "Slate Well",
+        "canonical": "#16181d",
+        "tonalRamp": ["#0b0c0f", "#16181d", "#2b2f37", "#434855", "#5d6474", "#7b8394", "#a3aab6", "#d0d4dc"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1a1c21",
+        "tonalRamp": ["#0d0e11", "#1a1c21", "#2f3239", "#474c56", "#616774", "#808795", "#a8aeb9", "#d3d7de"]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Ink Soft",
+        "canonical": "#454c57",
+        "tonalRamp": ["#121417", "#20242a", "#31363e", "#454c57", "#5c6472", "#79818f", "#a2a9b4", "#ced3da"]
+      },
+      "ink-on-slate": {
+        "role": "neutral",
+        "displayName": "Ink on Slate",
+        "canonical": "#f6f1e6",
+        "tonalRamp": ["#2a271f", "#454033", "#615a48", "#7f775f", "#a09779", "#c2b997", "#e0d8bf", "#f6f1e6"]
+      },
+      "ink-on-slate-soft": {
+        "role": "neutral",
+        "displayName": "Ink on Slate Soft",
+        "canonical": "#c4bdae",
+        "tonalRamp": ["#231f18", "#3a3428", "#524a39", "#6c624b", "#877c60", "#a39679", "#b5aa96", "#c4bdae"]
+      },
+      "on-action": {
+        "role": "neutral",
+        "displayName": "On Action",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#1a1a1a", "#333333", "#4d4d4d", "#666666", "#8c8c8c", "#b3b3b3", "#d9d9d9", "#ffffff"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#dccfb4",
+        "tonalRamp": ["#251f13", "#3d3421", "#584b2f", "#75643f", "#937e51", "#b09b6f", "#c8b795", "#dccfb4"]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "canonical": "#bfae8b",
+        "tonalRamp": ["#211b12", "#37301f", "#4f452b", "#695c39", "#847549", "#9f8e63", "#b09e78", "#bfae8b"]
+      },
+      "rod-1": {
+        "role": "secondary",
+        "displayName": "Rod 1 — Cream",
+        "canonical": "#f0e8d4",
+        "tonalRamp": ["#29241a", "#433b2b", "#5f543d", "#7d6f51", "#9c8c68", "#bcab84", "#d8c9aa", "#f0e8d4"]
+      },
+      "rod-2": {
+        "role": "secondary",
+        "displayName": "Rod 2 — Signal Red",
+        "canonical": "#d8382b",
+        "tonalRamp": ["#2c0906", "#48100b", "#661711", "#861f17", "#a7271e", "#c53026", "#d8382b", "#e8776d"]
+      },
+      "rod-3": {
+        "role": "secondary",
+        "displayName": "Rod 3 — Leaf",
+        "canonical": "#7fb32e",
+        "tonalRamp": ["#182405", "#273b09", "#38540e", "#4a6f13", "#5d8b19", "#6f9e23", "#7fb32e", "#a3ca61"]
+      },
+      "rod-4": {
+        "role": "secondary",
+        "displayName": "Rod 4 — Grape",
+        "canonical": "#7a4aa5",
+        "tonalRamp": ["#190d24", "#28153a", "#3a1f54", "#4c2a6e", "#60358a", "#6d3f97", "#7a4aa5", "#a17ac2"]
+      },
+      "rod-5": {
+        "role": "secondary",
+        "displayName": "Rod 5 — Chalk Yellow",
+        "canonical": "#f2b705",
+        "tonalRamp": ["#2b2001", "#463402", "#634a03", "#816104", "#a17904", "#c19205", "#dca505", "#f2b705"]
+      },
+      "rod-6": {
+        "role": "secondary",
+        "displayName": "Rod 6 — Bottle Green",
+        "canonical": "#1e7a4b",
+        "tonalRamp": ["#04170d", "#072616", "#0b3720", "#0f492b", "#145c36", "#1a6c41", "#1e7a4b", "#48a675"]
+      },
+      "rod-7": {
+        "role": "secondary",
+        "displayName": "Rod 7 — Near-Black",
+        "canonical": "#23262b",
+        "tonalRamp": ["#0e0f12", "#181a1e", "#23262b", "#383c44", "#50555f", "#6c727e", "#939aa6", "#c4cad3"]
+      },
+      "rod-8": {
+        "role": "secondary",
+        "displayName": "Rod 8 — Cocoa",
+        "canonical": "#8a5a3c",
+        "tonalRamp": ["#1d1108", "#2f1d0f", "#432a17", "#583720", "#6f4629", "#7d5033", "#8a5a3c", "#b0836a"]
+      },
+      "rod-9": {
+        "role": "secondary",
+        "displayName": "Rod 9 — Rod Blue",
+        "canonical": "#2d6bd4",
+        "tonalRamp": ["#06132c", "#0a1f48", "#0e2c66", "#133a86", "#1849a7", "#215bc5", "#2d6bd4", "#6d9ae6"]
+      },
+      "rod-10": {
+        "role": "secondary",
+        "displayName": "Rod 10 — Orange",
+        "canonical": "#f07c24",
+        "tonalRamp": ["#2a1304", "#451f06", "#622c09", "#803a0b", "#a1490d", "#c2580f", "#dc6a1a", "#f07c24"]
+      },
+      "masthead-ink": {
+        "role": "secondary",
+        "displayName": "Masthead Ink",
+        "canonical": "#4a3a06",
+        "tonalRamp": ["#100d02", "#1c1603", "#291f04", "#372a05", "#4a3a06", "#6b5409", "#96770d", "#c39c11"]
+      },
+      "masthead-rule": {
+        "role": "secondary",
+        "displayName": "Masthead Rule",
+        "canonical": "#d9a300",
+        "tonalRamp": ["#261d00", "#3e2f00", "#584200", "#735600", "#906b00", "#ad8000", "#c69300", "#d9a300"]
+      },
+      "action": {
+        "role": "primary",
+        "displayName": "Working Blue",
+        "canonical": "#24409b",
+        "tonalRamp": ["#060b21", "#0b1338", "#101c52", "#16266d", "#1c3089", "#24409b", "#3557c4", "#7c92dd"]
+      },
+      "action-deep": {
+        "role": "primary",
+        "displayName": "Working Blue Deep",
+        "canonical": "#1a2f74",
+        "tonalRamp": ["#050919", "#090f2a", "#0d163e", "#121e53", "#162669", "#1a2f74", "#2c4aa8", "#6d85cd"]
+      },
+      "action-field": {
+        "role": "primary",
+        "displayName": "Action Field",
+        "canonical": "#e6ebfa",
+        "tonalRamp": ["#141a2b", "#202a45", "#2d3b61", "#3c4e7f", "#4d629f", "#7188bd", "#aab7dc", "#e6ebfa"]
+      },
+      "action-field-soft": {
+        "role": "primary",
+        "displayName": "Action Field Soft",
+        "canonical": "#f2f5fd",
+        "tonalRamp": ["#161b28", "#232c41", "#313e5c", "#405176", "#526594", "#7689b6", "#adbcd9", "#f2f5fd"]
+      },
+      "ok": {
+        "role": "tertiary",
+        "displayName": "Approved Green",
+        "canonical": "#145c39",
+        "tonalRamp": ["#03130b", "#052014", "#08301e", "#0b4128", "#0f5232", "#145c39", "#1d8253", "#4fb383"]
+      },
+      "ok-field": {
+        "role": "tertiary",
+        "displayName": "Approved Field",
+        "canonical": "#e4f1e9",
+        "tonalRamp": ["#152219", "#223528", "#314b39", "#42634c", "#557d61", "#7d9f88", "#b0c9bb", "#e4f1e9"]
+      },
+      "ok-line": {
+        "role": "tertiary",
+        "displayName": "Approved Line",
+        "canonical": "#8fbfa5",
+        "tonalRamp": ["#101a14", "#1b2c22", "#274031", "#345542", "#436c54", "#5c8a6f", "#75a68a", "#8fbfa5"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Failure Red",
+        "canonical": "#9e241c",
+        "tonalRamp": ["#210706", "#360b09", "#4d100d", "#661612", "#801c16", "#9e241c", "#c9382d", "#e0837b"]
+      },
+      "danger-field": {
+        "role": "tertiary",
+        "displayName": "Failure Field",
+        "canonical": "#fceceb",
+        "tonalRamp": ["#251716", "#3a2422", "#523230", "#6b423f", "#87544f", "#ab7871", "#d5a9a3", "#fceceb"]
+      },
+      "danger-line": {
+        "role": "tertiary",
+        "displayName": "Failure Line",
+        "canonical": "#dd9b95",
+        "tonalRamp": ["#1f100e", "#341a17", "#4a2521", "#61312c", "#7c3f38", "#a05a51", "#c17a72", "#dd9b95"]
+      },
+      "fallback": {
+        "role": "tertiary",
+        "displayName": "Fallback Brown",
+        "canonical": "#6f462b",
+        "tonalRamp": ["#170e06", "#26170b", "#362110", "#472b15", "#5b381f", "#6f462b", "#96613b", "#bf8f6c"]
+      },
+      "fallback-field": {
+        "role": "tertiary",
+        "displayName": "Fallback Field",
+        "canonical": "#f8eee4",
+        "tonalRamp": ["#241a11", "#38291c", "#4f3a28", "#674c35", "#816044", "#a5836a", "#d0b69c", "#f8eee4"]
+      },
+      "fallback-line": {
+        "role": "tertiary",
+        "displayName": "Fallback Line",
+        "canonical": "#d3b394",
+        "tonalRamp": ["#1e1610", "#32241a", "#473326", "#5d4432", "#765741", "#9a7659", "#b89476", "#d3b394"]
+      },
+      "teach-ink": {
+        "role": "tertiary",
+        "displayName": "Teaching Ink",
+        "canonical": "#1c3573",
+        "tonalRamp": ["#050a18", "#091029", "#0d183d", "#122052", "#172a68", "#1c3573", "#2e4fa6", "#6f88cc"]
+      },
+      "teach-field": {
+        "role": "tertiary",
+        "displayName": "Teaching Field",
+        "canonical": "#eaf0fc",
+        "tonalRamp": ["#141b2c", "#212c46", "#2e3d63", "#3d5081", "#4f65a1", "#738bbe", "#acb9dd", "#eaf0fc"]
+      },
+      "teach-line": {
+        "role": "tertiary",
+        "displayName": "Teaching Line",
+        "canonical": "#b3c6ee",
+        "tonalRamp": ["#111725", "#1d2739", "#28374f", "#354a68", "#446084", "#6480ab", "#8ba3cd", "#b3c6ee"]
+      },
+      "decor-warm": {
+        "role": "tertiary",
+        "displayName": "Blob Warm",
+        "canonical": "#f6c76a",
+        "tonalRamp": ["#2b2008", "#45340d", "#624a13", "#806119", "#a07a20", "#c19427", "#dcae43", "#f6c76a"]
+      },
+      "decor-cool": {
+        "role": "tertiary",
+        "displayName": "Blob Cool",
+        "canonical": "#a8c6f0",
+        "tonalRamp": ["#101d2f", "#1a2f4c", "#26436b", "#33588c", "#436faf", "#6690cd", "#8bade1", "#a8c6f0"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The masthead H1 only, once per page. Capped at 22ch. A fluid clamp, one of the two sanctioned font-size literals in a rule."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The H2 opening each band — the pipeline stage's name. The second sanctioned fluid clamp."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Ramp step --t-2xl (1.4rem). A scene's detected summary and the drop-zone title, which used to be a 1.35rem one-off."
+      },
+      "subtitle": {
+        "displayName": "Subtitle",
+        "purpose": "Ramp step --t-xl (1.2rem). A candidate's one-line summary at 700 (formerly a 1.12rem one-off) and a fieldset legend at 800."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Ramp step --t-base. All prose; secondary prose drops to --t-sm in Ink Soft. The step above, --t-lg, carries UI strings that need a little more weight: masthead sub-line, rail step name, fact term, sub-form legend, dock title, clip title, primary button."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Ramp step --t-xs. Field labels, elapsed clock, clip ids, rod roles. Sentence case, never uppercase or letter-spaced."
+      },
+      "numeral": {
+        "displayName": "Numeral",
+        "purpose": "The number inside a rod bar, plus every tabular figure a teacher compares against their own deck: file names, slide tags, ids, grades, the clock."
+      }
+    },
+    "shadows": [
+      {
+        "name": "block",
+        "value": "0 2px 0 rgba(26, 28, 33, 0.09), 0 10px 20px -8px rgba(26, 28, 33, 0.3)",
+        "purpose": "The default lift: bands, clip cards, the active rail step, any hovered button. Offset riser plus a real blur."
+      },
+      {
+        "name": "raised",
+        "value": "0 3px 0 rgba(26, 28, 33, 0.12), 0 18px 34px -14px rgba(26, 28, 33, 0.38)",
+        "purpose": "The fixed render dock only — the single element that floats above the page."
+      },
+      {
+        "name": "inset",
+        "value": "inset 0 2px 10px rgba(0, 0, 0, 0.55)",
+        "purpose": "The dark video well, so slate reads as recessed rather than as a dark card."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "The only easing in the system. Fast out, long settle — things arrive and seat."
+      },
+      {
+        "name": "duration-press",
+        "value": "0.16s",
+        "purpose": "Button hover/press: transform, background-color, box-shadow."
+      },
+      {
+        "name": "duration-state",
+        "value": "0.18s–0.35s",
+        "purpose": "Pick-row border/background changes (0.18s), drop-zone hover (0.25s), rail step background-color (0.35s)."
+      },
+      {
+        "name": "seat",
+        "value": "0.55s cubic-bezier(0.16, 1, 0.3, 1) — translateY(-10px) scale(0.985) to none",
+        "purpose": "The active rail step dropping into place when a stage advances."
+      },
+      {
+        "name": "spin",
+        "value": "1.1s linear infinite",
+        "purpose": "The working mark on in-progress stamps and dock rows. Disabled under prefers-reduced-motion."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "transition-duration: 0.01ms !important on *; seat and spin animations set to none",
+        "purpose": "prefers-reduced-motion: reduce kills every transition and both keyframe animations globally."
+      }
+    ],
+    "breakpoints": [
+      { "name": "scene-split", "value": "760px" },
+      { "name": "upload-split", "value": "900px" },
+      { "name": "gutter-claimed", "value": "1100px" },
+      { "name": "container", "value": "1080px" }
+    ],
+    "textures": [
+      {
+        "name": "tooth",
+        "value": "inline SVG feTurbulence, fractalNoise baseFrequency 0.9, numOctaves 4, saturate 0, rect at opacity 0.28",
+        "purpose": "The paper material. Applied to exactly four surfaces: .shell::before (0.5 opacity, mix-blend-mode multiply), .band, .drop, .rail__step. State changes on any of these must use background-color, never the background shorthand."
+      }
+    ],
+    "fonts": [
+      {
+        "name": "Baloo 2",
+        "value": "/fonts/baloo2-var.woff2, woff2-variations, weight axis 400–800, font-display swap, preloaded",
+        "purpose": "Display face. Self-hosted variable woff2; no third-party font host."
+      },
+      {
+        "name": "Rubik",
+        "value": "/fonts/rubik-var.woff2, woff2-variations, weight axis 300–900, font-display swap, preloaded",
+        "purpose": "UI face. Self-hosted variable woff2; no third-party font host."
+      }
+    ],
+    "tokenDiscipline": [
+      {
+        "name": "literal-free rules",
+        "value": "62 custom properties on :root; zero literal hex values and zero literal border-radius values in any rule outside :root",
+        "purpose": "Verified by script over the stylesheet. A literal in a rule is a bug, not a shortcut."
+      },
+      {
+        "name": "sanctioned exceptions",
+        "value": "body font-size 16px (the root the rem ramp measures against); clamp(2.1rem, 5vw, 3.4rem) and clamp(1.45rem, 2.6vw, 1.9rem) display sizes; rgba(26, 28, 33, 0.28) on the rod bar edge",
+        "purpose": "The display clamps must scale with the viewport and a fixed ramp step cannot. The rod edge is an alpha of Ink so one border darkens all ten rod fills — an alpha of an existing token is the only acceptable inline colour."
+      }
+    ],
+    "accessibility": [
+      {
+        "name": "focus-ring",
+        "value": ":focus-visible { outline: 3px solid var(--action); outline-offset: 2px; border-radius: var(--r-xs) }",
+        "purpose": "Global, never removed. A component's focus border shift is an addition to this ring, never a replacement."
+      },
+      {
+        "name": "sr-only",
+        "value": "position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0",
+        "purpose": "Carries the state word beside every decorative icon: rail steps, stamps, dock rows."
+      },
+      {
+        "name": "live-region",
+        "value": "aria-live=\"polite\" on the dock heading; aria-hidden on the elapsed clock",
+        "purpose": "Only the render heading announces. The clock mutates every second and would talk over everything else."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one action that ends a pipeline stage. Solid Working Blue, larger than every other button.",
+      "html": "<button class=\"ds-btn ds-btn--primary\">Render approved</button>",
+      "css": ".ds-btn { font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-weight: 500; font-size: var(--t-base, 1rem); padding: 0.6rem 1.1rem; border-radius: var(--r-pill, 999px); border: 2px solid transparent; background: var(--board-deep, #e9d6ab); color: var(--ink, #1a1c21); cursor: pointer; display: inline-flex; align-items: center; gap: 0.45rem; transition: transform 0.16s cubic-bezier(0.16,1,0.3,1), background-color 0.16s cubic-bezier(0.16,1,0.3,1), box-shadow 0.16s cubic-bezier(0.16,1,0.3,1); } .ds-btn--primary { background: var(--action, #24409b); color: var(--on-action, #ffffff); font-weight: 700; padding: 0.72rem 1.5rem; font-size: var(--t-lg, 1.06rem); } .ds-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 2px 0 rgba(26,28,33,0.09), 0 10px 20px -8px rgba(26,28,33,0.3); } .ds-btn--primary:hover:not(:disabled) { background: var(--action-deep, #1a2f74); } .ds-btn:active:not(:disabled) { transform: translateY(0); } .ds-btn:focus-visible { outline: 3px solid var(--action, #24409b); outline-offset: 2px; } .ds-btn:disabled { opacity: 0.55; cursor: not-allowed; }"
+    },
+    {
+      "name": "Approve / Reject Pair",
+      "kind": "button",
+      "refersTo": "button-ok",
+      "description": "The reviewer's verdict. Approve is solid green; Reject is outlined — the destructive action is never a solid fill.",
+      "html": "<span style=\"display:inline-flex;gap:0.6rem;align-items:center\"><button class=\"ds-btn ds-btn--ok\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" stroke-linejoin=\"miter\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M4 13l5 5L20 6\"/></svg>Approve</button><button class=\"ds-btn ds-btn--danger\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" stroke-linejoin=\"miter\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>Reject</button></span>",
+      "css": ".ds-btn { font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-weight: 500; font-size: var(--t-base, 1rem); padding: 0.6rem 1.1rem; border-radius: var(--r-pill, 999px); border: 2px solid transparent; background: var(--board-deep, #e9d6ab); color: var(--ink, #1a1c21); cursor: pointer; display: inline-flex; align-items: center; gap: 0.45rem; transition: transform 0.16s cubic-bezier(0.16,1,0.3,1), background-color 0.16s cubic-bezier(0.16,1,0.3,1), box-shadow 0.16s cubic-bezier(0.16,1,0.3,1); } .ds-btn--ok { background: var(--ok, #145c39); color: var(--on-action, #ffffff); font-weight: 700; } .ds-btn--danger { background: transparent; border-color: var(--danger, #9e241c); color: var(--danger, #9e241c); } .ds-btn--danger:hover { background: var(--danger-field, #fceceb); } .ds-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 0 rgba(26,28,33,0.09), 0 10px 20px -8px rgba(26,28,33,0.3); } .ds-btn:active { transform: translateY(0); } .ds-btn:focus-visible { outline: 3px solid var(--action, #24409b); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input-text",
+      "description": "Schema-driven param editor field. Label above in Ink Soft; tabular numerals; capped at 20rem so a number never stretches across the column. Focus shifts the border AND keeps the global ring.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field__label\">Amount</span><input type=\"number\" value=\"7\" /></label>",
+      "css": ".ds-field { display: block; margin: 0 0 0.7rem; } .ds-field__label { display: block; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-weight: 500; font-size: var(--t-xs, 0.85rem); color: var(--ink-soft, #454c57); margin-bottom: 0.2rem; } .ds-field input { font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-base, 1rem); font-variant-numeric: tabular-nums; padding: 0.45rem 0.6rem; border: 2px solid var(--line-strong, #bfae8b); border-radius: var(--r-sm, 8px); background: var(--paper, #fffdf8); color: var(--ink, #1a1c21); width: 100%; max-width: 20rem; } .ds-field input:focus-visible { border-color: var(--action, #24409b); outline: 3px solid var(--action, #24409b); outline-offset: 2px; }"
+    },
+    {
+      "name": "Template Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Names a template. Deliberately Board-Deep neutral — a chip names a category, and category never borrows the rod law. The data-template attribute is a hook with no CSS behind it, on purpose.",
+      "html": "<span class=\"ds-chip\" data-template=\"part_whole_bar\">part whole bar</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 700; font-size: var(--t-sm, 0.93rem); padding: 0.18rem 0.6rem 0.22rem; border-radius: var(--r-sm, 8px); background: var(--board-deep, #e9d6ab); color: var(--ink, #1a1c21); }"
+    },
+    {
+      "name": "Band Card",
+      "kind": "card",
+      "refersTo": "band",
+      "description": "The only card level in the system. Paper with real tooth over it, 2px hairline, largest radius, Block shadow. Opens with a baseline-aligned head: heading left, note right.",
+      "html": "<section class=\"ds-band\"><div class=\"ds-band__head\"><h2>Storyboard review</h2><p class=\"ds-band__note\">Fix any wrong value here. Every edit is re-checked in Python before a scene can be approved.</p></div><p style=\"margin:0;color:#454c57;font-size:0.93rem\">Scene content sits directly on the band — a group inside it is a tinted block, never a second card.</p></section>",
+      "css": ".ds-band { background-color: var(--paper, #fffdf8); background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='0.28'/%3E%3C/svg%3E\"); border: 2px solid var(--line, #dccfb4); border-radius: var(--r-lg, 20px); padding: 1.5rem; box-shadow: 0 2px 0 rgba(26,28,33,0.09), 0 10px 20px -8px rgba(26,28,33,0.3); } .ds-band__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.15rem; } .ds-band h2 { font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; font-size: clamp(1.45rem, 2.6vw, 1.9rem); margin: 0; color: var(--ink, #1a1c21); } .ds-band__note { margin: 0; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); color: var(--ink-soft, #454c57); font-size: var(--t-sm, 0.93rem); max-width: 68ch; }"
+    },
+    {
+      "name": "Stage Rail",
+      "kind": "nav",
+      "refersTo": "rail-step-active",
+      "description": "Five numbered blocks; the order is the information. Done takes a check and the approved field plus ok-line; active takes Paper, a blue border, the Block shadow and a seat animation; todo takes the board-quiet fill — never lowered opacity.",
+      "html": "<ol class=\"ds-rail\"><li class=\"ds-rail__step\" data-state=\"done\"><span class=\"ds-rail__index\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M4 13l5 5L20 6\"/></svg><span class=\"ds-sr-only\">Step 1 — done</span></span><span class=\"ds-rail__name\">Upload deck</span></li><li class=\"ds-rail__step\" data-state=\"active\" aria-current=\"step\"><span class=\"ds-rail__index\">2<span class=\"ds-sr-only\">Step 2 — current step</span></span><span class=\"ds-rail__name\">Pick problems</span></li><li class=\"ds-rail__step\" data-state=\"todo\"><span class=\"ds-rail__index\">3<span class=\"ds-sr-only\">Step 3 — not started</span></span><span class=\"ds-rail__name\">Pick visuals</span></li></ol>",
+      "css": ".ds-rail { display: flex; gap: 0.5rem; margin: 0; padding: 0; list-style: none; flex-wrap: wrap; } .ds-rail__step { flex: 1 1 8rem; min-width: 7.5rem; background-color: var(--board, #f4e8ce); background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)' opacity='0.28'/%3E%3C/svg%3E\"); border: 2px solid var(--line-strong, #bfae8b); border-radius: var(--r-md, 14px); padding: 0.6rem 0.75rem 0.7rem; display: flex; flex-direction: column; gap: 0.15rem; transition: transform 0.5s cubic-bezier(0.16,1,0.3,1), background-color 0.35s cubic-bezier(0.16,1,0.3,1); } .ds-rail__step[data-state='done'] { background-color: var(--ok-field, #e4f1e9); border-color: var(--ok-line, #8fbfa5); } .ds-rail__step[data-state='active'] { background-color: var(--paper, #fffdf8); border-color: var(--action, #24409b); box-shadow: 0 2px 0 rgba(26,28,33,0.09), 0 10px 20px -8px rgba(26,28,33,0.3); animation: ds-seat 0.55s cubic-bezier(0.16,1,0.3,1) both; } .ds-rail__step[data-state='todo'] { background-color: var(--board-quiet, #faf3e4); border-color: var(--line, #dccfb4); } @keyframes ds-seat { from { transform: translateY(-10px) scale(0.985); } to { transform: none; } } .ds-rail__index { font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 800; font-size: var(--t-sm, 0.93rem); color: var(--ink-soft, #454c57); } .ds-rail__step[data-state='active'] .ds-rail__index { color: var(--action, #24409b); } .ds-rail__step[data-state='done'] .ds-rail__index { color: var(--ok, #145c39); } .ds-rail__name { font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 700; font-size: var(--t-lg, 1.06rem); line-height: 1.15; color: var(--ink, #1a1c21); } .ds-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } @media (prefers-reduced-motion: reduce) { .ds-rail__step[data-state='active'] { animation: none; } .ds-rail__step { transition-duration: 0.01ms; } }"
+    },
+    {
+      "name": "Rod Strip",
+      "kind": "custom",
+      "refersTo": "rod-bar",
+      "description": "The system's thesis made visible: colour bound to value 1–10 (canonical Cuisenaire) and width bound to magnitude (value × 9%). Rods 1, 3, 5, 10 flip to dark numerals; the rest take on-action white. Values outside 1–10 get no rod at all.",
+      "html": "<p class=\"ds-rods__caption\">Validated values, on the rod scale</p><ul class=\"ds-rods\"><li class=\"ds-rod\"><span class=\"ds-rod__bar\" data-ink=\"light\" style=\"background:#8a5a3c;width:72%\">8</span><span class=\"ds-rod__role\">Total</span></li><li class=\"ds-rod\"><span class=\"ds-rod__bar\" data-ink=\"dark\" style=\"background:#f2b705;width:45%\">5</span><span class=\"ds-rod__role\">Part 1</span></li><li class=\"ds-rod\"><span class=\"ds-rod__bar\" data-ink=\"dark\" style=\"background:#7fb32e;width:27%\">3</span><span class=\"ds-rod__role\">Part 2</span></li></ul>",
+      "css": ".ds-rods { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.9rem 0 0; padding: 0; list-style: none; } .ds-rods__caption { font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-xs, 0.85rem); color: var(--ink-soft, #454c57); margin: 0 0 0.15rem; } .ds-rod { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-xs, 0.85rem); color: var(--ink-soft, #454c57); } .ds-rod__bar { height: 1.5rem; border-radius: var(--r-xs, 4px); border: 2px solid rgba(26,28,33,0.28); display: flex; align-items: center; justify-content: flex-end; padding-right: 0.35rem; font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 800; font-size: var(--t-sm, 0.93rem); font-variant-numeric: tabular-nums; color: var(--on-action, #ffffff); min-width: 1.6rem; } .ds-rod__bar[data-ink='dark'] { color: var(--ink, #1a1c21); } .ds-rod__role { white-space: nowrap; }"
+    },
+    {
+      "name": "Stamp Column",
+      "kind": "custom",
+      "refersTo": "band",
+      "description": "Four discrete, countable, all-reachable stages per scene with a tabular count above. No percentage exists anywhere in the render path, so none is shown. Each row appends an sr-only state word because the marks are aria-hidden.",
+      "html": "<p class=\"ds-stamps__count\">2 of 4 stages complete</p><ul class=\"ds-stamps\"><li class=\"ds-stamp\" data-state=\"done\"><span class=\"ds-stamp__mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M4 13l5 5L20 6\"/></svg></span>Values extracted<span class=\"ds-sr-only\"> — done</span></li><li class=\"ds-stamp\" data-state=\"active\"><span class=\"ds-stamp__mark\"><svg class=\"ds-spin\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M12 3a9 9 0 019 9\"/><path d=\"M12 21a9 9 0 01-9-9\" opacity=\"0.35\"/></svg></span>Validated in Python<span class=\"ds-sr-only\"> — in progress</span></li><li class=\"ds-stamp\" data-state=\"todo\"><span class=\"ds-stamp__mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"5\" y=\"5\" width=\"14\" height=\"14\" rx=\"2\"/></svg></span>Preview rendered<span class=\"ds-sr-only\"> — not started</span></li></ul>",
+      "css": ".ds-stamps { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.35rem; } .ds-stamps__count { font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 700; font-size: var(--t-sm, 0.93rem); color: var(--ink-soft, #454c57); font-variant-numeric: tabular-nums; margin: 0.9rem 0 0; } .ds-stamp { display: flex; align-items: center; gap: 0.55rem; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-sm, 0.93rem); color: var(--ink-soft, #454c57); } .ds-stamp[data-state='done'] { color: var(--ok, #145c39); font-weight: 500; } .ds-stamp[data-state='active'] { color: var(--action, #24409b); font-weight: 500; } .ds-stamp[data-state='failed'] { color: var(--danger, #9e241c); font-weight: 500; } .ds-stamp__mark { flex: none; width: 1.15rem; height: 1.15rem; display: grid; place-items: center; } .ds-spin { animation: ds-spin 1.1s linear infinite; transform-origin: center; } @keyframes ds-spin { to { transform: rotate(360deg); } } .ds-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; } @media (prefers-reduced-motion: reduce) { .ds-spin { animation: none; } }"
+    },
+    {
+      "name": "Render Dock",
+      "kind": "custom",
+      "refersTo": "dock",
+      "description": "A fixed bottom bar — never a modal, never an overlay over the clips. Live heading, aria-hidden tabular clock, one truncating row per approved scene, and a written honest expectation. No percentage, no ETA. Row state is carried by mark shape plus sr-only text, not by colour.",
+      "html": "<aside class=\"ds-dock\" aria-label=\"Render progress\"><div class=\"ds-dock__inner\"><div class=\"ds-dock__head\"><svg class=\"ds-spin\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M12 3a9 9 0 019 9\"/><path d=\"M12 21a9 9 0 01-9-9\" opacity=\"0.35\"/></svg><h2 class=\"ds-dock__title\" aria-live=\"polite\">Rendering</h2><span class=\"ds-dock__elapsed\" aria-hidden=\"true\">2:14</span></div><div class=\"ds-dock__rows\"><div class=\"ds-dock__row\"><span class=\"ds-stamp__mark\"><svg class=\"ds-spin\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M12 3a9 9 0 019 9\"/><path d=\"M12 21a9 9 0 01-9-9\" opacity=\"0.35\"/></svg></span><span class=\"ds-dock__row-name\">part whole bar · c1</span><span class=\"ds-sr-only\">rendering</span></div><div class=\"ds-dock__row\"><span class=\"ds-stamp__mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" aria-hidden=\"true\" focusable=\"false\"><path d=\"M4 13l5 5L20 6\"/></svg></span><span class=\"ds-dock__row-name\">text card · c2</span><span class=\"ds-sr-only\">finished</span></div></div><p class=\"ds-dock__note\">Manim renders every approved scene in one pass. This takes minutes, not seconds — you can leave this open.</p></div></aside>",
+      "css": ".ds-dock { background: var(--paper, #fffdf8); border-top: 3px solid var(--line-strong, #bfae8b); box-shadow: 0 3px 0 rgba(26,28,33,0.12), 0 18px 34px -14px rgba(26,28,33,0.38); } .ds-dock__inner { max-width: 1080px; margin: 0 auto; padding: 0.8rem 1.5rem 1rem; } .ds-dock__head { display: flex; align-items: center; gap: 0.65rem; } .ds-dock__title { font-family: var(--font-display, 'Baloo 2', system-ui, sans-serif); font-weight: 800; font-size: var(--t-lg, 1.06rem); letter-spacing: -0.02em; margin: 0; flex: 1; color: var(--ink, #1a1c21); } .ds-dock__elapsed { font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-variant-numeric: tabular-nums; font-size: var(--t-xs, 0.85rem); color: var(--ink-soft, #454c57); } .ds-dock__rows { display: flex; gap: 0.5rem 1.5rem; flex-wrap: wrap; margin-top: 0.6rem; } .ds-dock__row { display: flex; align-items: center; gap: 0.5rem; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-sm, 0.93rem); color: var(--ink, #1a1c21); } .ds-dock__row-name { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-dock__note { margin: 0.55rem 0 0; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-xs, 0.85rem); color: var(--ink-soft, #454c57); max-width: 70ch; } .ds-stamp__mark { flex: none; width: 1.15rem; height: 1.15rem; display: grid; place-items: center; } .ds-spin { animation: ds-spin 1.1s linear infinite; transform-origin: center; } @keyframes ds-spin { to { transform: rotate(360deg); } } .ds-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }"
+    },
+    {
+      "name": "Fallback Notice",
+      "kind": "custom",
+      "refersTo": "notice-fallback",
+      "description": "The labeled text-card fallback is a SUCCESS state carrying its reason. Warm brown ink on the fallback field with a fallback-line border and a card glyph — never red, never an alert icon, never role=alert.",
+      "html": "<div class=\"ds-notice ds-notice--fallback\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" stroke-linejoin=\"miter\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"3\" y=\"5\" width=\"18\" height=\"14\" rx=\"2\"/><path d=\"M7 11h10M7 15h6\"/></svg><p class=\"ds-notice__body\">Fallback: no built-in template fits this problem's structure, so it renders as a labeled text card.</p></div>",
+      "css": ".ds-notice { display: flex; gap: 0.7rem; align-items: flex-start; border-radius: var(--r-md, 14px); padding: 0.8rem 1rem; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-sm, 0.93rem); border: 2px solid transparent; } .ds-notice__body { margin: 0; } .ds-notice svg { flex: none; margin-top: 0.1rem; } .ds-notice--fallback { background: var(--fallback-field, #f8eee4); border-color: var(--fallback-line, #d3b394); color: var(--fallback, #6f462b); }"
+    },
+    {
+      "name": "Teaching Notice",
+      "kind": "custom",
+      "refersTo": "notice-teach",
+      "description": "The only user of the teach family (ink, field, line). Explains that picking the text card feeds the meta-template learning loop — informational, not a warning.",
+      "html": "<div class=\"ds-notice ds-notice--teach\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"square\" stroke-linejoin=\"miter\" aria-hidden=\"true\" focusable=\"false\"><rect x=\"8\" y=\"13\" width=\"8\" height=\"7\" rx=\"1\"/><path d=\"M12 13V8\"/><path d=\"M12 8c0-2 1.6-3.5 3.5-3.5C15.5 6.4 14 8 12 8z\"/><path d=\"M12 9c0-1.6-1.3-3-3-3 0 1.6 1.3 3 3 3z\"/></svg><p class=\"ds-notice__body\">No built-in visualization fits this problem yet, so it falls back to a plain text card. Choosing it teaches the system.</p></div>",
+      "css": ".ds-notice { display: flex; gap: 0.7rem; align-items: flex-start; border-radius: var(--r-md, 14px); padding: 0.8rem 1rem; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); font-size: var(--t-sm, 0.93rem); border: 2px solid transparent; } .ds-notice__body { margin: 0; } .ds-notice svg { flex: none; margin-top: 0.1rem; } .ds-notice--teach { background: var(--teach-field, #eaf0fc); border-color: var(--teach-line, #b3c6ee); color: var(--teach-ink, #1c3573); }"
+    },
+    {
+      "name": "Dark Inset",
+      "kind": "custom",
+      "refersTo": "inset",
+      "description": "The only dark surface in the system. A recessed slate well behind a thumbnail or clip so rendered video reads as the brightest object on the page. Applied locally, never as a theme.",
+      "html": "<div class=\"ds-inset\"><div class=\"ds-inset__empty\">Renders as a labeled text card</div></div>",
+      "css": ".ds-inset { background: var(--slate, #16181d); border-radius: var(--r-md, 14px); padding: 0.6rem; box-shadow: inset 0 2px 10px rgba(0,0,0,0.55); } .ds-inset img, .ds-inset video { display: block; width: 100%; height: auto; border-radius: var(--r-sm, 8px); } .ds-inset__empty { aspect-ratio: 16 / 9; display: grid; place-items: center; font-family: var(--font-ui, 'Rubik', system-ui, sans-serif); color: var(--ink-on-slate-soft, #c4bdae); font-size: var(--t-sm, 0.93rem); text-align: center; padding: 0.75rem; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Bright Board",
+    "overview": "This is the warm butcher-paper wall of a K-8 classroom, not a dashboard. The ground is off-white stock with real tooth in it; colour arrives as hard-edged fields that own whole regions rather than as tints sprinkled on cards. The system's central claim is that colour here is a working code — the Cuisenaire rod set every K-8 maths teacher already owns — so a colour is never chosen to set a mood or to distinguish a category. It is chosen because a number is 7.\n\nDensity is generous and single-column. Depth is plastic sitting on paper: a low offset riser plus a real blur, the way a moulded block casts a soft shadow on a sheet, never the flat zero-blur slab of a neobrutalist poster. Type is one friendly rounded display face carrying every heading, with a clean geometric UI face for everything a teacher reads or types; there is no third voice.\n\nThe world refuses two things by name. It refuses the pastel edtech dashboard — rounded lavender cards, mint chips, colour as reassurance — because pastel cannot carry a rod law. And it refuses the dark video-editor opposite: dark exists here in exactly one place, as a local inset behind a thumbnail or clip so the rendered video is the brightest thing on screen. Dark is a material for showing video, not a theme.\n\nThe system is fully tokenized: all 62 custom properties are declared on :root, and no rule outside :root carries a literal hex colour, a literal border-radius, or an off-ramp font-size. Three deliberate exceptions are named in the sections below. A literal in a rule is a bug in this system, not a shortcut.",
+    "keyCharacteristics": [
+      "Colour encodes value 1–10, never category or mood",
+      "Warm paper ground with real SVG-noise tooth on every stock surface",
+      "One card level; nested grouping is a tinted block with a hairline rule",
+      "Depth is offset plus real blur; zero-blur block shadows are banned",
+      "Baloo 2 at 800 over Rubik, self-hosted variable woff2, preloaded",
+      "One six-step type ramp; no font-size literals in rules",
+      "Progress is discrete and countable; percentages are forbidden",
+      "Dark is a local inset for video only"
+    ],
+    "rules": [
+      {
+        "name": "The Rod Law",
+        "body": "Colour binds to a value, 1 through 10, and never to a category. A 7 is near-black wherever it appears. Integers outside 1–10 have no rod in the physical set, so they get no colour here either — rodFor() returns null and the value renders without a bar. Rod width encodes magnitude on the same axis (value × 9%, so a 10 spans 90%), which means a rod is legible as quantity even in greyscale.",
+        "section": "colors"
+      },
+      {
+        "name": "The Neutral Category Rule",
+        "body": "Anything that names a kind stays board-neutral. Template chips carry a data-template attribute and there is deliberately no CSS that reads it — the hook exists so the neutrality is visible as a choice rather than an omission. If a category ever borrowed a rod hue, the rod law would stop being readable.",
+        "section": "colors"
+      },
+      {
+        "name": "The Pale-Rod Ink Rule",
+        "body": "Rods 1, 3, 5 and 10 take dark numerals; every other rod takes on-action white. This is a fixed set (ROD_DARK_INK), not a computed guess.",
+        "section": "colors"
+      },
+      {
+        "name": "The Role-Separation Rule",
+        "body": "Semantic colour and rod colour are separated by role, not by hue — and the stylesheet's own header now says so. A semantic hue never becomes a bar, never carries a numeral, and never appears inside the rod list; a rod hue never reports a state. Each semantic ink is in fact a darker, lower-chroma sibling of its nearest rod (ok sits ~2° from Rod 6, danger ~1° from Rod 2, fallback <1° from Rod 8, action ~8° from Rod 9), separated by 8–14 points of lightness. Never \"fix\" this by moving a semantic hue — the semantics are readable because they are always darker and always in a different job.",
+        "section": "colors"
+      },
+      {
+        "name": "The Local Dark Rule",
+        "body": "Dark is a material, not a theme. Slate appears only as the inset behind a thumbnail, a clip, or a preview-unavailable message, so rendered video reads as the brightest object on the page. Never a dark shell, never a dark card, never a dark band.",
+        "section": "colors"
+      },
+      {
+        "name": "The Named Tint Rule",
+        "body": "Every fill, hover, border tint and ink belongs to a named family before it is used. The pale blues are the worked example: the build once spelled them three ways as literals, and they resolved not into one ramp but into an action pair (action-field behind an icon, action-field-soft under a selected row) plus a reassignment of the third to a different family entirely (teach-field). Naming a tint is what reveals which family it belongs to. One deliberate literal remains in a rule: the rod bar's 2px edge is rgba(26, 28, 33, 0.28) — Ink at 28% alpha, so the edge darkens whatever rod hue sits under it instead of fighting ten different fills. An alpha of an existing token is the only acceptable inline colour.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Ramp Rule",
+        "body": "There is one type ramp of six steps (--t-xs .85 / --t-sm .93 / --t-base 1 / --t-lg 1.06 / --t-xl 1.2 / --t-2xl 1.4 rem) and no font-size literal in any rule. The two exceptions are structural, not stylistic: the root body size (16px) that the rem ramp is measured against, and the two fluid display clamp() values, which exist because a masthead and a band heading must scale with the viewport and a fixed step cannot. Everything else — including the sizes that used to be 1.12rem and 1.35rem one-offs — sits on a step. A new UI size is a bug, not a decision.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Numeral Rule",
+        "body": "Any number a teacher might compare against their own deck gets font-variant-numeric: tabular-nums. Numbers must not reflow horizontally as they change.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Expressive Voice Rule",
+        "body": "Baloo 2 sets headings, legends, rod numerals, chips and stage names. It never sets body prose, error text, or a source excerpt — the moment it does, the extracted values start looking illustrated.",
+        "section": "typography"
+      },
+      {
+        "name": "The Measure Rule",
+        "body": "Every prose block is capped in ch, tightening as the text gets less important: 22ch for the display headline, 42–46ch for hint and definition text, 62–74ch for notes, excerpts and rationales. No paragraph runs the full 1080px. Where a label cannot wrap at all — a dock row's template · ids — it is capped in rem and truncated with an ellipsis instead, so a long template name never reflows the bar.",
+        "section": "layout"
+      },
+      {
+        "name": "The Gutter Decoration Rule",
+        "body": "Decorative shapes live outside the content column or behind it at z-index: 0; content and the masthead sit at z-index: 1. When the column claims the gutter, the decoration moves out of the way rather than sliding under the text.",
+        "section": "layout"
+      },
+      {
+        "name": "The Real-Blur Rule",
+        "body": "A shadow is an offset riser plus a real blur. A zero-blur block shadow is banned outright: it is the tell of a different world and this one is paper, not poster board.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Card Level Rule",
+        "body": "The band is the card, and it is the only card. A group inside a band is a tinted block — no border, no radius, no shadow — set off by a 1px top rule and vertical space (the scene block), or by a legend and a 0.9rem indent (the schema sub-form). A third nesting level does not exist. The one exception is state: an approved or rejected scene takes the mid radius and its semantic field colour, because that is a status, not a container.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hover-Lift Rule",
+        "body": "Buttons translate −1px and gain the Block shadow on hover, then return to 0 on :active — press is the absence of lift. Nothing scales on hover.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Tooth Rule",
+        "body": "--tooth — an inline feTurbulence SVG at 0.28 opacity — is the paper material, and it is applied to exactly four surfaces: the shell overlay (0.5 opacity, mix-blend-mode multiply), the band, the drop zone, and the rail step. On any toothed surface, state changes must use background-color, never the background shorthand — the shorthand resets background-image and silently strips the texture.",
+        "section": "shapes"
+      },
+      {
+        "name": "The No Side-Tab Rule",
+        "body": "No element carries a coloured left or right accent border. The build contains no border-left/border-right declaration at all, which is the enforcement: state is carried by fill, by a full 2px border, or by text — never by a stripe down one edge.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do bind colour to value through the rod law (--rod-1..--rod-10) and let width carry magnitude (value × 9%), so a rod survives greyscale.",
+      "Do keep every category label — template chips above all — on Board Deep neutral.",
+      "Do flip rod numerals to dark ink on rods 1, 3, 5 and 10; every other rod takes --on-action.",
+      "Do name a tint before you use it. Every colour in a rule is a var(), and a new fill, hover or border tint joins a family (-field, -field-soft, -line) rather than appearing as a literal.",
+      "Do take every size from the six-step ramp and every corner from the four-step radius family.",
+      "Do use background-color on any surface that carries --tooth; the background shorthand wipes the texture.",
+      "Do pair every offset riser with a real blur (--shadow-block, --shadow-raised).",
+      "Do report progress as discrete, countable, all-reachable stages, and name the honest expectation in words (\"This takes minutes, not seconds\").",
+      "Do append an sr-only state word next to every decorative icon, mark decorative SVG aria-hidden with focusable=\"false\", and put aria-current=\"step\" on the active rail step.",
+      "Do treat the labeled text-card fallback as a success: notice--fallback, warm brown, its reason stated.",
+      "Do keep the global 3px --action focus ring and add to it — a focus border shift is an addition, never a swap.",
+      "Do author icons at one 2px stroke with square caps and currentColor.",
+      "Do give a failure a real recovery path in place (a danger notice with its own actions), and say what was preserved."
+    ],
+    "donts": [
+      "Don't show a percentage, a determinate bar, or an ETA for rendering. POST /render is one blocking batch call with no progress stream, so any number would be fabricated. Discrete stamps and an elapsed clock only.",
+      "Don't let a rod hue report a state, or a semantic hue become a bar or carry a numeral. Role separation is the whole mechanism.",
+      "Don't paint a rod for a value outside integer 1–10 — that rod does not exist in the physical set.",
+      "Don't write a literal hex, border-radius or font-size in a rule. The only sanctioned exceptions are the two fluid display clamp() sizes, the root 16px body size, and an rgba() alpha of an existing token (the rod bar's edge).",
+      "Don't use a zero-blur block shadow.",
+      "Don't take the shell dark, or apply --slate to anything but a video or thumbnail well.",
+      "Don't add a coloured left or right accent border. There is no side-tab in this system at any width.",
+      "Don't add a third container level. Nest by tinted block, hairline rule, legend and indent.",
+      "Don't convey an inactive or lesser state by lowering the opacity of text — it was tried on the todo rail step and dropped the index to 2.8:1 against the board. Use a paler fill (--board-quiet) instead.",
+      "Don't style the fallback as an error, and don't use danger for anything that is not a genuine failure.",
+      "Don't let decoration overlap a validated number, an extracted value, or a source excerpt; the playful layer stays at z-index: 0 and pointer-events: none.",
+      "Don't show the platform's own file-input widget; the styled label is the control.",
+      "Don't uppercase or letter-space UI labels.",
+      "Don't announce a ticking value in a live region."
+    ]
+  }
+}

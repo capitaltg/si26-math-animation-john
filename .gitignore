@@ -43,3 +43,6 @@ docs/superpowers/
 # Node / frontend build artifacts
 node_modules/
 .vite/
+
+# Impeccable design-hook cache (generated)
+.impeccable/hook.cache.json
