@@ -37,6 +37,10 @@ def create_app() -> FastAPI:
     app.include_router(router)
     if get_settings().meta_templates_enabled:
         from app.meta.review_api import router as meta_review_router
+        from app.meta.teacher_api import router as meta_teacher_router
+        # The teacher router first: its /meta/my/... paths must not be swallowed
+        # by the admin router's /meta/drafts/{draft_id} style patterns.
+        app.include_router(meta_teacher_router)
         app.include_router(meta_review_router)
     return app
 

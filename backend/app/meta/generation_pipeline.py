@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from app.config import get_settings
 from app.meta.db import meta_session
 from app.meta.draft_generation import DraftProposal, propose_template_draft
-from app.meta.drafts import persist_reviewable_draft
+from app.meta.drafts import load_draft_documents, persist_reviewable_draft
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
 from app.meta.fixture_mutation import (
@@ -17,7 +17,7 @@ from app.meta.fixture_mutation import (
     ensure_negative_fixtures,
 )
 from app.meta.jobs import claim_next_job, complete_job, fail_job, mark_needs_manual
-from app.meta.models import FallbackObservation, TemplateDraft
+from app.meta.models import DRAFT_REJECTED, FallbackObservation, TemplateDraft
 from app.meta.validation_pipeline import validate_candidate
 from app.meta.v3.errors import V3Failure, V3ValidationError
 
@@ -153,6 +153,22 @@ def generate_and_validate_revision(
     raise CandidateGenerationExhausted(last_failure)
 
 
+def _latest_rejection(session, job_id: str) -> TemplateDraft | None:
+    """The rejected draft a requeued refinement should continue from.
+
+    ``requeue_for_refinement`` stores no refinement state of its own: it marks
+    the draft rejected with the reviewer's feedback and puts the job back on the
+    queue. The revision chain is therefore the whole record, and the highest
+    revision is where to pick up.
+    """
+    return (
+        session.query(TemplateDraft)
+        .filter(TemplateDraft.job_id == job_id, TemplateDraft.status == DRAFT_REJECTED)
+        .order_by(TemplateDraft.revision.desc())
+        .first()
+    )
+
+
 def run_generation_job(*, owner: str) -> TemplateDraft | None:
     settings = get_settings()
     if not settings.meta_templates_enabled or not settings.meta_codegen_enabled:
@@ -166,9 +182,27 @@ def run_generation_job(*, owner: str) -> TemplateDraft | None:
         job_id = job.id
         fingerprint = Fingerprint.model_validate_json(job.fingerprint_json)
         observations = _load_observations(session, json.loads(job.trigger_observation_ids))
+        rejection = _latest_rejection(session, job_id)
+        refinement = (
+            {
+                "prior_proposal": load_draft_documents(rejection),
+                "reviewer_feedback": rejection.reviewer_feedback,
+                "revision": rejection.revision + 1,
+                "parent_draft_id": rejection.id,
+            }
+            if rejection is not None
+            else {
+                "prior_proposal": None,
+                "reviewer_feedback": None,
+                "revision": 1,
+                "parent_draft_id": None,
+            }
+        )
 
     try:
-        draft = generate_and_validate_revision(job=job, fingerprint=fingerprint, observations=observations)
+        draft = generate_and_validate_revision(
+            job=job, fingerprint=fingerprint, observations=observations, **refinement
+        )
     except CandidateGenerationExhausted as exc:
         structured_report = exc.structured_report()
         logger.warning(

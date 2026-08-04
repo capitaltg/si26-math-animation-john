@@ -6,9 +6,11 @@ those DB rows to the same `(scene_cls, params_cls)` shape that
 `app.templates.registry.get_template` returns for a static (enum) template.
 """
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import TypeAdapter
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.meta.dsl.expression import ExpressionNode
@@ -29,6 +31,8 @@ from app.models.scene import (
     TemplateRef,
     TemplateVersionMismatchError,
 )
+
+logger = logging.getLogger(__name__)
 
 # Same deserialization pattern as app/meta/drafts.py:_ExpressionAdapter and
 # app/meta/validation_pipeline.py:_ExpressionAdapter -- ExpressionNode is a
@@ -57,22 +61,66 @@ class EnabledSnapshot:
         return self._entries.get(name)
 
 
-def load_enabled_snapshot(session: Session) -> EnabledSnapshot:
-    """Load a point-in-time snapshot of all enabled dynamic template versions."""
-    rows = (
+def load_enabled_snapshot(
+    session: Session, owner_session_id: str | None = None
+) -> EnabledSnapshot:
+    """Load a point-in-time snapshot of the dynamic templates one session may use.
+
+    That is every shared version (``owner_session_id IS NULL``) plus the
+    versions this session approved for itself. Another session's private version
+    is not included -- it is enabled, but not for this caller.
+
+    When a session holds its own version for a fingerprint, the shared version
+    for that same fingerprint is dropped: one problem shape must offer one
+    template, and a teacher's deliberate approval outranks the shared default.
+    """
+    query = (
         session.query(TemplateVersion, TemplateDraft.classifier_bullet)
         .join(TemplateDraft, TemplateVersion.draft_id == TemplateDraft.id)
         .filter(TemplateVersion.status == TEMPLATE_VERSION_ENABLED)
-        .all()
     )
-    entries = {
-        version.template_name: DynamicSnapshotEntry(
-            version_id=version.id,
-            artifact_hash=version.artifact_hash,
-            classifier_bullet=classifier_bullet,
+    if owner_session_id is None:
+        query = query.filter(TemplateVersion.owner_session_id.is_(None))
+    else:
+        query = query.filter(
+            or_(
+                TemplateVersion.owner_session_id.is_(None),
+                TemplateVersion.owner_session_id == owner_session_id,
+            )
         )
-        for version, classifier_bullet in rows
+    rows = query.all()
+
+    owned_fingerprints = {
+        version.fingerprint_key for version, _ in rows if version.owner_session_id is not None
     }
+    visible = [
+        (version, classifier_bullet)
+        for version, classifier_bullet in rows
+        if version.owner_session_id is not None
+        or version.fingerprint_key not in owned_fingerprints
+    ]
+
+    # Shared first, then the caller's own, so an owned version always wins a
+    # name collision rather than whichever row the query happened to return
+    # last. approve_draft_service refuses to create such a collision in the
+    # first place; this keeps the resolution deterministic for rows written
+    # before that check existed, and for any future path that misses it.
+    entries: dict[str, DynamicSnapshotEntry] = {}
+    for owned in (False, True):
+        for version, classifier_bullet in visible:
+            if (version.owner_session_id is not None) is not owned:
+                continue
+            if owned and version.template_name in entries:
+                logger.warning(
+                    "Template name %r is held by both a shared and a private version; "
+                    "resolving to the caller's own version %s",
+                    version.template_name, version.id,
+                )
+            entries[version.template_name] = DynamicSnapshotEntry(
+                version_id=version.id,
+                artifact_hash=version.artifact_hash,
+                classifier_bullet=classifier_bullet,
+            )
     return EnabledSnapshot(_entries=entries)
 
 
