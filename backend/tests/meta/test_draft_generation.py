@@ -229,6 +229,9 @@ def test_the_prompt_hands_answer_presentation_to_the_system():
 
     assert "answer_unit" in _DRAFT_SYSTEM_PROMPT
     assert 'never put "?" in a label' in _DRAFT_SYSTEM_PROMPT
+    # A reworded reversion would pass the two negative assertions below;
+    # this one pins the contract the prompt now has to state.
+    assert "resolves to the value only at conclude" in _DRAFT_SYSTEM_PROMPT
     # The old instruction is false now: the unresolved answer appears from the
     # first beat, and only its VALUE waits for conclude.
     assert "introduced only during\nconclude" not in _DRAFT_SYSTEM_PROMPT
