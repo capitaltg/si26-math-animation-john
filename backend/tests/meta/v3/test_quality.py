@@ -855,3 +855,68 @@ def test_an_unresolved_answer_without_any_stages_fails():
 
     assert not check.passed
     assert check.code == "premature_answer_emphasis"
+
+
+def test_a_show_answer_stage_targeting_the_wrong_visual_is_rejected():
+    """`ShowAnswerStageAction.target` is a plain `TargetRef` that the action's
+    own schema does not constrain to the answer visual; `_action_animation`
+    (`app/meta/v3/renderer.py`) would otherwise `KeyError` on
+    `rendered.answer_stages[target.visual_ref]` instead of failing a
+    structured check."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    candidate = _perimeter_candidate()
+    index = next(
+        i for i, entry in enumerate(candidate.program.timeline)
+        if entry.action.kind == "show_answer_stage" and entry.action.stage == "value"
+    )
+    entry = candidate.program.timeline[index]
+    misdirected = entry.model_copy(update={
+        "action": entry.action.model_copy(update={
+            "target": entry.action.target.model_copy(update={"visual_ref": "rectangle"}),
+        }),
+    })
+    timeline = list(candidate.program.timeline)
+    timeline[index] = misdirected
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_stage_target(program)
+
+    assert not check.passed
+    assert check.code == "answer_stage_undefined"
+
+
+def test_a_work_stage_on_an_answer_with_no_operation_is_rejected():
+    """`work` only exists in the resolver's `stages` dict when `has_operation`
+    is true (`resolver.evaluate_program_visual`'s `answer_expression` branch),
+    so a stored program whose answer expression was edited down to a bare
+    field reference but still requests `work` would otherwise `KeyError` at
+    render time."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    candidate = _perimeter_candidate()
+    visuals = [
+        visual.model_copy(update={"expression": FieldRefNode(field="length")})
+        if visual.ref == "evaluated_answer" else visual
+        for visual in candidate.program.visuals
+    ]
+    program = candidate.program.model_copy(update={"visuals": visuals})
+
+    check = check_answer_stage_target(program)
+
+    assert not check.passed
+    assert check.code == "answer_stage_undefined"
+
+
+def test_pair_elimination_declares_no_answer_stage_so_the_check_passes():
+    """`pair_elimination`'s median plan declares no `evaluated_answer` visual,
+    and `beat_expander` emits no `show_answer_stage` action for it -- so the
+    loop over `program.timeline` never finds one to check, and the check
+    trivially passes."""
+    from app.meta.v3.quality import check_answer_stage_target
+
+    plan = _median_plan()
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+
+    assert not any(entry.action.kind == "show_answer_stage" for entry in program.timeline)
+    assert check_answer_stage_target(program).passed

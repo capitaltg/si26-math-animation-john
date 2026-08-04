@@ -59,6 +59,7 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_answer_timing(plan, program),
         check_answer_stand_in(program),
         check_answer_work_shown(program),
+        check_answer_stage_target(program),
         check_conclusion_hold(program),
         # Before the idle-interval check: an empty beat IS the cause of the gap,
         # and `require_passed` reports the first failure, so the named cause has
@@ -433,6 +434,38 @@ def check_answer_work_shown(program) -> QualityCheck:
             "beat before its conclusion so the calculation appears before the answer",
         )
     return _passed("answer_work_not_shown", "timeline")
+
+
+def check_answer_stage_target(program) -> QualityCheck:
+    """A `show_answer_stage` action must name a stage that actually exists.
+
+    `ShowAnswerStageAction.target` is a plain `TargetRef`, unconstrained by the
+    action's own schema, and `resolver.evaluate_program_visual` only ever builds
+    a `stages` dict for the `answer_expression` visual -- `work` is even in that
+    dict only when `has_operation` is true (see `evaluate_program_visual`'s
+    `answer_expression` branch). `_action_animation`
+    (`app/meta/v3/renderer.py`) looks the stage up with
+    `rendered.answer_stages[target.visual_ref][stage]`, so a target that isn't
+    that visual, or a `work` stage on an expression with no operation, is a
+    `KeyError` at render time rather than a reported failure. Catch both here,
+    the same way every other cross-reference in this module is caught.
+    """
+    answer = next((visual for visual in program.visuals if visual.kind == "answer_expression"), None)
+    for index, entry in enumerate(program.timeline):
+        if entry.action.kind != "show_answer_stage":
+            continue
+        target_ref = entry.action.target.visual_ref
+        if answer is None or target_ref != answer.ref:
+            return _failed(
+                "answer_stage_undefined", f"timeline[{index}].action.target",
+                f"show_answer_stage must target the declared answer visual, not {target_ref!r}",
+            )
+        if entry.action.stage == "work" and not has_operation(answer.expression):
+            return _failed(
+                "answer_stage_undefined", f"timeline[{index}].action.stage",
+                "the work stage does not exist for an answer with no operation to show",
+            )
+    return _passed("answer_stage_undefined", "timeline")
 
 
 def _stands_in_for_the_answer(text: str) -> bool:
