@@ -214,3 +214,37 @@ def test_the_cardinality_hint_carries_the_cap_and_an_alternative_kind():
     assert "128" in hint
     assert "number_line" in hint
     assert "maximum" in hint
+
+
+def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
+    """A line of unlabelled dots shows a position without saying what it is.
+
+    `number_line` is the kind the cardinality hint steers a large magnitude
+    towards, so it has to teach that magnitude rather than show a bare line.
+    Labels are payload, not parts: nothing addresses them, and
+    `test_a_number_line_keeps_a_large_numeric_range` pins the part count.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(3000),
+         "markers": [Fraction(0), Fraction(2750), Fraction(3000)]},
+        LiteralTextMeasurer(),
+    )
+
+    assert measured.payload["marker_labels"] == ("0", "2750", "3000")
+    # The label strip sits below the line's own -0.2 extent.
+    assert measured.bounds.bottom < -0.2
+    assert measured.payload["label_center_y"] < -0.2
+    # Horizontal bounds are untouched: `renderer._line_visual` draws the line
+    # from bounds.left to bounds.right, so widening them stretches the line.
+    assert (measured.bounds.left, measured.bounds.right) == (-2.75, 2.75)
+
+
+def test_a_number_line_marker_label_is_a_decimal_not_a_ratio():
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(4), "markers": [Fraction(11, 4)]},
+        LiteralTextMeasurer(),
+    )
+
+    assert measured.payload["marker_labels"] == ("2.75",)

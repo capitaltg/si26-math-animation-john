@@ -2,6 +2,7 @@ from math import ceil, cos, sin, tau
 from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.expression_display import format_number
 from app.meta.v3.geometry import Bounds, SemanticPart
 from app.meta.v3.layout import INSTRUCTIONAL_FRAME, MIN_TEXT_SCALE, SAFE_FRAME
 from app.meta.v3.geometry import MeasuredVisual, TextMeasurer
@@ -175,6 +176,10 @@ def _measured_visual(*, ref, bounds, parts, payload):
     return MeasuredVisual(ref=ref, bounds=bounds, parts=parts, paths={}, payload=payload)
 
 
+#: Clear of the line without crowding it, matching `rectangle_measurement.LABEL_GAP`.
+MARKER_LABEL_GAP = 0.28
+
+
 def _measure_number_line(*, spec, values, measurer):
     minimum, maximum = values["minimum"], values["maximum"]
     if maximum <= minimum:
@@ -182,16 +187,29 @@ def _measure_number_line(*, spec, values, measurer):
     left, right = -2.75, 2.75
     markers = values["markers"]
     parts = {}
+    labels = []
     for index, marker in enumerate(markers):
         if not minimum <= marker <= maximum:
             raise ValueError(f"marker {marker} outside [{minimum}, {maximum}]")
         x = left + (right - left) * float((marker - minimum) / (maximum - minimum))
         parts[("marker", index)] = SemanticPart("marker", index, Bounds(x, x, 0, 0))
+        labels.append(format_number(marker))
+    # Reserve the strip the labels occupy, so layout does not place the next
+    # visual on top of them. Horizontal bounds stay at +/-2.75: `_line_visual`
+    # draws the line across the full bounds, so padding them lengthens the line.
+    label_height = max(
+        (measurer.measure(text, "label")[1] for text in labels), default=0.0,
+    )
+    bottom = -0.2 - MARKER_LABEL_GAP - label_height
     return _measured_visual(
         ref=spec.ref,
-        bounds=Bounds(left, right, -0.2, 0.2),
+        bounds=Bounds(left, right, bottom, 0.2),
         parts=parts,
-        payload={"minimum": minimum, "maximum": maximum, "markers": tuple(markers)},
+        payload={
+            "minimum": minimum, "maximum": maximum, "markers": tuple(markers),
+            "marker_labels": tuple(labels),
+            "label_center_y": bottom + label_height / 2,
+        },
     )
 
 

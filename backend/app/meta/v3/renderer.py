@@ -201,6 +201,7 @@ def _build_visual(placed, palette: str):
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "markers" in payload:
         root, children = _line_visual(bounds, measured, placed.offset, "marker")
+        root.add(*_number_line_labels(measured, placed))
     elif {"rows", "columns"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "cell")
     elif {"whole", "parts"} <= payload.keys():
@@ -291,6 +292,27 @@ def _line_visual(bounds: Bounds, measured, offset: Point, part_name: str):
     children = _parts_as_dots(measured, offset, part_name)
     root_group = VGroup(root, *children.values())
     return root_group, children
+
+
+def _number_line_labels(measured, placed):
+    """The number under each tick.
+
+    Added to the root group rather than registered as children: nothing addresses
+    a tick label, and `measured.parts` is what the compiler validates plan targets
+    against, so registering them would invent targets no plan should use.
+    """
+    payload = measured.payload
+    y = payload["label_center_y"] + placed.offset.y
+    return [
+        _text(
+            payload["marker_labels"][index],
+            "label",
+            Point(part.bounds.center.x + placed.offset.x, y),
+            placed.scale,
+        )
+        for (part_name, index), part in sorted(measured.parts.items(), key=lambda item: item[0][1])
+        if part_name == "marker"
+    ]
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):
