@@ -202,18 +202,16 @@ def test_timeline_unknown_relation_has_structured_action_path(program, measurer)
     assert exc.value.failure.path == "timeline[0].action.relation_ref"
 
 
-def test_vertical_layout_centers_primary_and_reserves_conclusion_band():
+def test_vertical_layout_centers_the_column_including_the_answer():
     primary, conclusion = place_vertical_lesson([
         _measured_visual("primary", 2),
         _measured_visual("evaluated_answer", 0.6),
     ])
 
-    assert primary.bounds.center.y == pytest.approx(0.6)
-    assert primary.bounds.bottom >= -2.4
     assert primary.bounds.top <= SAFE_FRAME.top
     assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
-    assert conclusion.bounds.top <= -2.4
     assert conclusion.bounds.top < primary.bounds.bottom
+    assert (primary.bounds.top + conclusion.bounds.bottom) / 2 == pytest.approx(0.0)
 
 
 def test_vertical_layout_scales_visuals_and_gaps_inside_safe_frame():
@@ -244,9 +242,7 @@ def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_v
         _measured_visual("evaluated_answer", 0.6),
     ])
 
-    assert primary.bounds.center.y == pytest.approx(0.6)
     assert primary.bounds.left - supporting.bounds.right == pytest.approx(0.45)
-    assert conclusion.bounds.top <= -2.4
     for visual in (primary, supporting, conclusion):
         assert visual.bounds.bottom >= SAFE_FRAME.bottom
         assert visual.bounds.top <= SAFE_FRAME.top
@@ -255,9 +251,8 @@ def test_vertical_layout_keeps_primary_centered_with_supporting_and_conclusion_v
 def test_vertical_layout_places_a_conclusion_only_scene_without_scaling_error():
     conclusion, = place_vertical_lesson([_measured_visual("evaluated_answer", 0.6)])
 
-    assert conclusion.bounds.center.y == pytest.approx(-3.0)
+    assert conclusion.bounds.center.y == pytest.approx(0.0)
     assert conclusion.bounds.bottom >= SAFE_FRAME.bottom
-    assert conclusion.bounds.top <= -2.4
 
 
 def test_vertical_layout_reuses_support_partition_for_fit_and_placement():

@@ -19,8 +19,10 @@ def _label(ref, text, measurer):
 
 
 def _answer(text, measurer):
-    spec = type("Spec", (), {"kind": "label", "ref": "evaluated_answer"})()
-    return default_visual_registry().measure(spec, {"text": text}, measurer)
+    spec = type("Spec", (), {"kind": "answer_expression", "ref": "evaluated_answer"})()
+    return default_visual_registry().measure(
+        spec, {"stages": {"unknown": "?", "value": text}}, measurer,
+    )
 
 
 def _overlaps(first: Bounds, second: Bounds) -> bool:
@@ -155,3 +157,54 @@ def test_every_placed_visual_stays_inside_the_safe_frame(asymmetric_lesson):
         assert bounds.right <= SAFE_FRAME.right + 1e-9, f"{item.measured.ref} escapes right"
         assert bounds.bottom >= SAFE_FRAME.bottom - 1e-9, f"{item.measured.ref} escapes bottom"
         assert bounds.top <= SAFE_FRAME.top + 1e-9, f"{item.measured.ref} escapes top"
+
+
+def test_the_answer_is_the_last_row_of_the_lesson_column():
+    measurer = _WidthPerCharacterMeasurer()
+    placed = place_vertical_lesson([
+        _label("primary", "bar", measurer),
+        _label("conversion", "1 km = 1000 m", measurer),
+        _answer("2.75 x 1000 = 2750 meters", measurer),
+    ])
+    by_ref = {item.measured.ref: item for item in placed}
+
+    answer = by_ref["evaluated_answer"]
+    assert answer.bounds.top <= by_ref["primary"].bounds.bottom + 1e-9
+    for item in placed:
+        assert item.bounds.bottom >= SAFE_FRAME.bottom - 1e-9
+        assert item.bounds.top <= SAFE_FRAME.top + 1e-9
+
+
+def test_the_answer_is_not_confined_to_a_bottom_band():
+    """The lesson column is centred as a unit, so a short lesson's answer sits
+    near the middle rather than being pinned to the frame's bottom edge."""
+    measurer = _WidthPerCharacterMeasurer()
+    primary, answer = place_vertical_lesson([
+        _label("primary", "bar", measurer),
+        _answer("7", measurer),
+    ])
+
+    column_center = (primary.bounds.top + answer.bounds.bottom) / 2
+    assert column_center == pytest.approx(0.0, abs=1e-9)
+    assert answer.bounds.bottom > -2.4
+
+
+def test_a_wide_answer_does_not_get_sorted_above_the_primary_visual():
+    """`_balanced_pair` splits wide rows between above and below by extent, so
+    without an explicit rule the answer could land over the lesson."""
+    measurer = _WidthPerCharacterMeasurer()
+    placed = place_vertical_lesson([
+        _label("primary", "bar", measurer),
+        _label("wide_support", "a" * 40, measurer),
+        _answer("b" * 40, measurer),
+    ])
+    by_ref = {item.measured.ref: item for item in placed}
+
+    assert by_ref["evaluated_answer"].bounds.top <= by_ref["primary"].bounds.bottom + 1e-9
+
+
+def test_an_answer_only_scene_is_centred_rather_than_failing_to_place():
+    measurer = _WidthPerCharacterMeasurer()
+    answer, = place_vertical_lesson([_answer("2750 meters", measurer)])
+
+    assert answer.bounds.center.y == pytest.approx(0.0)
