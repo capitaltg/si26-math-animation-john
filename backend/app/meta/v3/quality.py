@@ -8,6 +8,7 @@ from app.meta.dsl.v3_common import (
     MIN_SCENE_SECONDS,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.expression_display import has_operation
 
 # Semantic parts that name a rectangle's length/width dimension edges (see
 # `app/meta/v3/rectangle_measurement.py`). Used by
@@ -56,6 +57,8 @@ def validate_static_quality(plan, program) -> QualityReport:
         check_duration(program),
         check_grouped_simple_reveals(plan, program),
         check_answer_timing(plan, program),
+        check_answer_stand_in(program),
+        check_answer_work_shown(program),
         check_conclusion_hold(program),
         # Before the idle-interval check: an empty beat IS the cause of the gap,
         # and `require_passed` reports the first failure, so the named cause has
@@ -369,6 +372,50 @@ def check_unused_visual(program) -> QualityCheck:
                 "every declared visual must be named by a timeline action",
             )
     return _passed("unused_visual", "visuals")
+
+
+def check_answer_stand_in(program) -> QualityCheck:
+    """No label may stand in for the answer.
+
+    The system supplies the answer statement, so a label like "? meters" is a
+    second, dead answer competing with it -- which is exactly what the
+    kilometers draft produced. A question prompt is legitimate teaching, and a
+    stand-in is distinguishable from one without reading the wording: a stand-in
+    uses "?" as a value, so the mark sits mid-string, while a question ends with
+    it.
+    """
+    for index, visual in enumerate(program.visuals):
+        if visual.kind != "label":
+            continue
+        if "?" in visual.text[:-1]:
+            return _failed(
+                "answer_stand_in_label", f"visuals[{index}].text",
+                "this label stands in for the answer; the system supplies the answer "
+                "statement, so remove the label and name the unit in answer_unit",
+            )
+    return _passed("answer_stand_in_label", "visuals")
+
+
+def check_answer_work_shown(program) -> QualityCheck:
+    """An answer with arithmetic must show that arithmetic before resolving.
+
+    Without this, a `derive` beat whose targets already hold their role compiles
+    to a bare recolour and the lesson states its answer having demonstrated
+    nothing -- the kilometers lesson's original failing.
+    """
+    answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
+    if answer is None or not has_operation(answer.expression):
+        return _passed("answer_work_not_shown", "timeline")
+    if not any(
+        entry.action.kind == "show_answer_stage" and entry.action.stage == "work"
+        for entry in program.timeline
+    ):
+        return _failed(
+            "answer_work_not_shown", "timeline",
+            "the answer's arithmetic is never shown; give the lesson a derive or focus "
+            "beat before its conclusion so the calculation appears before the answer",
+        )
+    return _passed("answer_work_not_shown", "timeline")
 
 
 def _targets(action):

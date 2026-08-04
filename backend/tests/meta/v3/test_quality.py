@@ -735,3 +735,57 @@ def test_a_staged_perimeter_candidate_passes_every_gate():
     report = validate_static_quality(candidate.plan, candidate.program)
 
     assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_a_label_using_a_question_mark_as_the_answer_is_rejected():
+    """The kilometers draft authored `? meters` while the compiler appended its
+    own answer, so the lesson showed two answers, one of them dead."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [*program.visuals, LabelProgramVisual(ref="answer_label", text="? meters")],
+    })
+
+    check = check_answer_stand_in(program)
+
+    assert not check.passed
+    assert check.code == "answer_stand_in_label"
+
+
+def test_a_question_prompt_label_is_left_alone():
+    """A stand-in uses "?" as a value, so the mark sits mid-string; a question
+    ends with it."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [
+            *program.visuals,
+            LabelProgramVisual(ref="prompt", text="What is the perimeter?"),
+        ],
+    })
+
+    assert check_answer_stand_in(program).passed
+
+
+def test_an_answer_with_arithmetic_must_show_its_work():
+    from app.meta.v3.quality import check_answer_work_shown
+
+    program = _perimeter_candidate().program
+    timeline = [
+        entry for entry in program.timeline
+        if not (entry.action.kind == "show_answer_stage" and entry.action.stage == "work")
+    ]
+    stripped = program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_work_shown(stripped)
+
+    assert not check.passed
+    assert check.code == "answer_work_not_shown"
+
+
+def test_a_staged_candidate_shows_its_work():
+    from app.meta.v3.quality import check_answer_work_shown
+
+    assert check_answer_work_shown(_perimeter_candidate().program).passed

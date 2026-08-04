@@ -228,11 +228,12 @@ acting beat's entries — which is what the check already means, and which is ho
 - the reveal precedes any `work` stage, which precedes the `value` stage, and
   each `show_answer_stage` stage appears at most once
 
-**`check_strategy_affordance` gains the derive requirement.** When a program
-declares `evaluated_answer` and its `answer_expression` contains at least one
-operation, the timeline must contain a `work` stage. This is what makes
-"meaningful work before the answer" enforceable rather than advisory: a
-recolour-only derive beat no longer passes.
+**New `check_answer_work_shown`.** When a program declares `evaluated_answer`
+and its `answer_expression` contains at least one operation, the timeline must
+contain a `work` stage. A separate check rather than a clause inside
+`check_strategy_affordance`, so the failure reports its own code
+(`answer_work_not_shown`) rather than borrowing `static_process_visual`, which
+would name the wrong problem in the repair feedback the model reads.
 
 **New `check_answer_stand_in`.** A `label` visual is rejected when its text
 contains `?` anywhere other than as its final character. This is precisely the
