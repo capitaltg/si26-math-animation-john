@@ -154,10 +154,10 @@ def check_answer_timing(plan, program) -> QualityCheck:
                 "premature_answer_emphasis", f"timeline[{index}].beat_id",
                 "the resolved answer may only appear in conclude",
             )
-    if seen not in ([], ["value"], ["work", "value"]):
+    if seen not in (["value"], ["work", "value"]):
         return _failed(
             "premature_answer_emphasis", "timeline",
-            f"answer stages must run work then value; found {seen}",
+            f"answer stages must be shown before resolving; found {seen}",
         )
     return _passed("premature_answer_emphasis", "visuals.evaluated_answer")
 
@@ -387,7 +387,8 @@ def check_answer_stand_in(program) -> QualityCheck:
     for index, visual in enumerate(program.visuals):
         if visual.kind != "label":
             continue
-        if "?" in visual.text[:-1]:
+        stripped = visual.text.strip()
+        if stripped == "?" or "?" in stripped[:-1]:
             return _failed(
                 "answer_stand_in_label", f"visuals[{index}].text",
                 "this label stands in for the answer; the system supplies the answer "

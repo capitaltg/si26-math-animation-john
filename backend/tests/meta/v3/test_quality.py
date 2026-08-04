@@ -789,3 +789,34 @@ def test_a_staged_candidate_shows_its_work():
     from app.meta.v3.quality import check_answer_work_shown
 
     assert check_answer_work_shown(_perimeter_candidate().program).passed
+
+
+def test_a_bare_question_mark_label_is_rejected():
+    """The purest stand-in: "?" alone, with no unit to push the mark mid-string."""
+    from app.meta.v3.quality import check_answer_stand_in
+
+    program = _perimeter_candidate().program
+    program = program.model_copy(update={
+        "visuals": [*program.visuals, LabelProgramVisual(ref="gap", text="?")],
+    })
+
+    assert not check_answer_stand_in(program).passed
+
+
+def test_an_unresolved_answer_without_any_stages_fails():
+    """Defence in depth: a program with evaluated_answer but no show_answer_stage
+    entries at all must be rejected, even though the evaluated_answer is revealed
+    in the first beat and nothing wrong appears until timeline is examined."""
+    from app.meta.v3.quality import check_answer_timing
+
+    candidate = _perimeter_candidate()
+    timeline = [
+        entry for entry in candidate.program.timeline
+        if entry.action.kind != "show_answer_stage"
+    ]
+    program = candidate.program.model_copy(update={"timeline": timeline})
+
+    check = check_answer_timing(candidate.plan, program)
+
+    assert not check.passed
+    assert check.code == "premature_answer_emphasis"
