@@ -29,6 +29,10 @@ class TemplateRequest:
     requested_at: datetime
     fingerprint_key: str | None = None
     error: str | None = None
+    #: True when the request was declined because this session can already reach
+    #: a template for the shape. Nothing went wrong, so it must not be reported
+    #: as a failure.
+    already_available: bool = False
 
 
 @dataclass

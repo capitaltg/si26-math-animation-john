@@ -45,6 +45,10 @@ class BuildRequestOutcome:
 
     fingerprint_key: str | None = None
     error: str | None = None
+    #: The request was declined because a usable template already exists for this
+    #: session. Carried separately from `error` because nothing went wrong, and a
+    #: benign outcome must not be presented as a failure.
+    already_available: bool = False
 
 
 # Refusals a teacher reads, not codes. Each says what happened and what to do,
@@ -147,7 +151,9 @@ def request_template_build(
     try:
         with meta_session() as session:
             if has_version_available_to(session, key, owner_session_id):
-                return BuildRequestOutcome(fingerprint_key=key, error=_ALREADY_AVAILABLE)
+                return BuildRequestOutcome(
+                    fingerprint_key=key, error=_ALREADY_AVAILABLE, already_available=True
+                )
             job = enqueue_on_demand(
                 session,
                 fingerprint_key=key,

@@ -366,7 +366,8 @@ def test_a_build_is_refused_when_this_session_can_already_use_a_template(client)
         client.post("/meta/my/builds", json={"candidate_id": "c1"})
 
     build = client.get("/meta/my/builds").json()[0]
-    assert build["stage"] == "failed"
+    # Not "failed": nothing went wrong, so the band must not style it as one.
+    assert build["stage"] == "already_available"
     assert "already" in build["error"].lower()
 
 

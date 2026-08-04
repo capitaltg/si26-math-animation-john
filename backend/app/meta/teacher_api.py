@@ -67,8 +67,15 @@ STAGE_READY = "ready"
 STAGE_APPROVED = "approved"
 STAGE_FAILED = "failed"
 STAGE_NEEDS_MANUAL = "needs_manual"
+#: Nothing went wrong: this session can already reach a template for this
+#: problem shape. Separated from STAGE_FAILED so the band can say so without
+#: styling a non-event as a failure.
+STAGE_ALREADY_AVAILABLE = "already_available"
 
-TERMINAL_STAGES = frozenset({STAGE_READY, STAGE_APPROVED, STAGE_FAILED, STAGE_NEEDS_MANUAL})
+TERMINAL_STAGES = frozenset({
+    STAGE_READY, STAGE_APPROVED, STAGE_FAILED, STAGE_NEEDS_MANUAL,
+    STAGE_ALREADY_AVAILABLE,
+})
 
 _GENERATION_GAVE_UP = (
     "Automatic generation could not produce a visual for this problem. The "
@@ -224,6 +231,8 @@ def _latest_draft_for(db_session, job_id: str) -> TemplateDraft | None:
 
 
 def _stage_for(db_session, request: TemplateRequest) -> tuple[str, GenerationJob | None, TemplateDraft | None]:
+    if request.already_available:
+        return STAGE_ALREADY_AVAILABLE, None, None
     if request.error:
         return STAGE_FAILED, None, None
     if request.fingerprint_key is None:
@@ -327,6 +336,7 @@ def request_build(
         )
         pending.fingerprint_key = outcome.fingerprint_key
         pending.error = outcome.error
+        pending.already_available = outcome.already_available
 
     background_tasks.add_task(run_build)
     return {"candidate_id": request.candidate_id}
