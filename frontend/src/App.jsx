@@ -415,14 +415,22 @@ function MainApp() {
       if (!resp.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
       const refreshed = data.options[0]
       if (!refreshed) return
-      setOptions((previous) => (previous || []).map(
-        (item) => (item.candidate_id === candidateId ? refreshed : item),
-      ))
-      if (refreshed.templates.length > 0) {
+      // If the teacher has since left the visuals stage (e.g. "Back to
+      // candidates"), options is null — leave it null rather than reopening
+      // an empty visuals stage with just this one entry.
+      let stillShown = false
+      setOptions((previous) => {
+        if (!previous) return previous
+        stillShown = previous.some((item) => item.candidate_id === candidateId)
+        if (!stillShown) return previous
+        return previous.map((item) => (item.candidate_id === candidateId ? refreshed : item))
+      })
+      if (stillShown && refreshed.templates.length > 0) {
         setPicks((previous) => ({ ...previous, [candidateId]: refreshed.templates[0].template }))
       }
     } catch (err) {
       setError(err.message)
+      throw err
     } finally {
       setLoading(false)
     }

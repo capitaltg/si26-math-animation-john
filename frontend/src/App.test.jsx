@@ -658,6 +658,34 @@ it('adds a newly approved template as an option without re-requesting visualizat
   expect(screen.getByRole('radio', { name: /number line/ }).checked).toBe(false)
 })
 
+it('does not reopen an empty visualization stage when a template is approved after leaving it', async () => {
+  installMetaApprovalFetchMock()
+  const { container } = render(<App />)
+  const fileInput = container.querySelector('input[type="file"]')
+  const form = container.querySelector('form')
+  Object.defineProperty(form, 'file', { configurable: true, value: fileInput })
+  fireEvent.change(fileInput, { target: { files: [new File(['deck'], 'deck.pptx')] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+  const checkboxes = await screen.findAllByRole('checkbox')
+  checkboxes.forEach((checkbox) => fireEvent.click(checkbox))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await screen.findByRole('heading', { name: 'Choose visualizations' })
+
+  // Start the build while options are showing, but leave the visuals stage
+  // before it resolves.
+  fireEvent.click(await screen.findByRole('button', { name: 'Build one for this problem' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Back to candidates' }))
+  await screen.findByRole('heading', { name: 'Problems found in your deck' })
+
+  fireEvent.click(await screen.findByLabelText(/teaches this correctly/))
+  fireEvent.click(screen.getByRole('button', { name: /Looks right/ }))
+  await screen.findByText(/added as an option/)
+
+  // The stale options refresh must not reopen an empty visuals stage.
+  expect(screen.queryByRole('heading', { name: 'Choose visualizations' })).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Problems found in your deck' })).not.toBeNull()
+})
+
 it('clears a failed render alert once a new storyboard is built', async () => {
   installFetchMock({ secondUpload: true, renderFails: true })
   const { fileInput } = await reachStoryboard()
