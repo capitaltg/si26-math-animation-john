@@ -448,6 +448,39 @@ def test_unit_rate_quality_gate_catches_whole_tape_focus_at_reveal_beat():
     assert not check_strategy_affordance(plan, with_whole_tape_focus).passed
 
 
+def test_unit_rate_quality_gate_catches_whole_tape_focus_after_reveal_in_same_beat():
+    """A whole-tape focus scheduled *after* the reveal within the same beat
+    still overwrites box[0]'s per-one emphasis on that beat's final frame.
+    The gate must scan through the end of the reveal beat, not stop at the
+    reveal's start time."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds + reveal_entry.duration_seconds / 2,
+        duration_seconds=reveal_entry.duration_seconds / 2,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="focus",
+        ),
+    )
+    with_late_whole_tape_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_late_whole_tape_focus).passed
+
+
 def test_unit_rate_quality_gate_catches_whole_tape_reset_after_box_focus():
     """A whole-visual `set_role` restyles descendants in the renderer, so a
     plan that focuses box[0] and then resets the whole tape to `structure`
@@ -511,6 +544,30 @@ def test_unit_rate_quality_gate_requires_the_per_one_focus():
 
     assert check_strategy_affordance(plan, program).passed
     assert not check_strategy_affordance(plan, without_per_one).passed
+
+
+def test_whole_visual_role_change_preserves_deferred_part_bookkeeping():
+    """`_build_unit_tape` registers `target_label` as a child but does *not*
+    add it to the visual's root group, so a whole-visual `set_role` in the
+    renderer does not restyle the deferred part. Bookkeeping must agree: if
+    we cleared the deferred descendant here, a later valid role change back
+    to its true style would be silently dropped as a no-op even though the
+    frame really did need the transition."""
+    from app.meta.v3.beat_expander import BeatExpander
+
+    expander = BeatExpander(answer_expression=LiteralNode(node="literal", value=1))
+    expander._deferred_parts = {"trail_tape": ("target_label",)}
+    current_roles = {
+        ("trail_tape", None, None): "structure",
+        ("trail_tape", "target_label", 0): "focus",
+        ("trail_tape", "box", 0): "focus",
+    }
+
+    expander._clear_descendant_roles(("trail_tape", None, None), current_roles)
+
+    assert ("trail_tape", "target_label", 0) in current_roles
+    assert current_roles[("trail_tape", "target_label", 0)] == "focus"
+    assert ("trail_tape", "box", 0) not in current_roles
 
 
 def test_unit_rate_is_rejected_on_a_non_tape_visual():

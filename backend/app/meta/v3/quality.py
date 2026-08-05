@@ -264,24 +264,35 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
                 ),
                 None,
             )
-            reveal_at = reveal_entry.at_seconds if reveal_entry is not None else None
-            # Effective role of box[0] at the reveal beat. Iterate every entry
-            # up to and including the reveal moment -- ordered by at_seconds so
-            # an entry appended to the timeline is not missed just because it
-            # lands after the reveal in list order. A whole-visual `set_role`
-            # restyles descendants in the renderer (`build_role_transition`
-            # recolours the whole group), so it OVERWRITES any earlier explicit
-            # box[0] role -- preserving the older one would let a plan reset
-            # the tape to `structure` after box[0] was focused and still pass,
-            # while the frame shows no per-one emphasis.
+            # Effective role of box[0] at the *end* of the reveal beat.
+            # Scoping by the reveal entry's `at_seconds` alone would miss
+            # actions scheduled in the same beat after the reveal (a custom
+            # whole-tape focus attached to the reveal beat lands later on the
+            # timeline but is still part of the compiler-owned reveal beat's
+            # final state). Use plan beat order and include every entry in
+            # prior beats or the reveal beat itself, sorted by at_seconds so
+            # a later-appended entry is not missed by list order. A
+            # whole-visual `set_role` restyles descendants in the renderer
+            # (`build_role_transition` recolours the whole group), so it
+            # OVERWRITES any earlier explicit box[0] role -- preserving the
+            # older one would let a plan reset the tape to `structure` after
+            # box[0] was focused and still pass, while the frame shows no
+            # per-one emphasis.
+            reveal_beat_id = reveal_entry.beat_id if reveal_entry is not None else None
+            beat_order = {beat.id: index for index, beat in enumerate(plan.beats)}
+            reveal_beat_index = beat_order.get(reveal_beat_id) if reveal_beat_id is not None else None
             box_zero_role = None
             whole_visual_role = None
             entries_through_reveal = (
                 sorted(
-                    (entry for entry in program.timeline if entry.at_seconds <= reveal_at),
+                    (
+                        entry for entry in program.timeline
+                        if entry.beat_id in beat_order
+                        and beat_order[entry.beat_id] <= reveal_beat_index
+                    ),
                     key=lambda entry: entry.at_seconds,
                 )
-                if reveal_at is not None else []
+                if reveal_beat_index is not None else []
             )
             for entry in entries_through_reveal:
                 if entry.action.kind == "set_role":

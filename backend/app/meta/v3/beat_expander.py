@@ -586,19 +586,28 @@ class BeatExpander:
         self._clear_descendant_roles(key, current_roles)
         return [SetRoleAction(target=target, role=role)]
 
-    @staticmethod
-    def _clear_descendant_roles(key, current_roles):
+    def _clear_descendant_roles(self, key, current_roles):
         """A whole-visual `set_role` restyles descendants in the renderer
         (`build_role_transition` recolours the whole group). If an earlier
         explicit descendant role stays in `current_roles`, `_current_role`
         keeps returning it and a follow-up `_role_change` back to that role
         is silently dropped as a no-op -- but the frame just switched to the
         parent's role, so the descendant needs the transition too.
+
+        Deferred parts (see `visual_registry.DEFERRED_PARTS`) are excluded
+        from the visual's root group -- `_build_unit_tape` registers them as
+        children but does not `.add()` them -- so a whole-visual role change
+        does *not* restyle them. Clearing their bookkeeping here would falsely
+        forget a role they still hold, and a later valid role change on that
+        part would be suppressed as a no-op. Preserve those keys.
         """
         visual_ref, part, index = key
         if part is not None or index is not None:
             return
+        deferred = self._deferred_parts.get(visual_ref, ())
         for descendant_key in [k for k in current_roles if k[0] == visual_ref and k != key]:
+            if descendant_key[1] in deferred:
+                continue
             del current_roles[descendant_key]
 
     @staticmethod
