@@ -187,3 +187,88 @@ def test_pending_review_refinement_persists_the_next_revision(monkeypatch, engin
         assert child.parent_draft_id == parent.id
         assert child.status == models.DRAFT_PENDING_REVIEW
         assert session.query(models.TemplateReview).filter_by(draft_id=parent.id).count() == 1
+
+
+# ------------------------------------- asynchronous refinement (teacher path)
+
+
+def test_requeue_for_refinement_hands_the_work_back_to_the_worker(engine):
+    """A teacher's reject must not block on generation.
+
+    reject_and_refine calls the model inline, which is fine for an admin and
+    unusable for a teacher: it would hold the HTTP request open for minutes. The
+    teacher path records the rejection and puts the job back on the queue.
+    """
+    from app.meta.review_actions import requeue_for_refinement
+
+    _seed_draft(models.DRAFT_PENDING_REVIEW)
+
+    outcome = requeue_for_refinement(
+        "draft-1", feedback="the rows aren't labelled", reviewer_label="teacher",
+        max_refinements=5,
+    )
+
+    assert outcome.requeued is True
+    with db.meta_session() as session:
+        draft = session.get(models.TemplateDraft, "draft-1")
+        assert draft.status == models.DRAFT_REJECTED
+        assert draft.reviewer_feedback == "the rows aren't labelled"
+        assert session.get(models.GenerationJob, "job-1").status == models.JOB_QUEUED
+        review = session.query(models.TemplateReview).filter_by(draft_id="draft-1").one()
+        assert review.decision == "reject"
+        assert review.feedback == "the rows aren't labelled"
+
+
+def test_requeue_for_refinement_clears_a_stale_cooldown_and_lease(engine):
+    """The requeued job must be claimable now, not after an old backoff.
+
+    A job that previously failed carries a future cooldown_until, and a job that
+    succeeded may still carry its last lease. _claimable would skip the first and
+    the second could look like someone else's running work.
+    """
+    from app.meta.review_actions import requeue_for_refinement
+
+    _seed_draft(models.DRAFT_PENDING_REVIEW)
+    with db.meta_session() as session:
+        job = session.get(models.GenerationJob, "job-1")
+        job.cooldown_until = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        job.lease_owner = "worker-old"
+        job.lease_expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+    requeue_for_refinement(
+        "draft-1", feedback="try again", reviewer_label="teacher", max_refinements=5
+    )
+
+    with db.meta_session() as session:
+        job = session.get(models.GenerationJob, "job-1")
+        assert job.cooldown_until is None
+        assert job.lease_owner is None
+        assert job.lease_expires_at is None
+
+
+def test_requeue_for_refinement_stops_at_the_refinement_ceiling(engine):
+    from app.meta.review_actions import requeue_for_refinement
+
+    _seed_draft(models.DRAFT_PENDING_REVIEW)
+    with db.meta_session() as session:
+        session.get(models.TemplateDraft, "draft-1").revision = 5
+
+    outcome = requeue_for_refinement(
+        "draft-1", feedback="still wrong", reviewer_label="teacher", max_refinements=5
+    )
+
+    assert outcome.requeued is False
+    with db.meta_session() as session:
+        assert session.get(models.GenerationJob, "job-1").status == models.JOB_NEEDS_MANUAL
+        assert session.get(models.TemplateDraft, "draft-1").status == models.DRAFT_REJECTED
+
+
+def test_requeue_for_refinement_refuses_a_draft_that_is_not_pending_review(engine):
+    from app.meta.review_actions import requeue_for_refinement
+
+    _seed_draft(models.DRAFT_FAILED_VALIDATION)
+
+    with pytest.raises(DraftNotRefinableError):
+        requeue_for_refinement(
+            "draft-1", feedback="fix it", reviewer_label="teacher", max_refinements=5
+        )

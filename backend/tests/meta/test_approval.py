@@ -109,11 +109,17 @@ def _seed_draft(
     quality_passed=True,
     quality_hash=None,
     include_quality_report=True,
+    trigger_count=None,
+    job_owner=None,
 ):
     job_id = job_id or f"job-{draft_id}"
+    # The observations this draft was built from. The owner-scoped fixture floor
+    # reads these, so they must be real rather than an empty list.
+    trigger_ids = [f"obs-{draft_id}-{i}" for i in range(trigger_count if trigger_count is not None else positive_count)]
     job = models.GenerationJob(
         id=job_id, fingerprint_key=fingerprint_key, fingerprint_version=1,
-        fingerprint_json="{}", trigger_observation_ids="[]", status=models.JOB_SUCCEEDED,
+        fingerprint_json="{}", trigger_observation_ids=json.dumps(trigger_ids),
+        status=models.JOB_SUCCEEDED, owner_session_id=job_owner,
         created_at=_now(), updated_at=_now(),
     )
     session.add(job)
@@ -662,3 +668,258 @@ def test_concurrent_double_approve_yields_one_version_one_conflict(engine, sessi
     assert len(reviews) == 1
     assert reviews[0].reviewer_label == "dev-a"
     check.close()
+
+
+# ------------------------------------------------- owner-scoped approval
+
+
+def test_owner_approval_publishes_a_session_scoped_version(engine, session):
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+
+    version = approve_draft_service(
+        draft_id="draft-own", template_name="apples_count",
+        reviewer_label="teacher", math_semantics_confirmed=True,
+        owner_session_id="session-a",
+    )
+
+    assert version.owner_session_id == "session-a"
+    assert version.status == TEMPLATE_VERSION_ENABLED
+
+
+def test_owner_approval_accepts_a_draft_built_from_one_real_example(engine, session):
+    """A single-observation build is approvable by its owner.
+
+    The floor is min(meta_required_fixture_count, examples the draft was built
+    from) so a teacher who hit one novel problem is not held to evidence that
+    cannot exist yet.
+    """
+    _seed_draft(
+        session, draft_id="draft-one", fingerprint_key="k-one",
+        positive_count=1, trigger_count=1, job_owner="session-a",
+    )
+
+    version = approve_draft_service(
+        draft_id="draft-one", template_name="one_example",
+        reviewer_label="teacher", math_semantics_confirmed=True,
+        owner_session_id="session-a",
+    )
+
+    assert version.owner_session_id == "session-a"
+
+
+def test_owner_approval_still_demands_a_fixture_per_example_built_from(engine, session):
+    """Relaxed is not waived: five examples in, five verified fixtures needed."""
+    _seed_draft(
+        session, draft_id="draft-short", fingerprint_key="k-short",
+        positive_count=3, trigger_count=5, job_owner="session-a",
+    )
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
+        approve_draft_service(
+            draft_id="draft-short", template_name="too_short",
+            reviewer_label="teacher", math_semantics_confirmed=True,
+            owner_session_id="session-a",
+        )
+
+
+def test_shared_approval_is_not_relaxed_by_a_small_build(engine, session):
+    """Promotion to everyone always demands the full configured count."""
+    _seed_draft(
+        session, draft_id="draft-shared", fingerprint_key="k-shared",
+        positive_count=1, trigger_count=1,
+    )
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
+        approve_draft_service(
+            draft_id="draft-shared", template_name="shared_one",
+            reviewer_label="dev", math_semantics_confirmed=True,
+            owner_session_id=None,
+        )
+
+
+def test_one_owners_approval_leaves_another_owners_version_enabled(engine, session):
+    _seed_draft(session, draft_id="draft-a", fingerprint_key="k1", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-b", fingerprint_key="k1", job_owner="session-b")
+
+    approve_draft_service(
+        draft_id="draft-a", template_name="name_a", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+    approve_draft_service(
+        draft_id="draft-b", template_name="name_b", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-b",
+    )
+
+    check = _fresh(engine)
+    enabled = {
+        version.owner_session_id
+        for version in check.query(models.TemplateVersion)
+        .filter_by(fingerprint_key="k1", status=TEMPLATE_VERSION_ENABLED)
+        .all()
+    }
+    assert enabled == {"session-a", "session-b"}
+
+
+def test_two_owners_may_choose_the_same_template_name(engine, session):
+    _seed_draft(session, draft_id="draft-a", fingerprint_key="k-a", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-b", fingerprint_key="k-b", job_owner="session-b")
+
+    approve_draft_service(
+        draft_id="draft-a", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+    approve_draft_service(
+        draft_id="draft-b", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-b",
+    )
+
+    check = _fresh(engine)
+    assert check.query(models.TemplateVersion).filter_by(
+        template_name="pair_elimination", status=TEMPLATE_VERSION_ENABLED
+    ).count() == 2
+
+
+def test_a_shared_name_still_blocks_another_shared_approval(engine, session):
+    _seed_draft(session, draft_id="draft-a", fingerprint_key="k-a")
+    _seed_draft(session, draft_id="draft-b", fingerprint_key="k-b")
+
+    approve_draft_service(
+        draft_id="draft-a", template_name="pair_elimination", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+
+    with pytest.raises(TemplateNameConflictError):
+        approve_draft_service(
+            draft_id="draft-b", template_name="pair_elimination", reviewer_label="dev",
+            math_semantics_confirmed=True, owner_session_id=None,
+        )
+
+
+def test_owner_approval_does_not_disable_the_shared_version(engine, session):
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k1")
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k1", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-shared", template_name="shared_name", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+    approve_draft_service(
+        draft_id="draft-own", template_name="own_name", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    check = _fresh(engine)
+    shared = check.query(models.TemplateVersion).filter_by(template_name="shared_name").one()
+    assert shared.status == TEMPLATE_VERSION_ENABLED
+
+
+def test_re_approving_for_one_owner_disables_that_owners_prior_version(engine, session):
+    _seed_draft(session, draft_id="draft-1", fingerprint_key="k1", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-2", fingerprint_key="k1", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-1", template_name="first", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+    approve_draft_service(
+        draft_id="draft-2", template_name="second", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    check = _fresh(engine)
+    assert check.query(models.TemplateVersion).filter_by(template_name="first").one().status == (
+        TEMPLATE_VERSION_DISABLED
+    )
+    assert check.query(models.TemplateVersion).filter_by(template_name="second").one().status == (
+        TEMPLATE_VERSION_ENABLED
+    )
+
+
+# ------------------------------- names across the shared/private boundary
+#
+# The invariant: for any session S, {shared versions} union {S's private
+# versions} must have unique template_names. Anything else puts two identical
+# keys into one session's snapshot dict, where query order silently decides
+# which template that name resolves to.
+
+
+def test_a_private_approval_cannot_take_a_shared_name(engine, session):
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-shared", template_name="pair_elimination", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+
+    with pytest.raises(TemplateNameConflictError):
+        approve_draft_service(
+            draft_id="draft-own", template_name="pair_elimination",
+            reviewer_label="teacher", math_semantics_confirmed=True,
+            owner_session_id="session-a",
+        )
+
+
+def test_a_shared_approval_cannot_take_a_name_a_teacher_holds(engine, session):
+    """The same collision from the other side.
+
+    A shared version taking a name some session already holds privately would
+    give that one session two templates under one name.
+    """
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+
+    approve_draft_service(
+        draft_id="draft-own", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    with pytest.raises(TemplateNameConflictError):
+        approve_draft_service(
+            draft_id="draft-shared", template_name="pair_elimination",
+            reviewer_label="dev", math_semantics_confirmed=True, owner_session_id=None,
+        )
+
+
+def test_two_teachers_may_still_share_a_name_with_each_other(engine, session):
+    """Unchanged, and safe: neither can see the other, so no snapshot holds both."""
+    _seed_draft(session, draft_id="draft-a", fingerprint_key="k-a", job_owner="session-a")
+    _seed_draft(session, draft_id="draft-b", fingerprint_key="k-b", job_owner="session-b")
+
+    approve_draft_service(
+        draft_id="draft-a", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+    approve_draft_service(
+        draft_id="draft-b", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-b",
+    )
+
+    check = _fresh(engine)
+    assert check.query(models.TemplateVersion).filter_by(
+        template_name="pair_elimination", status=TEMPLATE_VERSION_ENABLED
+    ).count() == 2
+
+
+def test_a_disabled_version_does_not_reserve_its_name(engine, session):
+    """Only live versions can collide in a snapshot."""
+    _seed_draft(session, draft_id="draft-shared", fingerprint_key="k-shared")
+    _seed_draft(session, draft_id="draft-own", fingerprint_key="k-own", job_owner="session-a")
+
+    approve_draft_service(
+        draft_id="draft-shared", template_name="pair_elimination", reviewer_label="dev",
+        math_semantics_confirmed=True, owner_session_id=None,
+    )
+    with _fresh(engine) as disabler:
+        version = disabler.query(models.TemplateVersion).filter_by(
+            template_name="pair_elimination"
+        ).one()
+        version.status = TEMPLATE_VERSION_DISABLED
+        disabler.commit()
+
+    version = approve_draft_service(
+        draft_id="draft-own", template_name="pair_elimination", reviewer_label="teacher",
+        math_semantics_confirmed=True, owner_session_id="session-a",
+    )
+
+    assert version.owner_session_id == "session-a"

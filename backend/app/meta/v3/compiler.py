@@ -4,7 +4,9 @@ from math import ceil
 from app.meta.dsl.expression import compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
-from app.meta.v3.beat_expander import expand_beats
+from app.meta.v3.beat_expander import (
+    expand_beats, magnitude_sweep_beat_id, regroup_beat_id,
+)
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
 from app.meta.v3.timeline import schedule_beats
@@ -162,6 +164,12 @@ def validate_target_refs(plan):
                     )
 
 
+_MAX_REGROUP_CELLS = 30
+#: Room under the 40-action timeline cap for reveals, focus/derive role
+#: changes, the answer's own actions, and the conclusion, once the organize
+#: beat has emitted one `set_role` per cell.
+
+
 def validate_strategy_compatibility(plan):
     supported = _SUPPORTED_STRATEGIES[plan.primary_visual.kind]
     if plan.strategy not in supported:
@@ -179,6 +187,166 @@ def validate_strategy_compatibility(plan):
             "an odd number of ordered values", str(len(plan.primary_visual.values)),
             "use an odd-sized collection with one middle item",
         )
+    if plan.strategy == "regroup":
+        _validate_regroup_compatibility(plan)
+    if plan.strategy == "magnitude_comparison":
+        _validate_magnitude_comparison_compatibility(plan)
+
+
+def _validate_regroup_compatibility(plan):
+    spec = plan.primary_visual
+    if spec.kind == "grid":
+        rows = _literal_integer(spec.rows)
+        columns = _literal_integer(spec.columns)
+        if rows is None or columns is None:
+            _fail(
+                "regroup_requires_literal_dimensions", "primary_visual",
+                "literal rows and columns so the compiler can walk the grid",
+                f"grid rows={_describe_expression(spec.rows)}, "
+                f"columns={_describe_expression(spec.columns)}",
+                "set rows and columns to literal integers, or use a different strategy",
+            )
+        cells = rows * columns
+    else:  # object_set
+        count = _literal_integer(spec.count)
+        if count is None:
+            _fail(
+                "regroup_requires_literal_dimensions", "primary_visual",
+                "a literal count so the compiler can walk the object set",
+                f"object_set count={_describe_expression(spec.count)}",
+                "set count to a literal integer, or use a different strategy",
+            )
+        cells = count
+    if cells > _MAX_REGROUP_CELLS:
+        _fail(
+            "regroup_too_many_cells", "primary_visual",
+            f"a regroup layout of at most {_MAX_REGROUP_CELLS} cells",
+            f"{cells} cells", "shrink the primary visual so regroup fits under the "
+            "40-action timeline cap",
+        )
+    _require_owned_regroup_beat(plan)
+
+
+def _require_owned_regroup_beat(plan):
+    beat_id = regroup_beat_id(plan)
+    if beat_id is None:
+        _fail(
+            "regroup_requires_organize_beat", "beats",
+            f"an organize beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the row walk on",
+            "no organize beat names the primary visual",
+            "add an organize beat whose targets include the primary visual",
+        )
+    # Same-beat reveal + role changes puts the reveal action in the first
+    # scheduled slot, splitting a row across slots (see `_slot_count`). An
+    # earlier beat must reveal the primary visual AS A WHOLE, so
+    # `_reveal_unrevealed` in the walk beat sees `(ref, None, None)` in
+    # `revealed` and emits no `RevealAction`. Part-level targets
+    # (`array.cell[0]`) only reveal that part -- the whole grid is still
+    # unrevealed at the walk beat and its `_reveal_unrevealed` still fires.
+    for beat in plan.beats:
+        if beat.id == beat_id:
+            _fail(
+                "regroup_requires_primary_revealed_before_organize", "beats",
+                "an earlier beat that reveals the primary visual (whole) so "
+                "the organize beat emits only role changes",
+                f"organize beat {beat_id!r} is the first beat that reveals "
+                f"{plan.primary_visual.ref!r} as a whole",
+                "add an orient or reveal beat whose target is the primary visual "
+                "at whole granularity (no part, no index) before the organize beat",
+            )
+        if _reveals_primary_whole(beat, plan.primary_visual.ref):
+            return
+
+
+def _reveals_primary_whole(beat, primary_ref):
+    """True when this beat causes `(primary_ref, None, None)` to be revealed.
+
+    Mirrors `beat_expander._is_revealed`: a whole-visual reveal covers every
+    part, but a part-level reveal never covers the whole. Both `beat.targets`
+    (which `_reveal_unrevealed` reveals) and a custom `RevealRequest` are
+    checked here.
+    """
+    if any(
+        target.visual_ref == primary_ref
+        and target.part is None
+        and target.index is None
+        for target in beat.targets
+    ):
+        return True
+    for action in beat.custom_actions:
+        if action.kind != "reveal":
+            continue
+        if any(
+            target.visual_ref == primary_ref
+            and target.part is None
+            and target.index is None
+            for target in action.targets
+        ):
+            return True
+    return False
+
+
+def _validate_magnitude_comparison_compatibility(plan):
+    spec = plan.primary_visual
+    if spec.kind == "bar":
+        value = _literal_integer(spec.value)
+        if value is None:
+            _fail(
+                "magnitude_comparison_requires_literal_bar_value", "primary_visual.value",
+                "a literal whole-number bar value so the sweep addresses "
+                "specific segments",
+                _describe_expression(spec.value),
+                "set value to a literal integer, or use a different strategy",
+            )
+        if value < 1:
+            # An empty sweep leaves the beat with no actions and falls through
+            # to a whole-visual focus -- the same shape as `group_reveal`, and
+            # the exact bug #66 targets. A bar with value 0 has no magnitude to
+            # animate; use a different strategy.
+            _fail(
+                "magnitude_comparison_requires_positive_bar_value", "primary_visual.value",
+                "a bar value of at least 1 so the sweep animates at least one segment",
+                str(value),
+                "use a different strategy for a zero-magnitude bar, or raise value",
+            )
+    else:  # number_line
+        if not spec.markers:
+            _fail(
+                "magnitude_comparison_requires_at_least_one_marker", "primary_visual.markers",
+                "at least one marker so the sweep animates at least one part",
+                "no markers",
+                "declare the markers you want swept, or use a different strategy",
+            )
+        for index, marker in enumerate(spec.markers):
+            if marker.node != "literal":
+                _fail(
+                    "magnitude_comparison_requires_literal_markers",
+                    f"primary_visual.markers[{index}]",
+                    "a literal marker position so the sweep sorts left to right",
+                    _describe_expression(marker),
+                    "set every marker to a literal number, or use a different strategy",
+                )
+    _require_owned_sweep_beat(plan)
+
+
+def _require_owned_sweep_beat(plan):
+    if magnitude_sweep_beat_id(plan) is None:
+        _fail(
+            "magnitude_comparison_requires_sweep_beat", "beats",
+            f"a focus or derive beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the sweep on",
+            "no focus/derive beat names the primary visual",
+            "add a focus or derive beat whose targets include the primary visual",
+        )
+
+
+def _describe_expression(expression):
+    if expression.node == "literal":
+        return str(expression.value)
+    if expression.node == "field_ref":
+        return f"field:{expression.field}"
+    return expression.node
 
 
 def validate_pair_elimination_answer(plan, answer_expression):

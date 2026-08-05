@@ -297,3 +297,103 @@ def test_run_generation_job_returns_none_when_nothing_queued(engine):
     from app.meta.generation_pipeline import run_generation_job
 
     assert run_generation_job(owner="worker-1") is None
+
+
+def _seed_rejected_draft(*, draft_id="draft-1", revision=1, feedback="the rows aren't labelled"):
+    """A rejected draft on job-1, as requeue_for_refinement leaves it."""
+    proposal = _proposal()
+    with db.meta_session() as session:
+        session.add(models.TemplateDraft(
+            id=draft_id, job_id="job-1", fingerprint_key="k1", fingerprint_version=1,
+            fingerprint_json=_fingerprint().model_dump_json(), revision=revision,
+            params_document_json=proposal.params_document.model_dump_json(),
+            guard_document_json=proposal.guard_document.model_dump_json(),
+            answer_expression_json=proposal.answer_expression.model_dump_json(),
+            teaching_plan_json=proposal.teaching_plan_document.model_dump_json(),
+            scene_program_json="{}", quality_report_json='{"passed": true}',
+            classifier_bullet=proposal.classifier_bullet, dsl_schema_versions_json="{}",
+            artifact_hash=f"sha256:{draft_id}", status=models.DRAFT_REJECTED,
+            reviewer_feedback=feedback, created_at=_now(), updated_at=_now(),
+        ))
+
+
+def test_run_generation_job_continues_a_rejected_draft_as_the_next_revision(monkeypatch, engine):
+    """The worker is what makes a teacher's "try again" asynchronous.
+
+    requeue_for_refinement stores nothing but the rejected draft and a queued
+    job, so the worker has to recognise the refinement from the revision chain.
+    """
+    from app.meta.generation_pipeline import run_generation_job
+
+    _seed_job_and_observation()
+    _seed_rejected_draft()
+    captured = {}
+
+    def generate(**kwargs):
+        captured.update(kwargs)
+        with db.meta_session() as session:
+            child = models.TemplateDraft(
+                id="draft-2", job_id="job-1", fingerprint_key="k1", fingerprint_version=1,
+                fingerprint_json="{}", revision=kwargs["revision"],
+                parent_draft_id=kwargs["parent_draft_id"],
+                params_document_json="{}", guard_document_json="{}",
+                answer_expression_json="{}", teaching_plan_json="{}", scene_program_json="{}",
+                quality_report_json='{"passed": true}', classifier_bullet="x",
+                dsl_schema_versions_json="{}", artifact_hash="sha256:draft-2",
+                status=models.DRAFT_PENDING_REVIEW, validation_report_json='{"passed": true}',
+                created_at=_now(), updated_at=_now(),
+            )
+            session.add(child)
+            session.flush()
+            return child
+
+    monkeypatch.setattr("app.meta.generation_pipeline.generate_and_validate_revision", generate)
+
+    draft = run_generation_job(owner="worker-1")
+
+    assert draft.revision == 2
+    assert draft.parent_draft_id == "draft-1"
+    assert captured["reviewer_feedback"] == "the rows aren't labelled"
+    assert captured["prior_proposal"] is not None
+    assert captured["prior_proposal"].classifier_bullet == "Use for rectangle perimeter lessons."
+
+
+def test_run_generation_job_continues_from_the_latest_rejection(monkeypatch, engine):
+    from app.meta.generation_pipeline import run_generation_job
+
+    _seed_job_and_observation()
+    _seed_rejected_draft(draft_id="draft-1", revision=1, feedback="first complaint")
+    _seed_rejected_draft(draft_id="draft-2", revision=2, feedback="second complaint")
+    captured = {}
+
+    def generate(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr("app.meta.generation_pipeline.generate_and_validate_revision", generate)
+
+    run_generation_job(owner="worker-1")
+
+    assert captured["revision"] == 3
+    assert captured["parent_draft_id"] == "draft-2"
+    assert captured["reviewer_feedback"] == "second complaint"
+
+
+def test_run_generation_job_starts_at_revision_one_without_a_rejection(monkeypatch, engine):
+    from app.meta.generation_pipeline import run_generation_job
+
+    _seed_job_and_observation()
+    captured = {}
+
+    def generate(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr("app.meta.generation_pipeline.generate_and_validate_revision", generate)
+
+    run_generation_job(owner="worker-1")
+
+    assert captured["revision"] == 1
+    assert captured["parent_draft_id"] is None
+    assert captured["reviewer_feedback"] is None
+    assert captured["prior_proposal"] is None

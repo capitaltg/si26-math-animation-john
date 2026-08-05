@@ -117,6 +117,7 @@ function installFetchMock({
 } = {}) {
   let uploadCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/my/capabilities') return jsonResponse({ enabled: false })
     if (url === '/upload') {
       uploadCount += 1
       if (secondUpload && uploadCount === 2) {
@@ -501,6 +502,9 @@ it('renders the dev review panel when ?meta-review is present', async () => {
 
 function installTextCardOnlyFetchMock() {
   const fetchMock = vi.fn(async (url) => {
+    // The template workshop asks whether it is available as soon as a deck
+    // loads. Off here: this file tests the pipeline, not the workshop.
+    if (url === '/meta/my/capabilities') return jsonResponse({ enabled: false })
     if (url === '/upload') return jsonResponse({ candidates: [candidate] })
     if (url === '/options') {
       return jsonResponse({
@@ -528,21 +532,19 @@ async function reachOptions() {
   const checkbox = await screen.findByRole('checkbox')
   fireEvent.click(checkbox)
   fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
-  await new Promise((r) => setTimeout(r, 50))
-  console.log('DEBUG BODY:', document.body.textContent.slice(0, 400))
   await screen.findByRole('heading', { name: 'Choose visualizations' })
 }
 
 it('tells the user a new template may be learned when only the text card fits', async () => {
   installTextCardOnlyFetchMock()
   await reachOptions()
-  expect(screen.getByText(/may propose a brand-new visualization template/)).not.toBeNull()
+  expect(screen.getByText(/You can have one built from this problem/)).not.toBeNull()
 })
 
 it('does not show the new-template hint when a structural template is offered', async () => {
   installFetchMock()
   await reachOptions()
-  expect(screen.queryByText(/may propose a brand-new visualization template/)).toBeNull()
+  expect(screen.queryByText(/You can have one built from this problem/)).toBeNull()
 })
 
 it('clears a failed render alert once a new storyboard is built', async () => {

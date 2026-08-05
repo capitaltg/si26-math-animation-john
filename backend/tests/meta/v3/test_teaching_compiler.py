@@ -1343,3 +1343,658 @@ def test_pair_elimination_still_declares_no_answer_visual(
     assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
     assert not [entry for entry in program.timeline if entry.action.kind == "show_answer_stage"]
     assert program.answer_anchor is not None
+
+
+# ---------------------------------------------------------------------------
+# regroup and magnitude_comparison
+# ---------------------------------------------------------------------------
+#
+# Before these branches existed, a `regroup` grid or a `magnitude_comparison`
+# bar/number_line validated, compiled, and rendered as a whole-visual reveal
+# with no strategy-specific animation. The expander now walks the primary
+# visual's semantic parts and emits observable role changes that read as the
+# strategy names them. See issue #66.
+
+
+def _grid_regroup_plan(rows, columns):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See a rectangle as rows of equal groups.",
+        "primary_visual": {
+            "kind": "grid", "ref": "array",
+            "rows": {"node": "literal", "value": rows},
+            "columns": {"node": "literal", "value": columns},
+        },
+        "strategy": "regroup",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+             "intent": "show the array"},
+            {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+             "intent": "see the array as rows"},
+            {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+             "intent": "multiply rows by columns"},
+            {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+             "intent": "state the total"},
+        ],
+        "variation_seed": "grid-regroup",
+    })
+
+
+def test_regroup_grid_walks_every_cell_row_by_row_into_a_constraint_accent(compile_context):
+    plan = _grid_regroup_plan(rows=2, columns=3)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    organize = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    role_actions = [entry.action for entry in organize if entry.action.kind == "set_role"]
+
+    assert role_actions, "regroup must emit set_role actions on the primary visual"
+    assert all(action.target.visual_ref == "array" for action in role_actions)
+    assert all(action.target.part == "cell" for action in role_actions)
+    assert all(action.role == "constraint" for action in role_actions)
+    assert [action.target.index for action in role_actions] == [0, 1, 2, 3, 4, 5]
+
+
+def test_regroup_grid_recolours_each_row_at_a_single_instant(compile_context):
+    """Row-simultaneous recolour is the point: three cells that fade at the
+    same time read as ONE group, three that fade sequentially read as a wave.
+    """
+    plan = _grid_regroup_plan(rows=2, columns=3)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    starts = {}
+    for entry in program.timeline:
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role":
+            starts.setdefault(entry.at_seconds, []).append(entry.action.target.index)
+
+    assert len(starts) == 2, "one slot per row for a 2-row grid"
+    for slot_indices in starts.values():
+        assert len(slot_indices) == 3, "each row's three cells share one slot"
+
+
+def test_regroup_grid_stays_under_the_forty_action_timeline_cap(compile_context):
+    """A 4x5 regroup grid used to emit 40 organize actions alone (two per
+    cell) and overrun the 40-entry timeline cap in `compile_teaching_plan`
+    once anything else needed a slot.
+    """
+    plan = _grid_regroup_plan(rows=4, columns=5)
+    answer = MultiplyNode(operands=[LiteralNode(value=4), LiteralNode(value=5)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    organize_actions = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    assert len(organize_actions) == 20, "one action per cell, no release phase"
+    assert len(program.timeline) <= 40
+
+
+def test_regroup_rejects_a_grid_larger_than_the_cap(compile_context):
+    plan_raw = _grid_regroup_plan(rows=6, columns=6).model_dump()
+    plan = TeachingPlanDocument.model_validate(plan_raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=6), LiteralNode(value=6)])
+
+    with pytest.raises(V3ValidationError, match="regroup_too_many_cells"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+
+def test_regroup_rejects_a_grid_with_non_literal_dimensions(compile_context):
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["primary_visual"]["rows"] = {"node": "field_ref", "field": "row_count"}
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = FieldRefNode(field="row_count")
+
+    with pytest.raises(V3ValidationError, match="regroup_requires_literal_dimensions"):
+        compile_teaching_plan(plan, answer, frozenset({"row_count"}), compile_context)
+
+
+def test_regroup_rejects_custom_actions_on_its_organize_beat():
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "emphasize", "target": {"visual_ref": "array"}},
+    ]
+
+    with pytest.raises(ValueError, match="regroup's walk beat"):
+        TeachingPlanDocument.model_validate(raw)
+
+
+def test_regroup_object_set_walks_five_per_row_and_stops_at_count(compile_context):
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See a group of objects as rows of five.",
+        "primary_visual": {
+            "kind": "object_set", "ref": "objects",
+            "count": {"node": "literal", "value": 6},
+        },
+        "strategy": "regroup",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "objects"}],
+             "intent": "show the objects"},
+            {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "objects"}],
+             "intent": "see them as rows of five"},
+            {"id": "count", "kind": "derive", "targets": [{"visual_ref": "objects"}],
+             "intent": "count by rows"},
+            {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "objects"}],
+             "intent": "state the total"},
+        ],
+        "variation_seed": "objects-regroup",
+    })
+    answer = LiteralNode(value=6)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    indices = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role"
+    ]
+    # Row 0 has five cells (indices 0..4) and row 1 has the remaining one
+    # (index 5). The walk stops at `count`, so the partial second row emits
+    # a single cell rather than a padded index that no mobject would receive.
+    assert indices == [0, 1, 2, 3, 4, 5]
+
+
+def test_regroup_stages_the_walk_on_exactly_one_organize_beat(compile_context):
+    """Two organize beats naming the primary grid would double-stage the row
+    walk. The second organize beat must fall through to `_generic_role_change`.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+         "intent": "show the array"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "again", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "revisit the grouping"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    first_walk = [
+        entry.action for entry in program.timeline if entry.beat_id == "regroup"
+        and entry.action.kind == "set_role" and entry.action.role == "constraint"
+    ]
+    second_walk = [
+        entry.action for entry in program.timeline if entry.beat_id == "again"
+        and entry.action.kind == "set_role" and entry.action.role == "constraint"
+    ]
+    assert [action.target.index for action in first_walk] == [0, 1, 2, 3, 4, 5]
+    assert not second_walk, "the second organize beat must not restage the walk"
+
+
+def test_regroup_skips_organize_beats_that_do_not_name_the_primary(compile_context):
+    """An organize beat that names only a supporting label must not restyle
+    the grid's cells.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "count by rows"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+         "intent": "show the array"},
+        {"id": "caption_first", "kind": "organize", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    caption_beat_actions = [
+        entry.action for entry in program.timeline if entry.beat_id == "caption_first"
+    ]
+    assert not any(
+        action.kind == "set_role"
+        and getattr(action.target, "visual_ref", None) == "array"
+        and action.target.part == "cell"
+        for action in caption_beat_actions
+    ), "the caption-only organize beat must not restyle grid cells"
+    walked = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role"
+        and entry.action.role == "constraint"
+    ]
+    assert walked == [0, 1, 2, 3, 4, 5], "the walk must still run on the beat that names the grid"
+
+
+def test_regroup_rejects_a_part_level_reveal_as_a_prior_whole_reveal(compile_context):
+    """A prior beat naming `array.cell[0]` reveals that cell but not the whole
+    grid; the walk beat's `_reveal_unrevealed` still emits a whole-grid reveal
+    and steals a row's slot. Only a whole-visual reveal satisfies the
+    reveal-before-organize requirement.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient_cell", "kind": "orient",
+         "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+         "intent": "point at the first cell (reveals only that cell)"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    with pytest.raises(V3ValidationError,
+                       match="regroup_requires_primary_revealed_before_organize"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+
+def test_regroup_accepts_a_prior_custom_whole_reveal(compile_context):
+    """A custom `reveal` naming the whole primary visual on an earlier beat
+    should satisfy the reveal-before-organize requirement -- the whole grid
+    is on screen before the walk runs, so no reveal action lands in the walk
+    beat.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient_cell", "kind": "orient",
+         "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+         "intent": "point at the first cell first",
+         "custom_actions": [
+             {"kind": "reveal", "targets": [{"visual_ref": "array"}]},
+         ]},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    walk_entries = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    assert not any(entry.action.kind == "reveal" for entry in walk_entries), (
+        "the walk beat must emit only role changes when the whole grid is already revealed"
+    )
+    starts = {}
+    for entry in walk_entries:
+        if entry.action.kind == "set_role":
+            starts.setdefault(entry.at_seconds, []).append(entry.action.target.index)
+    assert len(starts) == 2 and all(len(row) == 3 for row in starts.values()), (
+        "row-per-slot arithmetic must survive when the walk beat holds only role changes"
+    )
+
+
+def test_regroup_requires_the_grid_to_be_revealed_before_its_organize_beat(compile_context):
+    """When organize is the first beat naming the primary visual, a reveal
+    action lands in the same beat as the row walk. That reveal steals a slot
+    from the row-per-slot arithmetic and splits a row across two slots. The
+    plan is refused so the walk never renders as a wave.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "count by rows"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption first"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    with pytest.raises(V3ValidationError,
+                       match="regroup_requires_primary_revealed_before_organize"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+
+def _bar_magnitude_plan(value, maximum):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read a bar's magnitude against its maximum.",
+        "primary_visual": {
+            "kind": "bar", "ref": "usage",
+            "value": {"node": "literal", "value": value},
+            "maximum": {"node": "literal", "value": maximum},
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+             "intent": "show the bar"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+             "intent": "sweep the bar's magnitude"},
+            {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+             "intent": "state the value"},
+        ],
+        "variation_seed": "bar-magnitude",
+    })
+
+
+def test_magnitude_comparison_bar_sweeps_focus_across_the_value_not_the_maximum(compile_context):
+    """A bar with value=3, maximum=5 must animate 3 segments, not 5. Sweeping
+    to the maximum teaches capacity; sweeping to the value teaches the actual
+    magnitude the lesson names.
+    """
+    plan = _bar_magnitude_plan(value=3, maximum=5)
+    answer = LiteralNode(value=3)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.part for action in focus_actions] == ["segment"] * 3
+    assert [action.target.index for action in focus_actions] == [0, 1, 2]
+
+
+def test_magnitude_comparison_bar_focuses_one_segment_per_instant(compile_context):
+    """`check_salience` rejects two focus role changes at the same at_seconds.
+    A per-part slot count is what keeps the sweep passing that gate.
+    """
+    plan = _bar_magnitude_plan(value=3, maximum=5)
+    answer = LiteralNode(value=3)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    starts = [
+        entry.at_seconds for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert len(set(starts)) == len(starts) == 3
+
+
+def test_magnitude_comparison_rejects_a_non_literal_bar_value(compile_context):
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["primary_visual"]["value"] = {"node": "field_ref", "field": "usage"}
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_literal_bar_value"):
+        compile_teaching_plan(plan, LiteralNode(value=3), frozenset({"usage"}), compile_context)
+
+
+def test_magnitude_comparison_rejects_custom_actions_on_its_sweep_beat():
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "emphasize", "target": {"visual_ref": "usage"}},
+    ]
+
+    with pytest.raises(ValueError, match="magnitude_comparison's sweep beat"):
+        TeachingPlanDocument.model_validate(raw)
+
+
+def _number_line_magnitude_plan(marker_values):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare numeric magnitudes on a line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [{"node": "literal", "value": value} for value in marker_values],
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "compare each marker's magnitude"},
+            {"id": "state_answer", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state the largest"},
+        ],
+        "variation_seed": "number-line-magnitude",
+    })
+
+
+def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_context):
+    plan = _number_line_magnitude_plan([2, 5, 8])
+    program = compile_teaching_plan(plan, LiteralNode(value=8), frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.part for action in focus_actions] == ["marker"] * 3
+    assert [action.target.index for action in focus_actions] == [0, 1, 2]
+
+
+def test_magnitude_comparison_rejects_a_zero_magnitude_bar(compile_context):
+    """A bar with value 0 has nothing to sweep. The empty sweep would fall
+    through to a whole-visual focus -- the group_reveal shape bug #66 targets.
+    """
+    raw = _bar_magnitude_plan(value=0, maximum=5).model_dump()
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_positive_bar_value"):
+        compile_teaching_plan(plan, LiteralNode(value=0), frozenset(), compile_context)
+
+
+def test_magnitude_comparison_rejects_a_number_line_with_no_markers(compile_context):
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare magnitudes on an empty line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [],
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "sweep markers"},
+            {"id": "state", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state"},
+        ],
+        "variation_seed": "empty-line",
+    })
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_at_least_one_marker"):
+        compile_teaching_plan(plan, LiteralNode(value=0), frozenset(), compile_context)
+
+
+def test_magnitude_comparison_stages_the_sweep_on_exactly_one_beat(compile_context):
+    """Two focus/derive beats naming the primary visual would double-stage the
+    same sweep. The second beat must fall through to `_generic_role_change`.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+         "intent": "sweep magnitude"},
+        {"id": "again", "kind": "focus", "targets": [{"visual_ref": "usage"}],
+         "intent": "focus the bar as a whole"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    swept = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    later = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "again" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    assert [action.target.index for action in swept] == [0, 1, 2]
+    assert not later, "the second focus/derive beat must not restage the sweep"
+
+
+def test_magnitude_comparison_skips_beats_that_target_only_a_supporting_visual(compile_context):
+    """A derive beat that names only a caption must not sweep the bar's
+    segments. `beat.targets` filters out those beats before the sweep runs.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "current usage"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "read_caption", "kind": "derive", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption text"},
+        {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+         "intent": "sweep magnitude"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    caption_beat_actions = [
+        entry.action for entry in program.timeline if entry.beat_id == "read_caption"
+    ]
+    assert not any(
+        action.kind == "set_role"
+        and getattr(action.target, "visual_ref", None) == "usage"
+        for action in caption_beat_actions
+    ), "the caption-only beat must not restyle the bar"
+    swept = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    assert swept == [0, 1, 2], "the sweep must still run on the beat that names the bar"
+
+
+def test_magnitude_comparison_requires_a_focus_or_derive_beat_naming_the_primary(compile_context):
+    """No focus/derive beat targets the primary bar -- the sweep has nowhere
+    to land, so the plan must be refused rather than silently rendering as
+    group_reveal.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "current usage"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "read_caption", "kind": "derive", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption only"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_sweep_beat"):
+        compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+
+def test_magnitude_comparison_bar_focuses_one_segment_per_instant_when_the_sweep_beat_also_reveals(compile_context):
+    """A bar unrevealed until the sweep beat -- because no earlier beat names
+    it -- emits its own `RevealAction` alongside the focus sweep. If the slot
+    count was `len(indices)` (three, for value 3), the four actions batched
+    into three slots would put segments 1 and 2 in one slot at the same
+    `at_seconds` and fail `check_salience`.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read a bar's magnitude alongside a caption.",
+        "primary_visual": {
+            "kind": "bar", "ref": "usage",
+            "value": {"node": "literal", "value": 3},
+            "maximum": {"node": "literal", "value": 5},
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "caption", "text": "current usage"},
+        ],
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient_caption", "kind": "orient", "targets": [{"visual_ref": "caption"}],
+             "intent": "introduce the caption first"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+             "intent": "sweep magnitude while also revealing the bar"},
+            {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+             "intent": "state the value"},
+        ],
+        "variation_seed": "reveal-in-sweep",
+    })
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    sweep_entries = [entry for entry in program.timeline if entry.beat_id == "sweep"]
+    assert any(entry.action.kind == "reveal" for entry in sweep_entries), (
+        "the sweep beat must be the one that first reveals the bar in this plan"
+    )
+    focus_at_seconds = [
+        entry.at_seconds for entry in sweep_entries
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+    ]
+    assert len(focus_at_seconds) == 3
+    assert len(set(focus_at_seconds)) == 3, "each focus must land on its own at_seconds"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_magnitude_comparison_number_line_sweeps_markers_left_to_right(compile_context):
+    """Markers declared out of numeric order (8, 2, 5) must still animate in
+    left-to-right axis order (2, 5, 8 -- indices 1, 2, 0), or the sweep reads
+    as a jumble against the number line's own axis.
+    """
+    plan = _number_line_magnitude_plan([8, 2, 5])
+    program = compile_teaching_plan(plan, LiteralNode(value=8), frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.index for action in focus_actions] == [1, 2, 0]
+
+
+def test_regroup_and_magnitude_comparison_plans_pass_every_quality_gate(compile_context):
+    """A pedagogically thin degrade would still validate; a working expander
+    must clear the same static-quality gates the older strategies clear.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    grid_plan = _grid_regroup_plan(rows=2, columns=3)
+    grid_program = compile_teaching_plan(
+        grid_plan, MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)]),
+        frozenset(), compile_context,
+    )
+    grid_report = validate_static_quality(grid_plan, grid_program)
+    assert grid_report.passed, [check for check in grid_report.checks if not check.passed]
+
+    bar_plan = _bar_magnitude_plan(value=3, maximum=5)
+    bar_program = compile_teaching_plan(
+        bar_plan, LiteralNode(value=3), frozenset(), compile_context,
+    )
+    bar_report = validate_static_quality(bar_plan, bar_program)
+    assert bar_report.passed, [check for check in bar_report.checks if not check.passed]

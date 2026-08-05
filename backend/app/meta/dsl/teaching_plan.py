@@ -343,6 +343,65 @@ class TeachingPlanDocument(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def reject_custom_actions_on_strategy_owned_beats(self):
+        """Some beats the compiler stages end-to-end; a hand-written action on
+        them either duplicates work or slips role changes past the strategy
+        expander's slot arithmetic. `_slot_count` sizes the beat by the
+        expander's own action count, so an extra author-written role change
+        can land two `focus` targets at one `at_seconds` and fail
+        `check_salience` well after generation.
+
+        Two beats fall in this bucket today:
+        - `regroup`'s `organize` beat, which the compiler walks row by row.
+        - `magnitude_comparison`'s `focus` or `derive` beat -- whichever plays
+          first, the beat the sweep animates. Later focus/derive beats on the
+          same plan remain author-writable.
+        """
+        if self.strategy == "regroup":
+            # Same selection rule as the expander -- the first organize beat
+            # that names the primary visual. Guarding every organize beat
+            # would forbid custom actions on later organize beats the
+            # expander does not stage, and guarding only the first would
+            # miss the actual walk beat when the first organize beat targets
+            # something else.
+            primary_ref = self.primary_visual.ref
+            walk_beat = next(
+                (
+                    beat for beat in self.beats
+                    if beat.kind == "organize"
+                    and any(target.visual_ref == primary_ref for target in beat.targets)
+                ),
+                None,
+            )
+            if walk_beat is not None and walk_beat.custom_actions:
+                raise ValueError(
+                    f"beat {walk_beat.id!r} is regroup's walk beat, which the compiler "
+                    "stages entirely on its own; move its custom actions to another beat"
+                )
+        if self.strategy == "magnitude_comparison":
+            # Same selection rule as the expander -- the first focus/derive
+            # beat that names the primary visual. Guarding only the first
+            # focus/derive beat (regardless of what it targets) would let the
+            # actual sweep beat carry custom actions when an earlier
+            # focus/derive beat targets something else.
+            primary_ref = self.primary_visual.ref
+            sweep_beat = next(
+                (
+                    beat for beat in self.beats
+                    if beat.kind in {"focus", "derive"}
+                    and any(target.visual_ref == primary_ref for target in beat.targets)
+                ),
+                None,
+            )
+            if sweep_beat is not None and sweep_beat.custom_actions:
+                raise ValueError(
+                    f"beat {sweep_beat.id!r} is magnitude_comparison's sweep beat, which "
+                    "the compiler stages entirely on its own; move its custom actions to "
+                    "another beat"
+                )
+        return self
+
+    @model_validator(mode="after")
     def require_unit_substitution_shape(self):
         """`unit_substitution` is staged by the compiler, not written by the plan.
 
