@@ -1456,7 +1456,7 @@ def test_regroup_rejects_custom_actions_on_its_organize_beat():
         {"kind": "emphasize", "target": {"visual_ref": "array"}},
     ]
 
-    with pytest.raises(ValueError, match="regroup's organize beat"):
+    with pytest.raises(ValueError, match="regroup's walk beat"):
         TeachingPlanDocument.model_validate(raw)
 
 
@@ -1494,6 +1494,110 @@ def test_regroup_object_set_walks_five_per_row_and_stops_at_count(compile_contex
     # (index 5). The walk stops at `count`, so the partial second row emits
     # a single cell rather than a padded index that no mobject would receive.
     assert indices == [0, 1, 2, 3, 4, 5]
+
+
+def test_regroup_stages_the_walk_on_exactly_one_organize_beat(compile_context):
+    """Two organize beats naming the primary grid would double-stage the row
+    walk. The second organize beat must fall through to `_generic_role_change`.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+         "intent": "show the array"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "again", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "revisit the grouping"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    first_walk = [
+        entry.action for entry in program.timeline if entry.beat_id == "regroup"
+        and entry.action.kind == "set_role" and entry.action.role == "constraint"
+    ]
+    second_walk = [
+        entry.action for entry in program.timeline if entry.beat_id == "again"
+        and entry.action.kind == "set_role" and entry.action.role == "constraint"
+    ]
+    assert [action.target.index for action in first_walk] == [0, 1, 2, 3, 4, 5]
+    assert not second_walk, "the second organize beat must not restage the walk"
+
+
+def test_regroup_skips_organize_beats_that_do_not_name_the_primary(compile_context):
+    """An organize beat that names only a supporting label must not restyle
+    the grid's cells.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "count by rows"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+         "intent": "show the array"},
+        {"id": "caption_first", "kind": "organize", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    caption_beat_actions = [
+        entry.action for entry in program.timeline if entry.beat_id == "caption_first"
+    ]
+    assert not any(
+        action.kind == "set_role"
+        and getattr(action.target, "visual_ref", None) == "array"
+        and action.target.part == "cell"
+        for action in caption_beat_actions
+    ), "the caption-only organize beat must not restyle grid cells"
+    walked = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role"
+        and entry.action.role == "constraint"
+    ]
+    assert walked == [0, 1, 2, 3, 4, 5], "the walk must still run on the beat that names the grid"
+
+
+def test_regroup_requires_the_grid_to_be_revealed_before_its_organize_beat(compile_context):
+    """When organize is the first beat naming the primary visual, a reveal
+    action lands in the same beat as the row walk. That reveal steals a slot
+    from the row-per-slot arithmetic and splits a row across two slots. The
+    plan is refused so the walk never renders as a wave.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "count by rows"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption first"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    with pytest.raises(V3ValidationError,
+                       match="regroup_requires_primary_revealed_before_organize"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
 
 
 def _bar_magnitude_plan(value, maximum):

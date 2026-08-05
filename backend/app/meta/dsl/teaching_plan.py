@@ -291,12 +291,26 @@ class TeachingPlanDocument(BaseModel):
           same plan remain author-writable.
         """
         if self.strategy == "regroup":
-            for beat in self.beats:
-                if beat.kind == "organize" and beat.custom_actions:
-                    raise ValueError(
-                        f"beat {beat.id!r} is regroup's organize beat, which the compiler "
-                        "stages entirely on its own; move its custom actions to another beat"
-                    )
+            # Same selection rule as the expander -- the first organize beat
+            # that names the primary visual. Guarding every organize beat
+            # would forbid custom actions on later organize beats the
+            # expander does not stage, and guarding only the first would
+            # miss the actual walk beat when the first organize beat targets
+            # something else.
+            primary_ref = self.primary_visual.ref
+            walk_beat = next(
+                (
+                    beat for beat in self.beats
+                    if beat.kind == "organize"
+                    and any(target.visual_ref == primary_ref for target in beat.targets)
+                ),
+                None,
+            )
+            if walk_beat is not None and walk_beat.custom_actions:
+                raise ValueError(
+                    f"beat {walk_beat.id!r} is regroup's walk beat, which the compiler "
+                    "stages entirely on its own; move its custom actions to another beat"
+                )
         if self.strategy == "magnitude_comparison":
             # Same selection rule as the expander -- the first focus/derive
             # beat that names the primary visual. Guarding only the first

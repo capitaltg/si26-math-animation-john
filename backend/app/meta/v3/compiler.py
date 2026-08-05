@@ -3,7 +3,9 @@ from dataclasses import asdict
 from app.meta.dsl.expression import compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
-from app.meta.v3.beat_expander import expand_beats, magnitude_sweep_beat_id
+from app.meta.v3.beat_expander import (
+    expand_beats, magnitude_sweep_beat_id, regroup_beat_id,
+)
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
 from app.meta.v3.timeline import schedule_beats
@@ -215,6 +217,36 @@ def _validate_regroup_compatibility(plan):
             f"{cells} cells", "shrink the primary visual so regroup fits under the "
             "40-action timeline cap",
         )
+    _require_owned_regroup_beat(plan)
+
+
+def _require_owned_regroup_beat(plan):
+    beat_id = regroup_beat_id(plan)
+    if beat_id is None:
+        _fail(
+            "regroup_requires_organize_beat", "beats",
+            f"an organize beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the row walk on",
+            "no organize beat names the primary visual",
+            "add an organize beat whose targets include the primary visual",
+        )
+    # Same-beat reveal + role changes puts the reveal action in the first
+    # scheduled slot, splitting a row across slots (see `_slot_count`). An
+    # earlier beat naming the primary visual makes it revealed by the time
+    # organize runs, so no `RevealAction` lands here at all.
+    for beat in plan.beats:
+        if beat.id == beat_id:
+            _fail(
+                "regroup_requires_primary_revealed_before_organize", "beats",
+                "an earlier beat that reveals the primary visual so the "
+                "organize beat emits only role changes",
+                f"organize beat {beat_id!r} is the first beat naming "
+                f"{plan.primary_visual.ref!r}",
+                "add an orient or reveal beat naming the primary visual before "
+                "the organize beat, or move the organize beat later in the plan",
+            )
+        if any(target.visual_ref == plan.primary_visual.ref for target in beat.targets):
+            return
 
 
 def _validate_magnitude_comparison_compatibility(plan):

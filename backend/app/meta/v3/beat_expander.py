@@ -62,6 +62,7 @@ class BeatExpander:
 
     def expand(self, plan):
         self._sweep_beat_id = magnitude_sweep_beat_id(plan)
+        self._regroup_beat_id = regroup_beat_id(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -194,7 +195,10 @@ class BeatExpander:
             return None
         if plan.strategy == "pair_elimination" and beat.kind == "organize":
             return -(-len(actions) // 2)
-        if plan.strategy == "regroup" and beat.kind == "organize":
+        if (
+            plan.strategy == "regroup"
+            and beat.id == getattr(self, "_regroup_beat_id", None)
+        ):
             layout = _regroup_layout(plan.primary_visual)
             if layout is None:
                 return None
@@ -280,14 +284,18 @@ class BeatExpander:
         if beat.kind in {"orient", "reveal"}:
             return []  # `_reveal_unrevealed` has already staged the reveal
 
-        if beat.kind == "organize" and plan.strategy == "regroup":
-            # Cycle each row of the primary visual through the `constraint`
-            # accent and back to `structure`, so the collection reads as R
-            # groups of C rather than one undifferentiated set. Without this
-            # branch the beat falls through to `_generic_role_change`, which
-            # asserts `structure` on the whole visual -- a no-op, since every
-            # regroup-eligible visual is born `structure` -- and the animation
-            # is indistinguishable from `group_reveal`.
+        if (
+            plan.strategy == "regroup"
+            and beat.id == getattr(self, "_regroup_beat_id", None)
+        ):
+            # Recolour each row of the primary visual to the `constraint`
+            # accent, so the collection reads as R groups of C rather than
+            # one undifferentiated set. Without this branch, the beat falls
+            # through to `_generic_role_change` and the animation is
+            # indistinguishable from `group_reveal`.
+            # One beat owns the walk (see `regroup_beat_id`); later organize
+            # beats behave normally, and an organize beat whose targets
+            # do not include the primary visual never restyles it.
             actions = self._regroup_actions(plan, current_roles)
             if actions:
                 return actions
@@ -552,6 +560,27 @@ class BeatExpander:
 
 def expand_beats(plan, answer_expression):
     return BeatExpander(answer_expression=answer_expression).expand(plan)
+
+
+def regroup_beat_id(plan):
+    """The single beat regroup stages its row cycle on, or None.
+
+    The first organize beat that names the primary visual owns the walk;
+    later organize beats fall through. Same discipline as
+    `magnitude_sweep_beat_id`: pinning to one beat prevents a plan with two
+    organize beats from double-staging the walk, and filtering by
+    `beat.targets` keeps an organize beat that names only a supporting
+    visual from restyling the primary.
+    """
+    if plan.strategy != "regroup":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind != "organize":
+            continue
+        if any(target.visual_ref == primary_ref for target in beat.targets):
+            return beat.id
+    return None
 
 
 def magnitude_sweep_beat_id(plan):
