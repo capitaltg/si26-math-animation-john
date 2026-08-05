@@ -1,0 +1,1 @@
+ticket-auto end-to-end smoke test marker
