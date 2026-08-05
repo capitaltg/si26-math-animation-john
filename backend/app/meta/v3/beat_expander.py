@@ -173,14 +173,22 @@ class BeatExpander:
         wave rather than as the strategy's own grouping.
 
         Derived from `len(actions)` rather than from a value count so a
-        suppressed no-op cannot leave an empty slot.
+        suppressed no-op cannot leave an empty slot AND so a beat that also
+        emits a `RevealAction` (an unrevealed target on the strategy's own
+        beat) cannot push two role changes into one slot -- which would fail
+        `check_salience` for `magnitude_comparison`'s focus role.
 
-        - pair_elimination organize: one slot per pair (two partners per slot).
-        - regroup organize: one slot per row, alternating highlight and release
-          (2R slots), so a whole row recolours together.
-        - magnitude_comparison focus/derive: one slot per part, so the focus
-          sweeps left to right and `check_salience` never sees two focus role
-          changes at one instant.
+        - pair_elimination organize: paired items share a slot, one slot per
+          pair. The organize beat never reveals the values (revealed by the
+          prior beat by construction), so the pair-per-slot arithmetic is
+          stable.
+        - regroup organize: one slot per row, so a whole row recolours
+          together -- but only when the actions ARE the strategy's own role
+          changes. A beat that also emits a `RevealAction` is scheduled by
+          the default rule so the reveal does not steal a row's slot.
+        - magnitude_comparison sweep beat: one slot per action. Any batching
+          would risk co-starting two `focus` role changes and failing
+          `check_salience`.
         """
         if not actions:
             return None
@@ -188,16 +196,17 @@ class BeatExpander:
             return -(-len(actions) // 2)
         if plan.strategy == "regroup" and beat.kind == "organize":
             layout = _regroup_layout(plan.primary_visual)
-            if layout is not None:
-                rows, _columns, _count = layout
-                return rows
+            if layout is None:
+                return None
+            _rows, _columns, count = layout
+            if count == len(actions):
+                return layout[0]
+            return None
         if (
             plan.strategy == "magnitude_comparison"
             and beat.id == getattr(self, "_sweep_beat_id", None)
         ):
-            indices = _magnitude_indices(plan.primary_visual)
-            if indices:
-                return len(indices)
+            return len(actions)
         return None
 
     def _standard_actions(

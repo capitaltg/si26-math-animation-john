@@ -1743,6 +1743,56 @@ def test_magnitude_comparison_requires_a_focus_or_derive_beat_naming_the_primary
         compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
 
 
+def test_magnitude_comparison_bar_focuses_one_segment_per_instant_when_the_sweep_beat_also_reveals(compile_context):
+    """A bar unrevealed until the sweep beat -- because no earlier beat names
+    it -- emits its own `RevealAction` alongside the focus sweep. If the slot
+    count was `len(indices)` (three, for value 3), the four actions batched
+    into three slots would put segments 1 and 2 in one slot at the same
+    `at_seconds` and fail `check_salience`.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read a bar's magnitude alongside a caption.",
+        "primary_visual": {
+            "kind": "bar", "ref": "usage",
+            "value": {"node": "literal", "value": 3},
+            "maximum": {"node": "literal", "value": 5},
+        },
+        "supporting_visuals": [
+            {"kind": "label", "ref": "caption", "text": "current usage"},
+        ],
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient_caption", "kind": "orient", "targets": [{"visual_ref": "caption"}],
+             "intent": "introduce the caption first"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+             "intent": "sweep magnitude while also revealing the bar"},
+            {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+             "intent": "state the value"},
+        ],
+        "variation_seed": "reveal-in-sweep",
+    })
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    sweep_entries = [entry for entry in program.timeline if entry.beat_id == "sweep"]
+    assert any(entry.action.kind == "reveal" for entry in sweep_entries), (
+        "the sweep beat must be the one that first reveals the bar in this plan"
+    )
+    focus_at_seconds = [
+        entry.at_seconds for entry in sweep_entries
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+    ]
+    assert len(focus_at_seconds) == 3
+    assert len(set(focus_at_seconds)) == 3, "each focus must land on its own at_seconds"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
 def test_magnitude_comparison_number_line_sweeps_markers_left_to_right(compile_context):
     """Markers declared out of numeric order (8, 2, 5) must still animate in
     left-to-right axis order (2, 5, 8 -- indices 1, 2, 0), or the sweep reads
