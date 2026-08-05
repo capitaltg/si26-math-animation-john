@@ -123,8 +123,8 @@ def check_answer_timing(plan, program) -> QualityCheck:
         # `pair_elimination` states its answer with one of its own values.
         return _passed("premature_answer_emphasis", "visuals")
     # The ref is reserved for the compiler-supplied `answer_expression` visual
-    # (see `beat_expander._program_visual`). Nothing in the plan schema stops a
-    # plan from declaring its own visual under that name -- and a
+    # (see `BeatExpander.expand`, which appends it). Nothing in the plan schema
+    # stops a plan from declaring its own visual under that name -- and a
     # non-`answer_expression` shape reaches `check_answer_work_shown`'s
     # `answer.expression` access as an `AttributeError`, not a quality failure.
     # Fail loudly here instead.

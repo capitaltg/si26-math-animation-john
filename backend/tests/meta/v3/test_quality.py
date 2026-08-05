@@ -4,9 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import (
-    CalloutRelation, LabelProgramVisual, OrderedValuesProgramVisual,
-)
+from app.meta.dsl.scene_program import CalloutRelation, LabelProgramVisual
 from app.meta.dsl.teaching_plan import (
     OrderedValuesVisual,
     TeachingBeat,
@@ -595,24 +593,35 @@ def test_a_multi_action_conclusion_without_an_answer_card_still_clears_the_hold_
 
 def test_a_plan_hijacking_the_evaluated_answer_ref_is_rejected():
     """The `evaluated_answer` ref is reserved for the compiler-supplied
-    `answer_expression` visual. A plan can still name one of its own visuals
-    `evaluated_answer` -- nothing in the schema stops that -- so
-    `check_answer_timing` rejects any non-`answer_expression` shape before
-    `check_answer_work_shown` reaches for `answer.expression` and raises
-    `AttributeError`.
-    """
-    candidate = _perimeter_candidate()
-    hijack = OrderedValuesProgramVisual(
-        ref="evaluated_answer",
-        values=[FieldRefNode(field="length")],
-    )
-    visuals = [
-        hijack if visual.ref == "evaluated_answer" else visual
-        for visual in candidate.program.visuals
-    ]
-    program = candidate.program.model_copy(update={"visuals": visuals})
+    `answer_expression` visual. A plan can still name a supporting visual
+    `evaluated_answer` -- nothing in the plan schema stops that -- and
+    `BeatExpander.expand`'s `answer_declared` short-circuit at
+    `beat_expander.py:99` then suppresses its own append, so the plan's shape
+    is what reaches the report. `check_answer_timing` rejects any
+    non-`answer_expression` shape before `check_answer_work_shown` reaches for
+    `answer.expression` and raises `AttributeError`.
 
-    report = validate_static_quality(candidate.plan, program)
+    Compiled through `compile_teaching_plan` (not spliced onto a valid program)
+    so the ordering dependency on `BeatExpander.expand`'s suppression is
+    covered end-to-end.
+    """
+    raw = _median_plan().model_dump()
+    raw["supporting_visuals"] = [
+        {
+            "kind": "ordered_values", "ref": "evaluated_answer",
+            "values": [_field("v1"), _field("v2"), _field("v3")],
+        },
+    ]
+    raw["beats"][0]["targets"] = [
+        {"visual_ref": "values"},
+        {"visual_ref": "evaluated_answer"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+    hijack = next(visual for visual in program.visuals if visual.ref == "evaluated_answer")
+    assert hijack.kind == "ordered_values", "compiler should not have overridden the plan-declared visual"
+
+    report = validate_static_quality(plan, program)
 
     assert not report.passed
     assert any(
