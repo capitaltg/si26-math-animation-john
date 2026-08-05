@@ -228,6 +228,22 @@ def _tape_like_primary(ref="tape", height=0.6, width=4.0):
     )
 
 
+def _interior_bottom_anchor_primary(ref="tape", height=2.0, width=4.0):
+    """A primary whose `box[0]` occupies the upper half, so
+    `box[0].bottom` sits at the primary's center Y -- not at
+    `primary.bounds.bottom`. A stand-in for any visual anchored on an
+    interior part (a two-row grid anchored on the upper row's bottom, for
+    example) rather than on its outer edge.
+    """
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
+    box = Bounds(-width / 2, -width / 2 + 1.0, 0.0, height / 2)
+    return MeasuredVisual(
+        ref=ref, bounds=bounds,
+        parts={("box", 0): SemanticPart("box", 0, box)},
+        paths={}, payload={},
+    )
+
+
 def _callout(visual_ref, part, index, anchor, text=""):
     return SimpleNamespace(
         target=SimpleNamespace(
@@ -327,6 +343,57 @@ def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale()
     assert rendered_bottom >= SAFE_FRAME.bottom - 1e-6, (
         f"rendered callout bottom {rendered_bottom:g} escapes safe frame"
     )
+
+
+def test_bottom_callout_on_an_interior_anchor_forces_same_height_sides_to_stack():
+    """The stack rule is per-anchor, not primary-height-vs-side-height. A
+    2.0-high primary whose `box[0].bottom` sits at its own center Y drops
+    the callout into (-0.9, 0) around center Y; a 2.0-high side beside it
+    would span (-1.0, 1.0) around the same center Y and overlap. The side
+    has to stack even though it is the same height as the primary."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    primary = _interior_bottom_anchor_primary(height=2.0, width=4.0)
+    same_height_side = MeasuredVisual(
+        ref="side", bounds=Bounds(-1.0, 1.0, -1.0, 1.0),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson(
+        [primary, same_height_side, answer], relations,
+    )
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape, side = by_ref["tape"], by_ref["side"]
+    assert not _vertical_overlap(tape.bounds, side.bounds), (
+        "side must not sit alongside the primary when its y-interval "
+        "would overlap the callout's y-interval"
+    )
+    anchor = tape.anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+    rendered_bounds = Bounds(
+        left=float(rendered.get_left()[0]), right=float(rendered.get_right()[0]),
+        bottom=float(rendered.get_bottom()[1]), top=float(rendered.get_top()[1]),
+    )
+    assert not (
+        _horizontal_overlap(rendered_bounds, side.bounds)
+        and _vertical_overlap(rendered_bounds, side.bounds)
+    ), "rendered callout bounds overlap the side visual"
 
 
 def test_bottom_callout_forces_a_taller_side_visual_out_of_the_beside_slot():

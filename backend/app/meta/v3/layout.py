@@ -163,11 +163,13 @@ def _arrange(
     The split is decided on unscaled measurements so it does not depend on the
     scale being solved for.
 
-    A side visual taller than the primary would drop the band's bottom edge
-    below the primary's, and a bottom-anchored callout on the primary
-    renders into exactly that band. Force those visuals into a stacked row
-    instead, so the callout has no side visual to collide with. Without a
-    bottom callout on the primary this rule does not apply.
+    Side visuals share the primary's center Y, so any side whose vertical
+    interval overlaps a bottom-anchored callout's `(anchor - ENVELOPE,
+    anchor)` interval would let the callout render into the side's pixels.
+    A same-height side beside a primary whose callout anchor sits at the
+    primary's center overlaps just as an 8.5-high side beside a 1.0-high
+    primary with an anchor at the bottom edge does. Route every such side
+    into the stacked pile instead.
 
     The answer is exempt from the split: it takes the last row whenever there is
     anything else to arrange, and becomes the primary itself when it is alone.
@@ -182,13 +184,12 @@ def _arrange(
         return _Arrangement(answer, [], [], [], [])
     primary, *supporting = rest
     budget = _side_budget(primary, INSTRUCTIONAL_FRAME)
-    exclude_taller_from_beside = _has_bottom_callout_on_primary(primary, relations)
-    primary_height = _height(primary)
+    callout_intervals = _bottom_callout_y_intervals(primary, relations)
     beside, stacked = [], []
     for item in supporting:
         if _width(item) > budget:
             stacked.append(item)
-        elif exclude_taller_from_beside and _height(item) > primary_height:
+        elif _side_overlaps_any_interval(item, callout_intervals):
             stacked.append(item)
         else:
             beside.append(item)
@@ -199,18 +200,50 @@ def _arrange(
     return _Arrangement(primary, left, right, above, below)
 
 
-def _has_bottom_callout_on_primary(primary, relations) -> bool:
+def _bottom_callout_y_intervals(primary, relations) -> list[tuple[float, float]]:
+    """Vertical intervals a bottom-anchored callout on the primary occupies,
+    at scale = 1, relative to the primary's center Y.
+
+    Working relative to primary center is scale-tolerant: side visuals also
+    share the primary's center Y and scale uniformly, so their intervals
+    scale in lockstep with the anchor offset. Only ENVELOPE stays fixed --
+    at any legal scale it becomes a larger fraction of the anchor offset, so
+    scale = 1 gives the loosest (largest-offset) callout box and therefore
+    the least overlap. If a side still overlaps the callout at scale = 1 it
+    overlaps at every smaller scale too.
+    """
     if primary is None:
-        return False
+        return []
+    intervals = []
     for relation in relations:
         target = getattr(relation, "target", None)
-        if target is None:
+        if target is None or getattr(target, "visual_ref", None) != primary.ref:
             continue
-        if getattr(target, "visual_ref", None) != primary.ref:
+        if getattr(target, "anchor", None) != "bottom":
             continue
-        if getattr(target, "anchor", None) == "bottom":
-            return True
-    return False
+        try:
+            anchor_point = primary.anchor(
+                part=target.part, index=target.index, name="bottom",
+            )
+        except KeyError:
+            continue
+        top = anchor_point.y - primary.bounds.center.y
+        intervals.append((top - CALLOUT_ENVELOPE, top))
+    return intervals
+
+
+def _side_overlaps_any_interval(
+    item: MeasuredVisual, intervals: Sequence[tuple[float, float]],
+) -> bool:
+    if not intervals:
+        return False
+    half = _height(item) / 2
+    side_interval = (-half, half)
+    return any(_intervals_overlap(side_interval, interval) for interval in intervals)
+
+
+def _intervals_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return not (a[1] <= b[0] or b[1] <= a[0])
 
 
 def _side_budget(primary: MeasuredVisual, frame: Bounds) -> float:
