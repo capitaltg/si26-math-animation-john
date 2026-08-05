@@ -19,4 +19,8 @@ DSL_COMPILER_VERSION = 5
 # 5: a visual is built in its declared `initial_role` rather than always
 #    `neutral`, so a collection born `structure` renders blue and visibly
 #    leaves that colour when it is dimmed.
-DYNAMIC_RENDERER_VERSION = 5
+# 6: `number_line` labels each marker with its value and reserves a strip
+#    below the line for that label, so its measured height grows; and the
+#    line itself is now drawn at its markers' y rather than at its
+#    label-padded bounds' center, so it passes through its own dots again.
+DYNAMIC_RENDERER_VERSION = 6

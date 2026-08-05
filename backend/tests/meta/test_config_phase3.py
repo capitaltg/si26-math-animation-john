@@ -38,5 +38,10 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # outside-in dim to `neutral` from a collection born `structure`, drops the
     # `evaluated_answer` visual in favour of `answer_anchor`, and the renderer
     # builds each visual in its declared initial role.
+    #
+    # 6 covers `number_line` labelling each marker and reserving a strip below
+    # the line for those labels, growing its measured height; and the line
+    # itself moving to draw at its markers' y instead of at its label-padded
+    # bounds' center, so it passes through its own dots again.
     assert DSL_COMPILER_VERSION == 5
-    assert DYNAMIC_RENDERER_VERSION == 5
+    assert DYNAMIC_RENDERER_VERSION == 6

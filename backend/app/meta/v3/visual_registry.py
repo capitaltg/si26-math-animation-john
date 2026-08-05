@@ -250,6 +250,11 @@ def _measure_number_line(*, spec, values, measurer):
             "minimum": minimum, "maximum": maximum, "markers": tuple(markers),
             "marker_labels": tuple(labels),
             "label_center_y": bottom + label_height / 2,
+            # Where the marker parts sit (see `Bounds(x, x, 0, 0)` above). The
+            # line's own bounds are no longer vertically symmetric now that
+            # they reserve a label strip below, so `_line_visual` reads this
+            # instead of `bounds.center.y` to stay level with its markers.
+            "line_center_y": 0.0,
         },
     )
 
