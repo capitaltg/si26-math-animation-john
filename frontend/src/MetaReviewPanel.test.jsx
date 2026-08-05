@@ -440,6 +440,39 @@ it('shows a Rendered output passed label when every render-gate check passed', a
   expect(screen.getByText('Rendered output passed')).not.toBeNull()
 })
 
+it('suppresses the Rendered output label when a render-probe check failed', async () => {
+  // A render-probe code that is not in QUALITY_CHECK_CATEGORIES's Rendered
+  // output set would never drop the "Rendered output passed" label -- the
+  // category filter matches on code, so an unmapped failure is invisible to
+  // passingQualityCategoryLabels. This test would fail with the two omitted
+  // codes (visual_overlap, dimension_label_missing) before the fix.
+  const failingRenderedDraftDetail = {
+    ...draftDetail,
+    quality_report: {
+      passed: false,
+      artifact_hash: 'sha256:abc',
+      checks: [
+        { code: 'blank_probe_frame', passed: true, path: 'frames', detail: 'passed' },
+        { code: 'visual_overlap', passed: false, path: 'visual_bounds.rect_a', detail: 'unrelated visuals overlap' },
+      ],
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failingRenderedDraftDetail }
+    if (url === failingRenderedDraftDetail.preview_url) {
+      return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByRole('heading', { name: 'Teaching plan' })
+
+  expect(screen.queryByText('Rendered output passed')).toBeNull()
+})
+
 it('does not crash when teaching_plan is a minimal plan_version-only document', async () => {
   // The review API declares teaching_plan as an arbitrary dict, so a minimal
   // {plan_version: 3} can reach the panel even though the backend's own

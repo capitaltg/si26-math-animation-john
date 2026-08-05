@@ -97,6 +97,13 @@ const QUALITY_CHECK_CATEGORIES = [
       'undeclared_path_event',
       'final_answer_not_persistent',
       'render_probe_contract_invalid',
+      // A failing render-probe code that is not listed here would go
+      // unnoticed by passingQualityCategoryLabels -- the category filter
+      // matches on code, so an unmapped failure never drops the "Rendered
+      // output passed" label. Keep this set exhaustive against the codes
+      // emitted by app/meta/v3/render_probe.py.
+      'visual_overlap',
+      'dimension_label_missing',
     ]),
   },
 ]
