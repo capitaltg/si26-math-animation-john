@@ -490,7 +490,7 @@ it('returns from results to visualization options', async () => {
 it('renders the dev review panel when ?meta-review is present', async () => {
   window.history.pushState({}, '', '/?meta-review')
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return jsonResponse([])
+    if (url === '/meta/drafts') return jsonResponse([])
     throw new Error(`Unexpected request: ${url}`)
   }))
 
