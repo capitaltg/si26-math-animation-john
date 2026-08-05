@@ -27,6 +27,7 @@ from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.v3.geometry import Bounds, Point
 from app.meta.v3.manim_measurer import FONT_SIZES
 from app.meta.v3.resolver import ResolvedAction, ResolvedScene
+from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 
 @dataclass(frozen=True)
@@ -350,6 +351,7 @@ def _build_unit_tape(measured, placed, palette: str):
     payload = measured.payload
     children = {}
     root = VGroup()
+    deferred = DEFERRED_PARTS.get("unit_tape", ())
     for index, box in enumerate(payload["boxes"]):
         box_bounds = _translated(measured.parts[("box", index)].bounds, placed.offset)
         outline = _rectangle_for_bounds(box_bounds)
@@ -361,7 +363,7 @@ def _build_unit_tape(measured, placed, palette: str):
             label_bounds = _translated(measured.parts[(part, index)].bounds, placed.offset)
             text = _text(box[part], "label", label_bounds.center, placed.scale)
             children[(part, index)] = text
-            if part == "source_label":
+            if part not in deferred:
                 root.add(text)
     for part in ("source_label", "target_label"):
         children[(part, None)] = VGroup(*(

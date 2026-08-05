@@ -126,9 +126,19 @@ Numbers are formatted with `expression_display.format_number`, **not**
 `numerator/denominator`, which would put "11/4 km" on screen instead of
 "2.75 km".
 
-Each box reserves the wider of its label pair, so revealing the target label
-later cannot reflow the lesson — the reservation `_measure_answer` already makes
+**As implemented:** every box reserves the same width — the widest label across
+every box, source and target alike — rather than the wider of each box's own
+label pair as originally specced here. A uniform width was chosen instead:
+boxes standing for equal units should look equal, and reserving per-box widths
+would make the partial box (whose labels are usually shorter) visibly
+narrower than the others. Revealing the target label later still cannot
+reflow the lesson either way — the reservation `_measure_answer` already makes
 for the staged answer.
+
+Each label is also inset from its box's vertical midline by
+`_TAPE_LABEL_INSET = 0.04` units (added during implementation, not in this
+design), so the source and target label bands don't read as one block of text
+before the target label is revealed.
 
 ### Cardinality cap
 

@@ -240,6 +240,55 @@ def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
     assert (measured.bounds.left, measured.bounds.right) == (-2.75, 2.75)
 
 
+def test_a_tape_within_cap_that_overflows_the_frame_names_the_driving_field():
+    """A tape can pass the 8-box cap and still blow the frame on label width.
+
+    `box_width = _TAPE_BOX_PADDING + max(label widths)`, so long unit words or a
+    large `per_unit` overflow `_require_renderable_extent`'s frame limit well
+    below 8 boxes. `_SIZE_DRIVING_FIELDS` had no entry for a tape's `value`,
+    `per_unit`, `source_unit` or `target_unit`, so the failure's hint named no
+    field at all -- the same dead end this branch exists to abolish, recreated
+    inside the visual added to fix it.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="unit_tape", ref="t"),
+            {"value": Fraction(7), "per_unit": Fraction(1000),
+             "source_unit": "kilometers", "target_unit": "meters"},
+            LiteralTextMeasurer(),
+        )
+
+    failure = exc_info.value.failure
+    assert failure.code == "visual_extent_unrenderable"
+    assert "value" in failure.hint
+    assert "source_unit" in failure.hint
+    assert "target_unit" in failure.hint
+
+
+def test_a_bar_past_the_frame_limit_but_within_cardinality_names_only_maximum():
+    """A flat, kind-agnostic driver-field list leaks a bar's unrelated `value`.
+
+    `maximum=50` is well under the 128 cardinality cap (so
+    `_require_renderable_cardinality` never fires) but past the ~29-segment
+    frame-extent limit (so `_require_renderable_extent` does). `bar` also
+    carries a `value` field in the same `values` dict -- the fill amount,
+    which `_measure_bar` and `_CARDINALITY_FIELDS["bar"] = ("maximum",)` both
+    agree has zero effect on the bar's width. A field-name list shared across
+    every kind cannot tell `bar.value` (irrelevant) from `unit_tape.value`
+    (very relevant) apart, so it named both.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="bar", ref="wide_bar"),
+            {"value": Fraction(50), "maximum": Fraction(50)},
+            LiteralTextMeasurer(),
+        )
+
+    hint = exc_info.value.failure.hint
+    assert "maximum" in hint
+    assert "value" not in hint
+
+
 def test_a_number_line_marker_label_is_a_decimal_not_a_ratio():
     measured = default_visual_registry().measure(
         SimpleNamespace(kind="number_line", ref="line"),

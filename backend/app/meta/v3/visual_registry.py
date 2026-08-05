@@ -43,7 +43,7 @@ class VisualRegistry:
         # an oversized count has to be refused while it is still a number.
         _require_renderable_cardinality(spec, values)
         measured = factory(spec=spec, values=values, measurer=measurer)
-        _require_renderable_extent(measured, values)
+        _require_renderable_extent(spec.kind, measured, values)
         return measured
 
 
@@ -60,9 +60,26 @@ _SUPPORTED_STRATEGIES = {
 }
 
 
-#: Fields whose value sets a visual's size, so a failure can name the number to
-#: change rather than telling a reviewer to "reduce visual content".
-_SIZE_DRIVING_FIELDS = ("maximum", "columns", "rows", "count", "parts", "values")
+#: Per KIND, the fields whose value sets a visual's size, so a failure can name
+#: the number (or string) to change rather than telling a reviewer to "reduce
+#: visual content". Keyed by kind for the same reason `_CARDINALITY_FIELDS`
+#: below is: the same field name means different things on different kinds.
+#: `bar` also carries its own `value` field (the fill amount, in the same
+#: `values` dict as `maximum`), which `_measure_bar` never reads when sizing
+#: the bar -- only `maximum` does -- so a flat, kind-agnostic field-name list
+#: named `value` as a driver alongside `maximum` for every oversized bar. A
+#: tape's width comes from its box count (`value`) AND the widest label, which
+#: is set by `per_unit`, `source_unit` and `target_unit` -- so a within-cap
+#: tape can still overflow the frame on unit text alone, and the field to
+#: shorten is one of these two strings rather than a count.
+_SIZE_DRIVING_FIELDS = {
+    "bar": ("maximum",),
+    "grid": ("rows", "columns"),
+    "object_set": ("count",),
+    "partition": ("parts",),
+    "ordered_values": ("values",),
+    "unit_tape": ("value", "per_unit", "source_unit", "target_unit"),
+}
 
 #: Per KIND, the fields that decide how many semantic parts a factory builds.
 #: Keyed by kind rather than by field name because the same name means different
@@ -167,7 +184,7 @@ def _is_whole(value) -> bool:
     return getattr(value, "denominator", 1) == 1
 
 
-def _require_renderable_extent(measured, values) -> None:
+def _require_renderable_extent(kind, measured, values) -> None:
     """Reject a visual too large to fit the frame at any permitted scale.
 
     `_measure_bar`, `_measure_grid` and `_measure_object_set` derive their extent
@@ -188,20 +205,21 @@ def _require_renderable_extent(measured, values) -> None:
     height = measured.bounds.top - measured.bounds.bottom
     if width <= width_limit and height <= height_limit:
         return
-    drivers = ", ".join(
-        f"{name}={_describe(values[name])}"
-        for name in _SIZE_DRIVING_FIELDS if name in values
-    )
+    driving_names = [name for name in _SIZE_DRIVING_FIELDS.get(kind, ()) if name in values]
+    drivers = ", ".join(f"{name}={_describe(values[name])}" for name in driving_names)
+    fields_to_change = ", ".join(driving_names) if driving_names else "the field driving its size"
     raise V3ValidationError(V3Failure(
         code="visual_extent_unrenderable",
         path=f"visuals.{measured.ref}",
         expected=f"a visual within {width_limit:.1f} x {height_limit:.1f} units",
         observed=f"{measured.ref} spans {width:.1f} x {height:.1f} units ({drivers})",
-        hint=f"reduce the value driving this visual's size ({drivers or 'its size field'})",
+        hint=f"reduce or shorten {fields_to_change} (currently {drivers or 'unknown'})",
     ))
 
 
 def _describe(value):
+    if isinstance(value, str):
+        return value
     if isinstance(value, (list, tuple)):
         return str(len(value))
     return str(_whole(value, "size") if getattr(value, "denominator", 1) == 1 else value)

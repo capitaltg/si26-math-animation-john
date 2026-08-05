@@ -8,14 +8,17 @@ proposed 10000 for a 2750-metre answer, which `_measure_bar` would have built as
 """
 
 from app.meta.draft_generation import DraftProposal
-from app.meta.v3.visual_registry import MAX_PART_CARDINALITY
+from app.meta.v3.visual_registry import MAX_PART_CARDINALITY, MAX_TAPE_BOXES
 
-#: Model class name -> fields whose value decides how many parts get drawn.
+#: Model class name -> (fields whose value decides how many parts get drawn, that
+#: kind's own cap). Per-kind because a tape's cap (`MAX_TAPE_BOXES`, 8) is not
+#: `MAX_PART_CARDINALITY` (128) -- the two kinds bound different things.
 COUNT_DRIVEN_FIELDS = {
-    "BarVisual": ("maximum",),
-    "GridVisual": ("rows", "columns"),
-    "ObjectSetVisual": ("count",),
-    "PartitionVisual": ("parts",),
+    "BarVisual": (("maximum",), MAX_PART_CARDINALITY),
+    "GridVisual": (("rows", "columns"), MAX_PART_CARDINALITY),
+    "ObjectSetVisual": (("count",), MAX_PART_CARDINALITY),
+    "PartitionVisual": (("parts",), MAX_PART_CARDINALITY),
+    "UnitTapeVisual": (("value",), MAX_TAPE_BOXES),
 }
 
 
@@ -26,10 +29,10 @@ def _description(definitions, model_name, field_name) -> str:
 def test_every_count_driven_field_states_its_cap_and_an_alternative():
     definitions = DraftProposal.model_json_schema()["$defs"]
 
-    for model_name, field_names in COUNT_DRIVEN_FIELDS.items():
+    for model_name, (field_names, cap) in COUNT_DRIVEN_FIELDS.items():
         for field_name in field_names:
             description = _description(definitions, model_name, field_name)
-            assert str(MAX_PART_CARDINALITY) in description, f"{model_name}.{field_name} omits the cap"
+            assert str(cap) in description, f"{model_name}.{field_name} omits the cap"
             assert "number_line" in description, f"{model_name}.{field_name} omits the alternative"
 
 
