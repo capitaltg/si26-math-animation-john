@@ -612,10 +612,10 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         })
 
     x_tick_payload = _coordinate_tick_payload(
-        _integer_ticks_in_span(x_min, x_max), unit_scale, measurer,
+        _integer_ticks_in_span(x_min, x_max), unit_scale, measurer, axis="x",
     )
     y_tick_payload = _coordinate_tick_payload(
-        _integer_ticks_in_span(y_min, y_max), unit_scale, measurer,
+        _integer_ticks_in_span(y_min, y_max), unit_scale, measurer, axis="y",
     )
     _require_coordinate_tick_labels_do_not_collide(
         spec, x_tick_payload, unit_scale, axis="x",
@@ -627,6 +627,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     bounds = _coordinate_plane_bounds(
         extent_x, extent_y, zero_u, zero_v,
         point_payload, x_tick_payload, y_tick_payload,
+        unit_scale=unit_scale, x_center=x_center, y_center=y_center,
     )
     return _measured_visual(
         ref=spec.ref,
@@ -670,24 +671,30 @@ def _integer_ticks_in_span(low, high) -> list:
     return values
 
 
-def _coordinate_tick_payload(tick_values, unit_scale, measurer):
+def _coordinate_tick_payload(tick_values, unit_scale, measurer, *, axis: str):
     """Tick values with labels, thinned so adjacent labels do not overlap.
 
-    A stride-1 label set at unit_scale spacing overlaps whenever
-    max_label_width + INTER_GAP > unit_scale; enlarging the stride until it
-    fits is the same fit-or-drop dance `_measure_number_line` performs, kept
-    inside the visual because the inter-visual overlap gate cannot catch a
-    collision inside one visual.
+    Candidate ticks are not guaranteed one world-unit apart:
+    `_integer_ticks_in_span` may have already thinned by a larger stride to
+    stay under `COORDINATE_PLANE_MAX_TICKS_PER_AXIS`, so the fit check has to
+    read the actual value gap between adjacent candidates rather than assume
+    stride corresponds to one unit. Label width sets the fit budget on the
+    x-axis (labels sit side by side); label height sets it on the y-axis
+    (labels stack vertically).
     """
     if not tick_values:
         return []
+    size_index = 2 if axis == "x" else 3
     measured = [(value, format_number(value), *measurer.measure(format_number(value), "label"))
                 for value in tick_values]
     stride = 1
     while stride < len(measured):
         thinned = measured[::stride]
-        max_w = max(row[2] for row in thinned)
-        if unit_scale * stride >= max_w + COORDINATE_TICK_LABEL_INTER_GAP:
+        max_size = max(row[size_index] for row in thinned)
+        min_value_gap = min(
+            float(b[0] - a[0]) for a, b in zip(thinned, thinned[1:])
+        )
+        if min_value_gap * unit_scale >= max_size + COORDINATE_TICK_LABEL_INTER_GAP:
             break
         stride += 1
     return measured[::stride]
@@ -701,10 +708,11 @@ def _require_coordinate_tick_labels_do_not_collide(spec, tick_payload, unit_scal
     labels named, so retry can shorten the numeric span rather than the count.
     """
     for a, b in zip(tick_payload, tick_payload[1:]):
-        _va, ta, wa, _ha = a
-        _vb, tb, wb, _hb = b
+        _va, ta, wa, ha = a
+        _vb, tb, wb, hb = b
         world_gap = float(b[0] - a[0]) * unit_scale
-        actual_gap = world_gap - (wa + wb) / 2
+        size_a, size_b = (wa, wb) if axis == "x" else (ha, hb)
+        actual_gap = world_gap - (size_a + size_b) / 2
         if actual_gap >= COORDINATE_TICK_LABEL_INTER_GAP:
             continue
         raise V3ValidationError(V3Failure(
@@ -728,8 +736,16 @@ def _require_coordinate_tick_labels_do_not_collide(spec, tick_payload, unit_scal
 def _coordinate_plane_bounds(
     extent_x, extent_y, zero_u, zero_v,
     point_payload, x_tick_payload, y_tick_payload,
+    *, unit_scale, x_center, y_center,
 ):
-    """Widen the raw axis rectangle so no label overhangs its neighbour."""
+    """Widen the raw axis rectangle so no label overhangs its neighbour.
+
+    Every rendered tick label sits inside the returned box: an x-axis tick
+    label centred on its tick's u can stretch past the axis's left/right
+    endpoints, and a y-axis tick label centred on its tick's v can stretch
+    past its top/bottom endpoints, so the union has to include each label's
+    full rectangle rather than only the axis-perpendicular strip.
+    """
     left, right = -extent_x, extent_x
     bottom, top = -extent_y, extent_y
     for point in point_payload:
@@ -740,12 +756,16 @@ def _coordinate_plane_bounds(
         left = min(left, label_center_x - point["label_width"] / 2)
         right = max(right, label_center_x + point["label_width"] / 2)
         top = max(top, label_center_y + point["label_height"] / 2)
-    if x_tick_payload:
-        max_x_tick_h = max(row[3] for row in x_tick_payload)
-        bottom = min(bottom, zero_v - COORDINATE_TICK_LABEL_GAP - max_x_tick_h)
-    if y_tick_payload:
-        max_y_tick_w = max(row[2] for row in y_tick_payload)
-        left = min(left, zero_u - COORDINATE_TICK_LABEL_GAP - max_y_tick_w)
+    for value, _text, w, h in x_tick_payload:
+        u = (float(value) - x_center) * unit_scale
+        left = min(left, u - w / 2)
+        right = max(right, u + w / 2)
+        bottom = min(bottom, zero_v - COORDINATE_TICK_LABEL_GAP - h)
+    for value, _text, w, h in y_tick_payload:
+        v = (float(value) - y_center) * unit_scale
+        top = max(top, v + h / 2)
+        bottom = min(bottom, v - h / 2)
+        left = min(left, zero_u - COORDINATE_TICK_LABEL_GAP - w)
     return Bounds(left, right, bottom, top)
 
 

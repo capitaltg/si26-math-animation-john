@@ -55,5 +55,14 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # height; and the line itself moving to draw at its markers' y instead of
     # at its label-padded bounds' center, so it passes through its own dots
     # again.
-    assert DSL_COMPILER_VERSION == 7
-    assert DYNAMIC_RENDERER_VERSION == 6
+    #
+    # DSL_COMPILER_VERSION 8 adds the `coordinate_plane` visual kind and the
+    # matching `CoordinatePlaneProgramVisual`; a version-7 compiler cannot
+    # recognise the new kind, so a report stamped 7 must go stale.
+    #
+    # DYNAMIC_RENDERER_VERSION 7 covers rendering the new `coordinate_plane`
+    # visual kind (axes through the projected zero, plotted points with
+    # labels, whole-number ticks); a version-6 renderer cannot deserialize the
+    # new frozen visual.
+    assert DSL_COMPILER_VERSION == 8
+    assert DYNAMIC_RENDERER_VERSION == 7
