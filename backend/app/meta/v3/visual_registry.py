@@ -184,9 +184,18 @@ def _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels)
                 f"labels {labels[a]!r} and {labels[b]!r} overlap by "
                 f"{MARKER_LABEL_INTER_GAP - gap:.2f} units"
             ),
+            # Retry discards `observed` and only forwards `hint`
+            # (see `draft_generation._STABLE_REPAIR_FEEDBACK_FIELDS`), so
+            # spell the colliding labels here. Do NOT suggest widening the
+            # numeric range: markers are positioned proportionally within
+            # fixed +/-2.75 bounds, so a wider range packs the same markers
+            # closer together, not further apart -- dropping one of the
+            # colliding markers is the only recovery.
             hint=(
-                "drop intermediate markers or widen the numeric range so "
-                "adjacent labels fit without collision"
+                f"drop marker {labels[a]!r} or {labels[b]!r} -- their labels "
+                "overlap on the number_line's single label strip; widening "
+                "the numeric range would not help, since markers are placed "
+                "proportionally within fixed horizontal bounds"
             ),
         ))
 

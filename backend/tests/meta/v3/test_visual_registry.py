@@ -261,7 +261,12 @@ def test_a_number_line_rejects_markers_whose_labels_would_collide():
     assert failure.code == "visual_extent_unrenderable"
     assert failure.path == "visuals.line"
     assert "overlap" in failure.observed
-    assert "adjacent labels" in failure.hint
+    # Retry only forwards code/path/hint (see draft_generation), so the
+    # hint has to name the actual colliding labels and steer the generator
+    # AWAY from widening the range (which packs markers closer, not apart).
+    assert "'250000'" in failure.hint and "'500000'" in failure.hint
+    assert "drop" in failure.hint
+    assert "widening" in failure.hint
 
 
 def test_a_number_line_reserves_bounds_for_a_wide_endpoint_label():
