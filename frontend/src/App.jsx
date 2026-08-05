@@ -396,6 +396,52 @@ function MainApp() {
     }
   }
 
+  // Called after a meta-template draft is approved for one candidate: refetches
+  // that candidate's options in place so the new template shows up without the
+  // teacher re-requesting visualizations for everything. Only the approved
+  // candidate's entry is replaced — other candidates' options and picks are
+  // left untouched.
+  async function refreshOptionsFor(candidateId) {
+    setError(null)
+    setLoading(true)
+    try {
+      const resp = await fetch('/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ candidate_ids: [candidateId] }),
+      })
+      const data = await responseJson(resp, 'Could not refresh visualizations')
+      if (!resp.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
+      const refreshed = data.options[0]
+      if (!refreshed) return
+      // If the teacher has since left the visuals stage (e.g. "Back to
+      // candidates"), options is null — leave it null rather than reopening
+      // an empty visuals stage with just this one entry.
+      setOptions((previous) => {
+        if (!previous) return previous
+        const stillShown = previous.some((item) => item.candidate_id === candidateId)
+        return stillShown
+          ? previous.map((item) => (item.candidate_id === candidateId ? refreshed : item))
+          : previous
+      })
+      // picks is reset to {} in lockstep with options whenever the teacher
+      // leaves the visuals stage, so candidateId being a key here is itself
+      // proof options is still showing it — no need to read the setOptions
+      // updater's own decision, which isn't guaranteed to have run yet.
+      if (refreshed.templates.length > 0) {
+        setPicks((previous) => (candidateId in previous
+          ? { ...previous, [candidateId]: refreshed.templates[0].template }
+          : previous))
+      }
+    } catch (err) {
+      setError(err.message)
+      throw err
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleBuildStoryboard() {
     if (!options || options.some((item) => !picks[item.candidate_id])) return
     setError(null)
@@ -784,13 +830,12 @@ function MainApp() {
 
         {/* Sits above the current stage's band and stays there as the teacher
             moves on: a build takes minutes and must not hold up the deck, so
-            this is gated on having a deck rather than on the current stage.
-            Nothing here resets the flow on approval — the band says to ask for
-            visualizations again, and "Back to candidates" already exists. */}
+            this is gated on having a deck rather than on the current stage. */}
         {candidates && candidates.length > 0 && (
           <TemplateWorkshop
             candidates={candidates}
             unsupportedCandidateIds={unsupportedCandidateIds}
+            onApproved={(_templateName, candidateId) => refreshOptionsFor(candidateId)}
           />
         )}
 

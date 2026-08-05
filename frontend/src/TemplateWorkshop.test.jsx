@@ -257,6 +257,29 @@ it('says the approved template is only available in this session', async () => {
   expect(await screen.findByText(/available in this session/)).toBeTruthy()
 })
 
+it('tells the parent which candidate to refresh options for after approval', async () => {
+  installFetchMock({ builds: [build({ stage: 'ready', draft_id: 'draft-1' })] })
+  const onApproved = vi.fn()
+
+  renderWorkshop({ onApproved })
+  fireEvent.click(await screen.findByLabelText(/teaches this correctly/))
+  fireEvent.click(screen.getByRole('button', { name: /Looks right/ }))
+
+  await waitFor(() => expect(onApproved).toHaveBeenCalledWith('leftover_pair', 'c1'))
+})
+
+it('falls back to the ask-again note when refreshing options after approval fails', async () => {
+  installFetchMock({ builds: [build({ stage: 'ready', draft_id: 'draft-1' })] })
+  const onApproved = vi.fn().mockRejectedValue(new Error('network down'))
+
+  renderWorkshop({ onApproved })
+  fireEvent.click(await screen.findByLabelText(/teaches this correctly/))
+  fireEvent.click(screen.getByRole('button', { name: /Looks right/ }))
+
+  expect(await screen.findByText(/did not refresh automatically/)).toBeTruthy()
+  expect(screen.queryByText(/has been\s+added as an option/)).toBeNull()
+})
+
 it('reports why an approval was refused', async () => {
   installFetchMock({
     builds: [build({ stage: 'ready', draft_id: 'draft-1' })],
