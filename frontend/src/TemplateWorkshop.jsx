@@ -384,7 +384,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
       const data = await responseJson(resp)
       if (!resp.ok) throw new Error(errorFrom(data, 'Could not use this visual'))
       setApproved((current) => ({ ...current, [build.candidate_id]: data.template_name }))
-      onApproved?.(data.template_name)
+      onApproved?.(data.template_name, build.candidate_id)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -498,8 +498,8 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
             {approvedName ? (
               <>
                 <p className="band__note">
-                  “{approvedName}” is available in this session. Ask for
-                  visualizations again to pick it for a problem.
+                  “{approvedName}” is available in this session and has been
+                  added as an option for this problem.
                 </p>
               </>
             ) : build.stage === 'ready' && draft ? (

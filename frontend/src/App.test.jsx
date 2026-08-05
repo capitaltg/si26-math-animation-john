@@ -547,6 +547,117 @@ it('does not show the new-template hint when a structural template is offered', 
   expect(screen.queryByText(/You can have one built from this problem/)).toBeNull()
 })
 
+function installMetaApprovalFetchMock() {
+  const candidate2 = {
+    candidate_id: 'c2',
+    source_excerpt: 'Nine minus two.',
+    slide_index: 1,
+    one_line_summary: 'Detected: 9 - 2',
+  }
+  const draftPayload = {
+    id: 'draft-1',
+    revision: 1,
+    learning_objective: 'Find the unpaired value.',
+    beats: [
+      { id: 'reveal', kind: 'reveal', intent: 'show the values together' },
+      { id: 'focus', kind: 'focus', intent: 'focus on the unpaired value' },
+      { id: 'conclude', kind: 'conclude', intent: 'state the leftover' },
+    ],
+    total_duration_seconds: 12.5,
+    preview_url: '/meta/my/drafts/draft-1/preview',
+    suggested_template_name: 'leftover_pair',
+    attempts: [],
+    attempts_remaining: 4,
+  }
+  let approved = false
+  let buildRequested = false
+  const fetchMock = vi.fn(async (url, init = {}) => {
+    if (url === '/meta/my/capabilities') return jsonResponse({ enabled: true })
+    if (url === '/upload') return jsonResponse({ candidates: [candidate, candidate2] })
+    if (url === '/options') {
+      const requested = JSON.parse(init.body).candidate_ids
+      return jsonResponse({
+        options: requested.map((candidateId) => (candidateId === 'c1'
+          ? {
+            candidate_id: 'c1',
+            grade_level: 3,
+            ambiguous: false,
+            templates: approved
+              ? [
+                { template: 'leftover_pair', rationale: 'built for this problem' },
+                { template: 'text_card', rationale: 'no structural template fits' },
+              ]
+              : [{ template: 'text_card', rationale: 'no structural template fits' }],
+          }
+          : {
+            candidate_id: 'c2',
+            grade_level: 1,
+            ambiguous: false,
+            templates: [
+              { template: 'number_line', rationale: 'shows subtraction as a jump' },
+              { template: 'ten_frame', rationale: 'shows the count directly' },
+            ],
+          })),
+      })
+    }
+    if (url === '/meta/my/builds' && init.method === 'POST') {
+      buildRequested = true
+      return jsonResponse({ candidate_id: JSON.parse(init.body).candidate_id }, 202)
+    }
+    if (url === '/meta/my/builds') {
+      if (!buildRequested) return jsonResponse([])
+      return jsonResponse([{
+        candidate_id: 'c1',
+        fingerprint_key: 'k1',
+        stage: 'ready',
+        attempt: 1,
+        max_attempts: 5,
+        elapsed_seconds: 30,
+        draft_id: 'draft-1',
+        error: null,
+      }])
+    }
+    if (url === '/meta/my/drafts/draft-1') return jsonResponse(draftPayload)
+    if (url === '/meta/my/drafts/draft-1/approve') {
+      approved = true
+      return jsonResponse({ template_name: 'leftover_pair', template_version_id: 'tv-1' })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+it('adds a newly approved template as an option without re-requesting visualizations', async () => {
+  installMetaApprovalFetchMock()
+  const { container } = render(<App />)
+  const fileInput = container.querySelector('input[type="file"]')
+  const form = container.querySelector('form')
+  Object.defineProperty(form, 'file', { configurable: true, value: fileInput })
+  fireEvent.change(fileInput, { target: { files: [new File(['deck'], 'deck.pptx')] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+  const checkboxes = await screen.findAllByRole('checkbox')
+  checkboxes.forEach((checkbox) => fireEvent.click(checkbox))
+  fireEvent.click(screen.getByRole('button', { name: 'Get visualizations' }))
+  await screen.findByRole('heading', { name: 'Choose visualizations' })
+
+  // Teacher deliberately picks the non-default template for the other
+  // candidate before touching the workshop below.
+  fireEvent.click(screen.getByRole('radio', { name: /ten frame/ }))
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Build one for this problem' }))
+  fireEvent.click(await screen.findByLabelText(/teaches this correctly/))
+  fireEvent.click(screen.getByRole('button', { name: /Looks right/ }))
+
+  // The new template shows up as a pickable option for c1 with no further
+  // "Get visualizations" click.
+  await screen.findByRole('radio', { name: /leftover pair/ })
+
+  // c2's manual pick was untouched by the c1-scoped refresh.
+  expect(screen.getByRole('radio', { name: /ten frame/ }).checked).toBe(true)
+  expect(screen.getByRole('radio', { name: /number line/ }).checked).toBe(false)
+})
+
 it('clears a failed render alert once a new storyboard is built', async () => {
   installFetchMock({ secondUpload: true, renderFails: true })
   const { fileInput } = await reachStoryboard()

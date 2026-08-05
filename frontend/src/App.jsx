@@ -396,6 +396,38 @@ function MainApp() {
     }
   }
 
+  // Called after a meta-template draft is approved for one candidate: refetches
+  // that candidate's options in place so the new template shows up without the
+  // teacher re-requesting visualizations for everything. Only the approved
+  // candidate's entry is replaced — other candidates' options and picks are
+  // left untouched.
+  async function refreshOptionsFor(candidateId) {
+    setError(null)
+    setLoading(true)
+    try {
+      const resp = await fetch('/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ candidate_ids: [candidateId] }),
+      })
+      const data = await responseJson(resp, 'Could not refresh visualizations')
+      if (!resp.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
+      const refreshed = data.options[0]
+      if (!refreshed) return
+      setOptions((previous) => (previous || []).map(
+        (item) => (item.candidate_id === candidateId ? refreshed : item),
+      ))
+      if (refreshed.templates.length > 0) {
+        setPicks((previous) => ({ ...previous, [candidateId]: refreshed.templates[0].template }))
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleBuildStoryboard() {
     if (!options || options.some((item) => !picks[item.candidate_id])) return
     setError(null)
@@ -784,13 +816,12 @@ function MainApp() {
 
         {/* Sits above the current stage's band and stays there as the teacher
             moves on: a build takes minutes and must not hold up the deck, so
-            this is gated on having a deck rather than on the current stage.
-            Nothing here resets the flow on approval — the band says to ask for
-            visualizations again, and "Back to candidates" already exists. */}
+            this is gated on having a deck rather than on the current stage. */}
         {candidates && candidates.length > 0 && (
           <TemplateWorkshop
             candidates={candidates}
             unsupportedCandidateIds={unsupportedCandidateIds}
+            onApproved={(_templateName, candidateId) => refreshOptionsFor(candidateId)}
           />
         )}
 
