@@ -286,6 +286,28 @@ def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_e
     assert _by_ref(with_relation) == _by_ref(without_relation)
 
 
+def test_bottom_callout_stays_in_frame_when_no_below_stack_absorbs_the_gap():
+    """Answerless layout: `_place_instructional` inserts a gap below the
+    primary only when there is a below stack to push. Crediting a phantom
+    `GAP * scale` against the envelope in that case shrinks the reservation
+    below what the callout actually needs and drops its tip past the safe
+    frame's bottom edge."""
+    primary = _tape_like_primary(height=6.0, width=4.0)
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson([primary], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape = by_ref["tape"]
+    # `box[0].bottom` sits at the primary's own outer bottom, so the callout
+    # tip is at `anchor_y - CALLOUT_ENVELOPE`.
+    anchor_y = tape.anchor(part="box", index=0, name="bottom").y
+    callout_tip_y = anchor_y - CALLOUT_ENVELOPE
+    assert callout_tip_y >= SAFE_FRAME.bottom - 1e-9, (
+        f"callout tip {callout_tip_y:g} escapes frame bottom {SAFE_FRAME.bottom:g}"
+    )
+
+
 def test_bottom_callout_pad_credits_the_gap_already_below_the_primary():
     """Reserving the full CALLOUT_ENVELOPE ignores the GAP the layout already
     inserts between the primary band and whatever sits below it. On a
