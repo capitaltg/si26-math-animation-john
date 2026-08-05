@@ -595,31 +595,38 @@ def test_a_plan_hijacking_the_evaluated_answer_ref_is_rejected():
     """The `evaluated_answer` ref is reserved for the compiler-supplied
     `answer_expression` visual. A plan can still name a supporting visual
     `evaluated_answer` -- nothing in the plan schema stops that -- and
-    `BeatExpander.expand`'s `answer_declared` short-circuit at
-    `beat_expander.py:99` then suppresses its own append, so the plan's shape
-    is what reaches the report. `check_answer_timing` rejects any
-    non-`answer_expression` shape before `check_answer_work_shown` reaches for
-    `answer.expression` and raises `AttributeError`.
+    `BeatExpander.expand` appends its own answer AFTER the plan's supporting
+    visuals (`beat_expander.py:73-82`), so the plan-declared shape reaches the
+    `next()` in `check_answer_timing` first. That ordering is what makes the
+    kind gate load-bearing; without it, `check_answer_work_shown` would then
+    reach `answer.expression` and raise `AttributeError`.
 
-    Compiled through `compile_teaching_plan` (not spliced onto a valid program)
-    so the ordering dependency on `BeatExpander.expand`'s suppression is
-    covered end-to-end.
+    Compiled through a non-`pair_elimination` plan (which suppresses the
+    system answer on strategy alone, hiding the ordering dependency) so both
+    visuals actually coexist in the program and the plan-declared one is
+    selected.
     """
-    raw = _median_plan().model_dump()
+    raw = _perimeter_plan().model_dump()
     raw["supporting_visuals"] = [
         {
             "kind": "ordered_values", "ref": "evaluated_answer",
-            "values": [_field("v1"), _field("v2"), _field("v3")],
+            "values": [_field("length"), _field("width"), _field("length")],
         },
     ]
     raw["beats"][0]["targets"] = [
-        {"visual_ref": "values"},
+        {"visual_ref": "rectangle"},
         {"visual_ref": "evaluated_answer"},
     ]
     plan = TeachingPlanDocument.model_validate(raw)
-    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
-    hijack = next(visual for visual in program.visuals if visual.ref == "evaluated_answer")
-    assert hijack.kind == "ordered_values", "compiler should not have overridden the plan-declared visual"
+    program = _compile(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        {"length", "width"},
+    )
+    matches = [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
+    assert len(matches) == 2, "plan-declared and system-supplied answer visuals should coexist"
+    assert matches[0].kind == "ordered_values", "plan-declared visual must be selected first by next()"
+    assert matches[1].kind == "answer_expression"
 
     report = validate_static_quality(plan, program)
 
