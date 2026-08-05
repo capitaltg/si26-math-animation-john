@@ -172,8 +172,9 @@ The closed initial vocabulary is:
 - `derive`: map visible structure into a calculation or relationship;
 - `conclude`: show the evaluated result and hold it for reading.
 
-Not every plan must use every beat, but `conclude` is last and every plan has at
-least one beat that establishes context before answer emphasis.
+Not every plan must use every beat, but every plan ends with exactly one
+`conclude` beat and has at least one earlier beat that establishes context
+before answer emphasis.
 
 Each beat declares targets and instructional intent, not individual one-second
 animations. For example:
