@@ -20,19 +20,28 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
 
-      # Manim render tests shell out to ffmpeg and link against cairo/pango.
-      # Every rendered glyph goes through Pango-based `manim.Text` (see
-      # `app/meta/v3/renderer.py::_text` and `manim_measurer.py`); no code
-      # path calls `MathTex` or `Tex`, so the ~2 GB texlive stack the
-      # workflow used to pull in (which added 30-40 minutes to a cold
-      # runner because `setup-python` caches pip, not apt) is not needed.
-      # If a future visual introduces `MathTex`, reinstate
-      # texlive-latex-extra + dvisvgm alongside this list.
+      # Manim render tests shell out to ffmpeg, link against cairo/pango,
+      # and (via `manim.NumberLine(include_numbers=True)` inside the
+      # `number_line` template scenes -- see
+      # `app/templates/number_line/scene.py` and
+      # `app/meta/manim_primitives/visuals.py`) render tick numbers with
+      # `DecimalNumber -> MathTex -> latex -> dvisvgm`, so the texlive
+      # stack has to be present. The v3 `_number_line_labels` path uses
+      # Pango-based `manim.Text`, but the manim primitive one does not.
+      #
+      # `cache-apt-pkgs-action` tarballs the installed files after the
+      # first successful run and restores them in seconds on subsequent
+      # runs, so this step goes from ~30 minutes of `apt-get install` to
+      # under a minute once the cache is warm. Bump `version` to force
+      # a rebuild if the package list changes.
       - name: Install system deps for Manim rendering
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: >-
             ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+            texlive texlive-latex-extra texlive-fonts-extra
+            texlive-latex-recommended texlive-science tipa dvisvgm
+          version: 1
 
       - name: Install backend and dev deps
         run: pip install -e ".[dev]"
