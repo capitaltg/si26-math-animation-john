@@ -676,3 +676,29 @@ def test_compiled_schema_carries_descriptions_for_array_item_fields():
     assert item_schema["properties"]["count"]["description"] == (
         "How many objects this row holds"
     )
+
+
+def test_field_contract_omits_scalar_minimum_for_optional_numeric_fields():
+    """An optional numeric field's schema accepts None, so exposing its
+    `minimum` as a scalar guarantee would let a caller trust `minimum >= 1`
+    and then crash when the accepted null value flows through expression
+    evaluation (`unsupported_type: NoneType`). Only required fields carry
+    the guarantee; optional ones must be reported as minimum-unknown."""
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(
+                name="required_count", label="Count", description="",
+                minimum=1, maximum=10, required=True,
+            ),
+            DecimalFieldSpec(
+                name="optional_rate", label="Rate", description="",
+                minimum=1.0, maximum=5.0, required=False, default=None,
+            ),
+        ],
+    )
+
+    contract = field_contract_for(document)
+
+    assert "required_count" in contract.scalar_minimums
+    assert "optional_rate" not in contract.scalar_minimums

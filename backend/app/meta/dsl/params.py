@@ -351,8 +351,17 @@ def field_contract_for(document: ParamsDocument) -> FieldContract:
             spec.name: frozenset(item.name for item in spec.item_fields)
             for spec in document.fields if spec.type == "array"
         },
+        # Only required numeric fields expose a scalar minimum as a
+        # compile-time non-null guarantee. An optional numeric field's schema
+        # accepts None (see `_field_definition`: `py_type | None` when not
+        # required), so a caller like `validate_unit_rate_value_range` that
+        # trusts `minimum >= 1` would accept a nullable field, then crash at
+        # runtime with `unsupported_type: NoneType` when the accepted null
+        # value flows through expression evaluation. Withholding the minimum
+        # instead reports the field as "minimum unknown" and rejects it.
         scalar_minimums={
             spec.name: Fraction(spec.minimum).limit_denominator(10**9)
-            for spec in document.fields if spec.type in ("integer", "decimal")
+            for spec in document.fields
+            if spec.type in ("integer", "decimal") and spec.required
         },
     )

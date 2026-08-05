@@ -546,6 +546,38 @@ def test_unit_rate_quality_gate_requires_the_per_one_focus():
     assert not check_strategy_affordance(plan, without_per_one).passed
 
 
+def test_unit_rate_quality_gate_catches_a_focused_non_zero_box_at_reveal():
+    """A second focused column defeats the per-one emphasis just as thoroughly
+    as a whole-tape focus. The gate must reject any focused box whose index is
+    not 0 through the reveal beat, not stop after confirming box[0]."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds,
+        duration_seconds=reveal_entry.duration_seconds,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape", part="box", index=1),
+            role="focus",
+        ),
+    )
+    with_extra_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_extra_focus).passed
+
+
 def test_whole_visual_role_change_preserves_deferred_part_bookkeeping():
     """`_build_unit_tape` registers `target_label` as a child but does *not*
     add it to the visual's root group, so a whole-visual `set_role` in the
