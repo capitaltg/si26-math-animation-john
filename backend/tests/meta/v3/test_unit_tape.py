@@ -385,6 +385,64 @@ def test_unit_rate_plan_rejects_a_target_label_target():
         TeachingPlanDocument.model_validate(payload)
 
 
+def test_unit_rate_derive_beat_does_not_focus_the_whole_tape():
+    """When an earlier beat already focuses box[0], `_unit_rate_actions` yields
+    no actions -- and the derive beat must not fall through to a whole-visual
+    focus, which would put every column on equal footing and defeat the
+    per-one emphasis."""
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    reveal_beat_id = next(
+        entry.beat_id for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    whole_tape_focus_at_reveal = [
+        entry for entry in program.timeline
+        if entry.beat_id == reveal_beat_id
+        and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+        and entry.action.target.visual_ref == "trail_tape"
+        and entry.action.target.part is None
+    ]
+    assert not whole_tape_focus_at_reveal, (
+        "unit_rate derive beat refocused the whole tape, defeating the "
+        "per-one emphasis"
+    )
+
+
+def test_unit_rate_quality_gate_catches_whole_tape_focus_at_reveal_beat():
+    """The tightened gate rejects a timeline where the reveal beat also
+    focuses the whole primary visual -- the exact failure the beat-expander
+    early-return prevents."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds,
+        duration_seconds=reveal_entry.duration_seconds,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="focus",
+        ),
+    )
+    with_whole_tape_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_whole_tape_focus).passed
+
+
 def test_unit_rate_quality_gate_requires_the_per_one_focus():
     from app.meta.v3.quality import check_strategy_affordance
 

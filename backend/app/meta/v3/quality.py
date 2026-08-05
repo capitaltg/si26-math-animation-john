@@ -256,18 +256,63 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
             # `unit_rate` adds a per-one emphasis on box[0]; without it the
             # lesson is indistinguishable from `unit_substitution`.
             primary_ref = plan.primary_visual.ref
-            has_per_one_focus = any(
-                entry.action.kind == "set_role"
-                and entry.action.role == "focus"
-                and entry.action.target.visual_ref == primary_ref
-                and entry.action.target.part == "box"
-                and entry.action.target.index == 0
-                for entry in program.timeline
+            reveal_beat_id = next(
+                (
+                    entry.beat_id for entry in program.timeline
+                    if entry.action.kind == "reveal"
+                    and any(target.part == "target_label" for target in entry.action.targets)
+                ),
+                None,
             )
-            if not has_per_one_focus:
+            # Effective role of box[0] at the reveal beat: an explicit box[0]
+            # set_role wins over a whole-visual set_role (see beat_expander's
+            # `_current_role`), so track them separately and prefer the
+            # explicit one when present.
+            box_zero_role = None
+            whole_visual_role = None
+            saw_reveal = False
+            for entry in program.timeline:
+                if entry.beat_id == reveal_beat_id and entry.action.kind == "reveal" and any(
+                    target.part == "target_label" for target in entry.action.targets
+                ):
+                    saw_reveal = True
+                if entry.action.kind == "set_role":
+                    target = entry.action.target
+                    if target.visual_ref == primary_ref:
+                        if target.part == "box" and target.index == 0:
+                            box_zero_role = entry.action.role
+                        elif target.part is None:
+                            whole_visual_role = entry.action.role
+                            # A whole-visual role reassigns box[0]'s
+                            # inherited role only when box[0] has no explicit
+                            # role of its own.
+                            if box_zero_role is None:
+                                box_zero_role = entry.action.role
+                if saw_reveal:
+                    break
+            effective_box_zero_role = box_zero_role or whole_visual_role
+            if effective_box_zero_role != "focus":
                 return _failed(
                     "static_process_visual", "timeline",
                     "unit_rate instruction needs box[0] focused as the per-one column",
+                )
+            # The rate is *only* box[0]. If the reveal beat also focuses the
+            # whole primary visual, every column reads as equally salient and
+            # the per-one emphasis is defeated -- exactly the failure mode
+            # that arises when the unit_rate branch falls through to
+            # `_generic_role_change`.
+            whole_visual_focus_at_reveal = any(
+                entry.beat_id == reveal_beat_id
+                and entry.action.kind == "set_role"
+                and entry.action.role == "focus"
+                and entry.action.target.visual_ref == primary_ref
+                and entry.action.target.part is None
+                for entry in program.timeline
+            )
+            if whole_visual_focus_at_reveal:
+                return _failed(
+                    "static_process_visual", "timeline",
+                    "unit_rate reveal beat must not focus the whole primary visual",
                 )
         return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":

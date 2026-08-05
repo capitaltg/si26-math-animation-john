@@ -346,9 +346,12 @@ class BeatExpander:
             # box[0] rather than the whole tape so the per-one column reads as
             # the rate; a whole-tape focus would fall through to
             # `_generic_role_change` and put every box on equal footing.
-            actions = self._unit_rate_actions(plan, current_roles)
-            if actions:
-                return actions
+            # Return unconditionally: when an earlier beat already focused
+            # box[0], `_unit_rate_actions` yields no actions -- and falling
+            # through to `_generic_role_change` on this beat's whole-visual
+            # target would refocus the entire tape, which is precisely what
+            # the branch exists to prevent.
+            return self._unit_rate_actions(plan, current_roles)
 
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
             # Iterate pairs, not indices. The middle item is never reached, so
