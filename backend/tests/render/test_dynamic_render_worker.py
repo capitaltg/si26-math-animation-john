@@ -238,13 +238,9 @@ def test_worker_probe_mode_reports_real_dimension_anchor_evidence_for_rectangle_
     assert result.returncode == 0, result.stderr
     manifest = json.loads(output_path.with_suffix(".json").read_text())
 
-    # Defect C regression: with the old `"dimension" in relation.ref`
-    # substring filter, both of these are always empty for every real
-    # compiled program, so the perimeter contract's dimension-attachment
-    # evidence could never be populated.
-    assert set(manifest["declared_dimension_anchors"]) == dimension_refs
-    assert manifest["dimension_anchor_checks"].keys() == dimension_refs
-    assert all(
-        manifest["dimension_anchor_checks"][ref]["passed"] is True
-        for ref in dimension_refs
-    )
+    # The compiled dimension callouts must reach the manifest as real
+    # relations -- `check_relation_alignment` then catches any that are
+    # declared but not observed, so this is the observability half of that
+    # gate rather than a separate contract.
+    assert set(manifest["declared_relations"]) >= dimension_refs
+    assert dimension_refs <= manifest["relations"].keys()

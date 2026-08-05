@@ -24,6 +24,7 @@ def valid_manifest():
         "frame_size": [900, 500],
         "total_duration_seconds": 7.5,
         "conclusion_hold_seconds": 1.5,
+        "final_beat_observed": True,
         "simple_reveal_mode": "together",
         "frames": [
             {"beat_id": "reveal_values", "seconds": 1.5, "path": "probe-0.png", "non_background_pixels": 150},
@@ -50,8 +51,6 @@ def valid_manifest():
         "declared_relations": ["median_callout"],
         "path_events": [],
         "declared_path_events": [],
-        "dimension_anchor_checks": {},
-        "declared_dimension_anchors": [],
         "dimension_labels": {},
         "declared_dimension_labels": [],
         "state_events": [
@@ -80,13 +79,21 @@ def valid_manifest():
     ("collision", "callout_collision"),
     ("state_order", "state_order_invalid"),
     ("path", "undeclared_path_event"),
-    ("dimension", "dimension_anchor_mismatch"),
     ("answer", "final_answer_not_persistent"),
     ("unresolved_answer", "final_answer_not_persistent"),
     ("outside_safe_frame", "frame_out_of_bounds"),
     ("overlapping_visuals", "visual_overlap"),
     ("unlabelled_dimension", "dimension_label_missing"),
     ("blank_dimension_label", "dimension_label_missing"),
+    ("empty_visual_bounds", "render_probe_contract_invalid"),
+    ("short_conclusion_hold", "conclusion_hold_too_short"),
+    ("under_duration", "timeline_duration_out_of_bounds"),
+    ("over_duration", "timeline_over_budget"),
+    ("zero_frame_width", "render_probe_contract_invalid"),
+    ("nan_frame_height", "render_probe_contract_invalid"),
+    ("nan_duration", "render_probe_contract_invalid"),
+    ("nan_hold", "render_probe_contract_invalid"),
+    ("missing_final_beat", "conclusion_hold_too_short"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -135,14 +142,41 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         ]
     elif mutation == "path":
         manifest["declared_path_events"] = ["rectangle.perimeter"]
-    elif mutation == "dimension":
-        manifest["dimension_anchor_checks"] = {"rectangle.edge[0]": False}
     elif mutation == "answer":
         manifest["final_answer_visible"] = False
     elif mutation == "unresolved_answer":
         # The answer is on screen, but still reads as the unresolved work stage --
         # the defect `final_answer_visible` alone passed happily on.
         manifest["final_answer_text"] = "2 × 3 = ? m"
+    elif mutation == "empty_visual_bounds":
+        # Defense-in-depth: every teeth-bearing check downstream is a
+        # `declared ⊆ observed` subset test, so an empty observation would
+        # otherwise pass by vacuous truth.
+        manifest["visual_bounds"] = {}
+    elif mutation == "short_conclusion_hold":
+        manifest["conclusion_hold_seconds"] = 1.0
+    elif mutation == "under_duration":
+        manifest["total_duration_seconds"] = 5.5
+    elif mutation == "over_duration":
+        manifest["total_duration_seconds"] = 12.5
+    elif mutation == "zero_frame_width":
+        # A zero-width frame is numerically valid but explodes `_normalized_distance`
+        # and `_pixel_x` on first use; the contract must reject it before then.
+        manifest["frame_size"] = [0, 500]
+    elif mutation == "nan_frame_height":
+        manifest["frame_size"] = [900, float("nan")]
+    elif mutation == "nan_duration":
+        # `NaN` compares False against every finite bound, so without an
+        # up-front finiteness check the timing gates would silently pass.
+        manifest["total_duration_seconds"] = float("nan")
+    elif mutation == "nan_hold":
+        manifest["conclusion_hold_seconds"] = float("nan")
+    elif mutation == "missing_final_beat":
+        # A conclude beat that compiled to nothing leaves the probe with no
+        # final-beat semantic play to anchor the hold on. The gate must fail
+        # explicitly rather than reusing a previous beat's timing.
+        manifest["final_beat_observed"] = False
+        manifest["conclusion_hold_seconds"] = 0.0
 
     report = validate_rendered_quality(manifest)
 
@@ -194,7 +228,7 @@ def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
 
 
 @pytest.mark.parametrize("field", [
-    "relations", "state_events", "path_events", "dimension_anchor_checks", "final_answer_visible",
+    "relations", "state_events", "path_events", "final_answer_visible",
     "final_answer_text", "declared_answer_text", "answer_anchor",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):

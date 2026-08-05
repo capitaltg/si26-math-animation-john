@@ -12,16 +12,10 @@ from app.meta.v3.expression_display import has_operation
 from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 # Semantic parts that name a rectangle's length/width dimension edges (see
-# `app/meta/v3/rectangle_measurement.py`). Used by
-# `app/render/dynamic_render_worker.py`'s rendered-quality probe to key its
-# observed `dimension_anchor_checks`/`declared_dimension_anchors` evidence --
-# a compiled relation ref never contains the substring "dimension" (the beat
-# expander names callout relations `callout_{beat}_{action}` or
-# `median_callout`; see `app/meta/v3/beat_expander.py`), so identification
-# must key off the relation's typed target part instead of the free-form ref
-# string. `check_dimension_anchor_specificity` below identifies a *candidate*
-# dimension callout more broadly, by the target visual's kind rather than
-# this specific part set -- see that function's docstring.
+# `app/meta/v3/rectangle_measurement.py`). `check_dimension_anchor_specificity`
+# below identifies a *candidate* dimension callout more broadly, by the target
+# visual's kind rather than this specific part set -- see that function's
+# docstring.
 DIMENSION_TARGET_PARTS = frozenset({"length_edge", "width_edge"})
 
 

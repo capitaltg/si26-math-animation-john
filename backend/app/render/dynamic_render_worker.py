@@ -9,7 +9,6 @@ from app.meta.dsl.scene_program import SceneProgramDocument
 from app.meta.dynamic_scene import DynamicTemplateScene
 from app.meta.v3.layout import SAFE_FRAME
 from app.meta.v3.manim_measurer import ManimTextMeasurer
-from app.meta.v3.quality import DIMENSION_TARGET_PARTS
 from app.meta.v3.renderer import _initial_role, render_resolved_scene
 from app.meta.v3.resolver import resolve_scene
 
@@ -95,10 +94,23 @@ def _render_probe(
 
     from manim import Scene, config, tempconfig
 
+    final_beat_id = resolved.timeline[-1].beat_id
+
     class ProbeScene(Scene):
         def __init__(self):
             super().__init__()
             self.elapsed = 0.0
+            # `elapsed` at the moment the last play carrying a semantic event
+            # from the FINAL beat started. Scoping to the final beat is what
+            # makes `conclusion_hold_seconds` measure the conclude beat's own
+            # hold rather than time trailing an arbitrary earlier beat -- a
+            # conclude that compiled to nothing would otherwise reuse the
+            # previous beat's anchor and the gate could still pass.
+            #: `None` until the final beat's first semantic play is observed;
+            #  a manifest emitted with it still None fails the hold gate
+            #  explicitly, rather than reporting a hold of 0 alongside a
+            #  passing manifest.
+            self.last_final_beat_play_start = None
             self.frames = []
             self.captured_beats = set()
             self.rendered = None
@@ -115,12 +127,18 @@ def _render_probe(
 
         def play(self, *animations, **kwargs):
             duration = kwargs.get("run_time", 0.0)
+            events = tuple(getattr(animations[0], "_semantic_events", ())) if animations else ()
+            # Manim's own follow-up calls into `Scene.play` (compilation of an
+            # `AnimationGroup`, wrap-up passes) reach us with `run_time=0` and
+            # no `_semantic_events`, so scoping the observation to semantic
+            # plays keeps this measurement on renderer instructions. Recording
+            # the start BEFORE `super().play()` so a zero-duration final play
+            # still updates the anchor -- hold then reads as 0 and is rejected.
+            if any(event["beat_id"] == final_beat_id for event in events):
+                self.last_final_beat_play_start = self.elapsed
             result = super().play(*animations, **kwargs)
             self.elapsed += duration
-            self.render_events.extend(
-                self._observe_render_event(event)
-                for event in getattr(animations[0], "_semantic_events", ())
-            )
+            self.render_events.extend(self._observe_render_event(event) for event in events)
             self._capture_completed_beats()
             return result
 
@@ -209,20 +227,18 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
 
     path_events = [event["path_ref"] for event in scene.render_events if event["path_ref"] is not None]
     state_events = _state_events(scene.render_events, resolved)
-    dimensions = {
-        # bool(...): the coordinates flowing into `_point_distance` originate
-        # from manim/numpy mobject geometry, so the comparison can yield a
-        # numpy.bool_ instead of a native bool -- not JSON-serializable. This
-        # dict comprehension was previously always empty (no compiled ref
-        # ever matched the old "dimension" substring filter), so the
-        # coercion was never exercised until real dimension relations
-        # started flowing through it.
-        relation.ref: {"passed": bool(_point_distance(relation_data["target"], relation_data["tip"], width, height) <= 0.02)}
-        for relation in program.relations if relation.target.part in DIMENSION_TARGET_PARTS
-        for relation_data in [relations.get(relation.ref, {})]
-        if relation_data
-    }
-    conclusion_starts = [action.at_seconds for action in resolved.timeline if action.beat_id == _last_beat_id(resolved)]
+    # `scene.elapsed` is the wall time the probe subprocess actually spent in
+    # play/wait calls; `scene.last_final_beat_play_start` is the elapsed at
+    # the start of the LAST play that carried a semantic event from the final
+    # beat. Reading off scene state rather than off
+    # `resolved.total_duration_seconds` is what gives the "rendered" duration
+    # and conclusion-hold checks real teeth -- otherwise they would just
+    # re-verify the compiled number the static gate already asserted.
+    # Scoping the hold anchor to the final beat means a conclude beat that
+    # compiled to nothing reports `final_beat_observed=False` and the hold
+    # gate rejects it explicitly, rather than reusing the previous beat's
+    # anchor and silently passing.
+    final_beat_observed = scene.last_final_beat_play_start is not None
     return {
         "frame_size": [width, height],
         # The box `place_vertical_lesson` lays out into, in the same pixel
@@ -230,8 +246,11 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         # can hold the render to the frame layout actually targeted rather than
         # to the wider physical frame.
         "safe_frame": _pixel_bounds(SAFE_FRAME, width, height),
-        "total_duration_seconds": resolved.total_duration_seconds,
-        "conclusion_hold_seconds": resolved.total_duration_seconds - min(conclusion_starts),
+        "total_duration_seconds": scene.elapsed,
+        "final_beat_observed": final_beat_observed,
+        "conclusion_hold_seconds": (
+            scene.elapsed - scene.last_final_beat_play_start if final_beat_observed else 0.0
+        ),
         "simple_reveal_mode": _simple_reveal_mode(resolved),
         "frames": scene.frames,
         "visual_bounds": visual_bounds,
@@ -241,11 +260,6 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         "path_events": path_events,
         "declared_path_events": [
             action.action.path_ref for action in resolved.timeline if action.action.kind in {"trace", "move"}
-        ],
-        "dimension_anchor_checks": dimensions,
-        "declared_dimension_anchors": [
-            relation.ref for relation in program.relations
-            if relation.target.part in DIMENSION_TARGET_PARTS
         ],
         # Evidence that each measured visual actually put its measurements on
         # screen. Read off the rendered mobjects, so it reports what the frame
@@ -327,10 +341,6 @@ def _simple_reveal_mode(resolved) -> str | None:
         ):
             return action.action.mode
     return None
-
-
-def _last_beat_id(resolved) -> str:
-    return max(resolved.timeline, key=lambda action: action.at_seconds + action.duration_seconds).beat_id
 
 
 def _target_label(target) -> str:
@@ -507,10 +517,6 @@ def _pixel_y(y, height) -> float:
     from manim import config
 
     return (config.frame_height / 2 - y) * height / config.frame_height
-
-
-def _point_distance(first, second, width, height) -> float:
-    return (((first[0] - second[0]) / width) ** 2 + ((first[1] - second[1]) / height) ** 2) ** 0.5
 
 
 if __name__ == "__main__":
