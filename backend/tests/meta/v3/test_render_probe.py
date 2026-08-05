@@ -88,6 +88,10 @@ def valid_manifest():
     ("short_conclusion_hold", "conclusion_hold_too_short"),
     ("under_duration", "timeline_duration_out_of_bounds"),
     ("over_duration", "timeline_over_budget"),
+    ("zero_frame_width", "render_probe_contract_invalid"),
+    ("nan_frame_height", "render_probe_contract_invalid"),
+    ("nan_duration", "render_probe_contract_invalid"),
+    ("nan_hold", "render_probe_contract_invalid"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -153,6 +157,18 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["total_duration_seconds"] = 5.5
     elif mutation == "over_duration":
         manifest["total_duration_seconds"] = 12.5
+    elif mutation == "zero_frame_width":
+        # A zero-width frame is numerically valid but explodes `_normalized_distance`
+        # and `_pixel_x` on first use; the contract must reject it before then.
+        manifest["frame_size"] = [0, 500]
+    elif mutation == "nan_frame_height":
+        manifest["frame_size"] = [900, float("nan")]
+    elif mutation == "nan_duration":
+        # `NaN` compares False against every finite bound, so without an
+        # up-front finiteness check the timing gates would silently pass.
+        manifest["total_duration_seconds"] = float("nan")
+    elif mutation == "nan_hold":
+        manifest["conclusion_hold_seconds"] = float("nan")
 
     report = validate_rendered_quality(manifest)
 

@@ -98,7 +98,13 @@ def _render_probe(
         def __init__(self):
             super().__init__()
             self.elapsed = 0.0
-            self.last_play_run_time = 0.0
+            # `elapsed` at the moment the last semantic-bearing play STARTED.
+            # `conclusion_hold_seconds` is then `elapsed - last_semantic_play_start`,
+            # so a zero-duration final action leaves this equal to `elapsed` and
+            # the hold reads as 0 -- retaining an earlier non-zero measurement
+            # (as a "last non-zero run_time" tracker would) would silently pass
+            # the hold gate on a conclude beat whose final play carried no time.
+            self.last_semantic_play_start = 0.0
             self.frames = []
             self.captured_beats = set()
             self.rendered = None
@@ -115,16 +121,17 @@ def _render_probe(
 
         def play(self, *animations, **kwargs):
             duration = kwargs.get("run_time", 0.0)
-            result = super().play(*animations, **kwargs)
-            self.elapsed += duration
             events = tuple(getattr(animations[0], "_semantic_events", ())) if animations else ()
             # Manim's own follow-up calls into `Scene.play` (compilation of an
             # `AnimationGroup`, wrap-up passes) reach us with `run_time=0` and no
-            # `_semantic_events`, so scoping the observed duration to plays that
-            # carried a semantic payload keeps this measurement on renderer
-            # instructions rather than on manim's internal bookkeeping.
-            if events and duration > 0:
-                self.last_play_run_time = duration
+            # `_semantic_events`; scoping the observation to plays that carried a
+            # semantic payload keeps this measurement on renderer instructions.
+            # Recording the start BEFORE `super().play()` so a zero-duration
+            # semantic play still updates the anchor.
+            if events:
+                self.last_semantic_play_start = self.elapsed
+            result = super().play(*animations, **kwargs)
+            self.elapsed += duration
             self.render_events.extend(self._observe_render_event(event) for event in events)
             self._capture_completed_beats()
             return result
@@ -215,15 +222,15 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     path_events = [event["path_ref"] for event in scene.render_events if event["path_ref"] is not None]
     state_events = _state_events(scene.render_events, resolved)
     # `scene.elapsed` is the wall time the probe subprocess actually spent in
-    # play/wait calls; `scene.last_play_run_time` is the duration of the very
-    # last `scene.play()` call. The manifest is renderer-observed evidence, so
-    # timing fields have to read off scene state rather than off
-    # `resolved.total_duration_seconds` -- otherwise the "rendered" duration and
-    # conclusion-hold checks would just re-verify the same compiled number the
-    # static gate already asserted. `conclusion_hold_seconds` observes the
-    # last play's run_time because the renderer emits no trailing wait: the
-    # concluding animation IS the hold, and the static gate's own semantic is
-    # "shortest action in the conclude beat >= 1.5s".
+    # play/wait calls; `scene.last_semantic_play_start` is the elapsed at the
+    # moment the last semantic-bearing play STARTED, so `conclusion_hold_seconds`
+    # is the interval that final play took plus any trailing wait. Reading off
+    # scene state rather than off `resolved.total_duration_seconds` is what
+    # gives the "rendered" duration and conclusion-hold checks real teeth --
+    # otherwise they would just re-verify the compiled number the static gate
+    # already asserted. Anchoring on the semantic play's start (not on its
+    # observed run_time) also makes a zero-duration final action read as
+    # hold = 0 instead of retaining an earlier action's run_time.
     return {
         "frame_size": [width, height],
         # The box `place_vertical_lesson` lays out into, in the same pixel
@@ -232,7 +239,7 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         # to the wider physical frame.
         "safe_frame": _pixel_bounds(SAFE_FRAME, width, height),
         "total_duration_seconds": scene.elapsed,
-        "conclusion_hold_seconds": scene.last_play_run_time,
+        "conclusion_hold_seconds": scene.elapsed - scene.last_semantic_play_start,
         "simple_reveal_mode": _simple_reveal_mode(resolved),
         "frames": scene.frames,
         "visual_bounds": visual_bounds,

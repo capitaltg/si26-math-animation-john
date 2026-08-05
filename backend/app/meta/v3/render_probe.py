@@ -3,6 +3,7 @@
 import io
 import json
 import logging
+import math
 import shutil
 import subprocess
 import sys
@@ -43,8 +44,16 @@ class ProbeOutput:
 
 
 def validate_rendered_quality(manifest: dict) -> QualityReport:
+    # The contract runs first and short-circuits so downstream checks may
+    # dereference typed fields directly: a manifest missing `frame_size` or
+    # carrying `NaN`/zero dimensions would otherwise crash inside
+    # `_normalized_distance`/`_pixel_x` before the failing contract check ever
+    # got reported.
+    contract = check_manifest_contract(manifest)
+    if not contract.passed:
+        return QualityReport(False, [contract])
     checks = [
-        check_manifest_contract(manifest),
+        contract,
         check_non_blank_frames(manifest),
         check_frame_bounds(manifest),
         check_visual_overlap(manifest),
@@ -98,6 +107,18 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         return _failed("render_probe_contract_invalid", "visual_bounds", "probe emitted no visual bounds to evaluate")
     if not _numbers(manifest["frame_size"], 2):
         return _failed("render_probe_contract_invalid", "frame_size", "frame dimensions must be numeric")
+    # A `[0, 500]` or `[NaN, 500]` frame size passes typing but blows up
+    # `_normalized_distance` (division by zero) and `_pixel_x`/`_pixel_y` on
+    # first use, so the contract rejects any non-finite or non-positive
+    # dimension before downstream checks touch it.
+    if not all(math.isfinite(v) and v > 0 for v in manifest["frame_size"]):
+        return _failed("render_probe_contract_invalid", "frame_size", "frame dimensions must be positive and finite")
+    for field in ("total_duration_seconds", "conclusion_hold_seconds"):
+        if not math.isfinite(manifest[field]):
+            # `NaN` compares False against every finite bound, so a manifest
+            # carrying `NaN` here would silently pass both timing checks. Reject
+            # up front rather than teaching each check to look for it.
+            return _failed("render_probe_contract_invalid", field, "timing values must be finite")
     # Required, not defaulted: without it `check_frame_bounds` has no box to
     # compare against, and silently falling back to the physical frame would
     # reinstate the unguarded margin this evidence exists to close.
