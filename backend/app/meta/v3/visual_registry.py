@@ -1,3 +1,4 @@
+from fractions import Fraction
 from math import ceil, cos, floor, sin, tau
 from typing import Protocol
 
@@ -547,6 +548,11 @@ COORDINATE_PLANE_HALF_HEIGHT = 2.2
 #: a legibility bound, not a fit bound.
 COORDINATE_PLANE_MAX_TICKS_PER_AXIS = 10
 
+#: Hard ceiling on grid lines per axis. Grid ignores the tick-thinning stride
+#: (grid contract: a line at every integer), so a very wide span would otherwise
+#: paint a solid band -- refuse instead of silently omitting integer lines.
+COORDINATE_PLANE_MAX_GRID_LINES_PER_AXIS = 20
+
 #: Vertical gap between a plotted point and the label above it.
 COORDINATE_POINT_LABEL_OFFSET = 0.12
 
@@ -577,10 +583,21 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     """
     x_min, x_max = values["x_min"], values["x_max"]
     y_min, y_max = values["y_min"], values["y_max"]
-    if x_max <= x_min:
-        raise ValueError("coordinate_plane x_max must exceed x_min")
-    if y_max <= y_min:
-        raise ValueError("coordinate_plane y_max must exceed y_min")
+    for axis, low, high in (("x", x_min, x_max), ("y", y_min, y_max)):
+        if high <= low:
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}",
+                expected=f"{axis}_max strictly greater than {axis}_min",
+                observed=(
+                    f"{spec.ref} {axis} span [{format_number(low)}, "
+                    f"{format_number(high)}] is empty or inverted"
+                ),
+                hint=(
+                    f"raise {axis}_max above {axis}_min so the plane has a "
+                    "positive span on this axis"
+                ),
+            ))
     grid_enabled = bool(values.get("grid", False))
     # Ticked axes are the coordinate_plane's readable contract; a span with no
     # integer inside (e.g. 0.1..0.9) yields zero ticks -- refuse rather than
@@ -618,8 +635,18 @@ def _measure_coordinate_plane(*, spec, values, measurer):
                 ),
             ))
         seen_points.add(key)
-    span_x = float(x_max - x_min)
-    span_y = float(y_max - y_min)
+    # Centers stay exact as Fraction so a narrow span at a large magnitude
+    # (e.g. [10**9 - 10**-8, 10**9]) doesn't collapse to a single float and
+    # project both endpoints onto the same scene coord. Differences from the
+    # center are computed exactly, then narrowed to float once.
+    x_min_q = Fraction(x_min)
+    x_max_q = Fraction(x_max)
+    y_min_q = Fraction(y_min)
+    y_max_q = Fraction(y_max)
+    span_x_q = x_max_q - x_min_q
+    span_y_q = y_max_q - y_min_q
+    span_x = float(span_x_q)
+    span_y = float(span_y_q)
     # One scale drawn from whichever axis is tighter, so a unit step in world
     # coords covers the same scene distance on both axes.
     unit_scale = min(
@@ -628,22 +655,25 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     )
     extent_x = span_x * unit_scale / 2
     extent_y = span_y * unit_scale / 2
-    x_center = (float(x_min) + float(x_max)) / 2
-    y_center = (float(y_min) + float(y_max)) / 2
+    x_center = (x_min_q + x_max_q) / 2
+    y_center = (y_min_q + y_max_q) / 2
 
     def project(px, py):
-        return (float(px) - x_center) * unit_scale, (float(py) - y_center) * unit_scale
+        return (
+            float(Fraction(px) - x_center) * unit_scale,
+            float(Fraction(py) - y_center) * unit_scale,
+        )
 
     # World origin projected into scene coords, clamped to the nearest edge
     # when the declared span excludes zero, so the axis line stays visible.
-    zero_u = max(-extent_x, min(extent_x, -x_center * unit_scale))
-    zero_v = max(-extent_y, min(extent_y, -y_center * unit_scale))
+    zero_u = max(-extent_x, min(extent_x, float(-x_center) * unit_scale))
+    zero_v = max(-extent_y, min(extent_y, float(-y_center) * unit_scale))
 
     x_tick_payload = _coordinate_tick_payload(
-        _integer_ticks_in_span(x_min, x_max), unit_scale, measurer, axis="x",
+        _integer_ticks_in_span(x_min_q, x_max_q), unit_scale, measurer, axis="x",
     )
     y_tick_payload = _coordinate_tick_payload(
-        _integer_ticks_in_span(y_min, y_max), unit_scale, measurer, axis="y",
+        _integer_ticks_in_span(y_min_q, y_max_q), unit_scale, measurer, axis="y",
     )
     _require_coordinate_tick_labels_do_not_collide(
         spec, x_tick_payload, unit_scale, axis="x",
@@ -656,18 +686,29 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     # renderer paints them at; the collision search below reads these.
     x_tick_rects = [
         _tick_label_rect_x(
-            (float(value) - x_center) * unit_scale, zero_v, w, h,
+            float(value - x_center) * unit_scale, zero_v, w, h,
         )
         for value, _text, w, h in x_tick_payload
     ]
     y_tick_rects = [
         _tick_label_rect_y(
-            (float(value) - y_center) * unit_scale, zero_u, w, h,
+            float(value - y_center) * unit_scale, zero_u, w, h,
         )
         for value, _text, w, h in y_tick_payload
     ]
     x_tick_suppressed = [False] * len(x_tick_payload)
     y_tick_suppressed = [False] * len(y_tick_payload)
+
+    # Cross-axis tick labels can occupy the same rectangle: for span [-3, 5]
+    # the x-axis "-1" (below x-axis) and y-axis "-1" (left of y-axis) can land
+    # on top of each other at Manim's actual label metrics. Suppress the
+    # y-axis label per collision so the label content still appears once.
+    for xi, xr in enumerate(x_tick_rects):
+        for yi, yr in enumerate(y_tick_rects):
+            if y_tick_suppressed[yi]:
+                continue
+            if _rects_overlap(xr, yr):
+                y_tick_suppressed[yi] = True
 
     parts: dict = {}
     point_payload = []
@@ -675,9 +716,23 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     for index, point in enumerate(values["points"]):
         px, py = point["x"], point["y"]
         if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
-            raise ValueError(
-                f"point ({px}, {py}) outside plane [{x_min}, {x_max}] x [{y_min}, {y_max}]"
-            )
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}.points[{index}]",
+                expected=(
+                    f"a point inside the declared plane [{format_number(x_min)}, "
+                    f"{format_number(x_max)}] x [{format_number(y_min)}, "
+                    f"{format_number(y_max)}]"
+                ),
+                observed=(
+                    f"{spec.ref} plots ({format_number(px)}, {format_number(py)}) "
+                    "outside the declared span"
+                ),
+                hint=(
+                    "move the point inside the span, or widen the axis span to "
+                    "include the point -- an off-plane dot draws against the axis wall"
+                ),
+            ))
         u, v = project(px, py)
         parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
         label_text = _coordinate_label(px, py)
@@ -732,13 +787,18 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         })
 
     if grid_enabled:
+        # Grid contract: a line at every integer. Do NOT reuse the tick helper,
+        # which thins to at most COORDINATE_PLANE_MAX_TICKS_PER_AXIS values --
+        # a [0, 10] span would silently drop the odd integers. Instead, expand
+        # the integer range directly and refuse spans that would exceed the
+        # per-axis grid ceiling rather than paint a dense wall of lines.
+        x_grid_ints = _integer_grid_values(spec, x_min_q, x_max_q, axis="x")
+        y_grid_ints = _integer_grid_values(spec, y_min_q, y_max_q, axis="y")
         x_grid_lines = tuple(
-            (float(value) - x_center) * unit_scale
-            for value in _integer_ticks_in_span(x_min, x_max)
+            float(v - x_center) * unit_scale for v in x_grid_ints
         )
         y_grid_lines = tuple(
-            (float(value) - y_center) * unit_scale
-            for value in _integer_ticks_in_span(y_min, y_max)
+            float(v - y_center) * unit_scale for v in y_grid_ints
         )
     else:
         x_grid_lines = ()
@@ -764,14 +824,14 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "tick_label_gap": COORDINATE_TICK_LABEL_GAP,
             "x_ticks": tuple(
                 {"value": value,
-                 "u": (float(value) - x_center) * unit_scale,
+                 "u": float(value - x_center) * unit_scale,
                  "label": ("" if x_tick_suppressed[i] else text),
                  "label_width": w, "label_height": h}
                 for i, (value, text, w, h) in enumerate(x_tick_payload)
             ),
             "y_ticks": tuple(
                 {"value": value,
-                 "v": (float(value) - y_center) * unit_scale,
+                 "v": float(value - y_center) * unit_scale,
                  "label": ("" if y_tick_suppressed[i] else text),
                  "label_width": w, "label_height": h}
                 for i, (value, text, w, h) in enumerate(y_tick_payload)
@@ -873,15 +933,49 @@ def _integer_ticks_in_span(low, high) -> list:
     A wide span (e.g. [0, 10**12]) would materialize every integer before the
     thinning step ran, exhausting memory. Compute the stride from the count
     up front so `range` yields at most COORDINATE_PLANE_MAX_TICKS_PER_AXIS
-    values regardless of span size.
+    values regardless of span size. Endpoints stay exact (Fraction / int) so
+    a narrow span at a large magnitude doesn't lose its ceil/floor.
     """
-    lo, hi = int(ceil(float(low))), int(floor(float(high)))
+    lo, hi = int(ceil(low)), int(floor(high))
     if hi < lo:
         return []
     count = hi - lo + 1
     if count > COORDINATE_PLANE_MAX_TICKS_PER_AXIS:
         stride = -(-count // COORDINATE_PLANE_MAX_TICKS_PER_AXIS)
         return list(range(lo, hi + 1, stride))
+    return list(range(lo, hi + 1))
+
+
+def _integer_grid_values(spec, low, high, *, axis: str) -> list:
+    """Every integer inside [low, high], refusing spans that would exceed
+    COORDINATE_PLANE_MAX_GRID_LINES_PER_AXIS.
+
+    Grid lines are a "line at every integer" contract, so this bypasses the
+    tick-thinning stride -- a [0, 10] span emits 11 lines, not the 6 the
+    thinned tick set would give. Wide spans get rejected so the plane never
+    silently omits integer grid lines.
+    """
+    lo, hi = int(ceil(low)), int(floor(high))
+    if hi < lo:
+        return []
+    count = hi - lo + 1
+    if count > COORDINATE_PLANE_MAX_GRID_LINES_PER_AXIS:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"a {axis} span whose integer count is at most "
+                f"{COORDINATE_PLANE_MAX_GRID_LINES_PER_AXIS} when grid=true"
+            ),
+            observed=(
+                f"{spec.ref} {axis} span [{format_number(low)}, "
+                f"{format_number(high)}] would emit {count} grid lines"
+            ),
+            hint=(
+                f"narrow the {axis} span, or set grid=false -- a grid line at "
+                "every integer would paint a solid band at this density"
+            ),
+        ))
     return list(range(lo, hi + 1))
 
 
@@ -975,14 +1069,14 @@ def _coordinate_plane_bounds(
     for i, (value, _text, w, h) in enumerate(x_tick_payload):
         if x_tick_suppressed[i]:
             continue
-        u = (float(value) - x_center) * unit_scale
+        u = float(value - x_center) * unit_scale
         left = min(left, u - w / 2)
         right = max(right, u + w / 2)
         bottom = min(bottom, zero_v - COORDINATE_TICK_LABEL_GAP - h)
     for i, (value, _text, w, h) in enumerate(y_tick_payload):
         if y_tick_suppressed[i]:
             continue
-        v = (float(value) - y_center) * unit_scale
+        v = float(value - y_center) * unit_scale
         top = max(top, v + h / 2)
         bottom = min(bottom, v - h / 2)
         left = min(left, zero_u - COORDINATE_TICK_LABEL_GAP - w)
