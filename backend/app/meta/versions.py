@@ -25,6 +25,9 @@
 #    matching `CoordinatePlaneProgramVisual` in `dsl/scene_program.py`; a
 #    version-7 compiler does not know the new kind, so a report stamped 7 that
 #    references a coordinate_plane draft must not be trusted as current.
+#    `CoordinatePlaneVisual` also gains an optional `grid` field, so a plan
+#    that requests grid lines cannot be validated against a version-7
+#    compiler that would reject the extra field.
 DSL_COMPILER_VERSION = 8
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
@@ -41,4 +44,10 @@ DSL_COMPILER_VERSION = 8
 #    version-6 dynamic renderer cannot deserialize the new frozen visual, so
 #    an artifact stamped 6 that carries a coordinate_plane must not be
 #    replayed.
-DYNAMIC_RENDERER_VERSION = 7
+# 8: `coordinate_plane` draws optional grid lines, honours per-point
+#    `label_dx`/`label_dy` quadrant offsets, and skips tick labels the
+#    measurer suppressed to avoid a collision -- a version-7 renderer paints
+#    every point label above its dot and every tick label unconditionally,
+#    which would put glyphs on top of each other for the payloads a
+#    version-8 measurer emits.
+DYNAMIC_RENDERER_VERSION = 8

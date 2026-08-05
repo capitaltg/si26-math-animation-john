@@ -406,3 +406,112 @@ def test_a_coordinate_plane_rejects_a_point_outside_the_declared_span():
         )
 
     assert "outside" in str(exc_info.value)
+
+
+def test_a_coordinate_plane_bounded_tick_material_survives_a_trillion_wide_span():
+    """A span of [0, 10**12] used to materialize every integer before the
+    per-axis cap thinned the list, which exhausted process memory. The
+    stride is now derived from the count before `range` is expanded, so a
+    trillion-unit span resolves under the tick ceiling with no allocation
+    spike."""
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(0), "x_max": Fraction(10 ** 12),
+            "y_min": Fraction(0), "y_max": Fraction(4),
+            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    from app.meta.v3.visual_registry import COORDINATE_PLANE_MAX_TICKS_PER_AXIS
+    assert len(measured.payload["x_ticks"]) <= COORDINATE_PLANE_MAX_TICKS_PER_AXIS
+
+
+def test_a_coordinate_plane_point_label_moves_out_of_a_tick_label_rectangle():
+    """The acceptance fixture places (-1, 4) whose label rectangle sits on
+    top of the y-axis tick labels 4 and 5 if it is drawn above the dot.
+    The measurer now probes the four quadrants and picks one whose rect
+    does not overlap any tick or prior point label, so the label offset
+    for the second point is not the historical above-the-dot placement."""
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-3), "x_max": Fraction(5),
+            "y_min": Fraction(-3), "y_max": Fraction(5),
+            "points": [
+                {"x": Fraction(2), "y": Fraction(3)},
+                {"x": Fraction(-1), "y": Fraction(4)},
+            ],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    second = measured.payload["points"][1]
+    assert (second["label_dx"], second["label_dy"]) != (0.0, second["label_dy"]) or second["label_dy"] < 0
+    # No point label rectangle overlaps any rendered tick label rectangle.
+    point_rects = [
+        (
+            p["x"] + p["label_dx"] - p["label_width"] / 2,
+            p["x"] + p["label_dx"] + p["label_width"] / 2,
+            p["y"] + p["label_dy"] - p["label_height"] / 2,
+            p["y"] + p["label_dy"] + p["label_height"] / 2,
+        )
+        for p in measured.payload["points"]
+    ]
+    zero_v = measured.payload["axis_zero_v"]
+    zero_u = measured.payload["axis_zero_u"]
+    from app.meta.v3.visual_registry import (
+        COORDINATE_TICK_LABEL_GAP, _rects_overlap,
+    )
+    for tick in measured.payload["x_ticks"]:
+        if not tick["label"]:
+            continue
+        w, h = tick["label_width"], tick["label_height"]
+        u = tick["u"]
+        cy = zero_v - COORDINATE_TICK_LABEL_GAP - h / 2
+        tick_rect = (u - w / 2, u + w / 2, cy - h / 2, cy + h / 2)
+        for pr in point_rects:
+            assert not _rects_overlap(pr, tick_rect)
+    for tick in measured.payload["y_ticks"]:
+        if not tick["label"]:
+            continue
+        w, h = tick["label_width"], tick["label_height"]
+        v = tick["v"]
+        cx = zero_u - COORDINATE_TICK_LABEL_GAP - w / 2
+        tick_rect = (cx - w / 2, cx + w / 2, v - h / 2, v + h / 2)
+        for pr in point_rects:
+            assert not _rects_overlap(pr, tick_rect)
+
+
+def test_a_coordinate_plane_emits_grid_lines_only_when_the_grid_flag_is_set():
+    """Issue #108's acceptance calls the grid optional. The payload carries
+    an integer grid line for each axis unit when `grid` is true and an
+    empty tuple otherwise, so a plan that does not opt in renders bare
+    axes."""
+    off = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-2), "x_max": Fraction(2),
+            "y_min": Fraction(-2), "y_max": Fraction(2),
+            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+        },
+        LiteralTextMeasurer(),
+    )
+    on = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-2), "x_max": Fraction(2),
+            "y_min": Fraction(-2), "y_max": Fraction(2),
+            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+            "grid": True,
+        },
+        LiteralTextMeasurer(),
+    )
+
+    assert off.payload["grid"] is False
+    assert off.payload["x_grid_lines"] == ()
+    assert off.payload["y_grid_lines"] == ()
+    assert on.payload["grid"] is True
+    assert len(on.payload["x_grid_lines"]) == 5
+    assert len(on.payload["y_grid_lines"]) == 5

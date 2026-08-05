@@ -147,6 +147,7 @@ def evaluate_program_visual(
                 {"x": _evaluate(point.x, values), "y": _evaluate(point.y, values)}
                 for point in visual.points
             ],
+            "grid": bool(visual.grid),
         }
     if kind == "label":
         return _evaluated_spec(visual), {"text": visual.text}

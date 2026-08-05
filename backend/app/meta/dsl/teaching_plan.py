@@ -176,6 +176,14 @@ class CoordinatePlaneVisual(BaseModel):
             "legible size."
         ),
     )
+    grid: bool = Field(
+        default=False,
+        description=(
+            "When true, draw faint grid lines at every integer coordinate "
+            "inside the declared span. Ticket #108 acceptance calls the grid "
+            "optional; omit or set false for a bare axes-and-points plane."
+        ),
+    )
 
 
 SemanticVisualSpec = Annotated[

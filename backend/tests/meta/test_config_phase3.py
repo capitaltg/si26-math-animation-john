@@ -64,5 +64,15 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # visual kind (axes through the projected zero, plotted points with
     # labels, whole-number ticks); a version-6 renderer cannot deserialize the
     # new frozen visual.
+    #
+    # DSL_COMPILER_VERSION 8 adds the optional `grid` flag on
+    # `CoordinatePlaneVisual` (issue #108 acceptance); a plan requesting a
+    # grid cannot be validated against the version-7 model, which forbids
+    # extra fields.
+    #
+    # DYNAMIC_RENDERER_VERSION 8 covers optional grid lines, per-point
+    # `label_dx`/`label_dy` quadrant offsets, and skipping tick labels the
+    # measurer suppressed to avoid overlapping a point label -- a version-7
+    # renderer would overlay glyphs the newer measurer already resolved.
     assert DSL_COMPILER_VERSION == 8
-    assert DYNAMIC_RENDERER_VERSION == 7
+    assert DYNAMIC_RENDERER_VERSION == 8

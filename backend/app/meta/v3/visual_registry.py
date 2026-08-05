@@ -566,6 +566,14 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     rather than the visual centre so (0, 0) reads as the origin.
 
     Refuses a point outside the declared span rather than clipping silently.
+
+    Point labels probe four candidate quadrants (above, right, left, below)
+    and pick the first whose rectangle collides with no already-placed tick
+    label or previously placed point label; if every quadrant collides the
+    default (above) quadrant wins and any tick labels it overlaps are
+    suppressed so no glyphs are drawn on top of each other. When `grid` is
+    set, integer grid lines are emitted so the renderer can draw them behind
+    the axes.
     """
     x_min, x_max = values["x_min"], values["x_max"]
     y_min, y_max = values["y_min"], values["y_max"]
@@ -573,6 +581,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         raise ValueError("coordinate_plane x_max must exceed x_min")
     if y_max <= y_min:
         raise ValueError("coordinate_plane y_max must exceed y_min")
+    grid_enabled = bool(values.get("grid", False))
     span_x = float(x_max - x_min)
     span_y = float(y_max - y_min)
     # One scale drawn from whichever axis is tighter, so a unit step in world
@@ -594,23 +603,6 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     zero_u = max(-extent_x, min(extent_x, -x_center * unit_scale))
     zero_v = max(-extent_y, min(extent_y, -y_center * unit_scale))
 
-    parts: dict = {}
-    point_payload = []
-    for index, point in enumerate(values["points"]):
-        px, py = point["x"], point["y"]
-        if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
-            raise ValueError(
-                f"point ({px}, {py}) outside plane [{x_min}, {x_max}] x [{y_min}, {y_max}]"
-            )
-        u, v = project(px, py)
-        parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
-        label_text = _coordinate_label(px, py)
-        label_w, label_h = measurer.measure(label_text, "label")
-        point_payload.append({
-            "x": u, "y": v, "label": label_text,
-            "label_width": label_w, "label_height": label_h,
-        })
-
     x_tick_payload = _coordinate_tick_payload(
         _integer_ticks_in_span(x_min, x_max), unit_scale, measurer, axis="x",
     )
@@ -624,9 +616,75 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         spec, y_tick_payload, unit_scale, axis="y",
     )
 
+    # Rectangles for every tick label in the same scene coordinates the
+    # renderer paints them at; the collision search below reads these.
+    x_tick_rects = [
+        _tick_label_rect_x(
+            (float(value) - x_center) * unit_scale, zero_v, w, h,
+        )
+        for value, _text, w, h in x_tick_payload
+    ]
+    y_tick_rects = [
+        _tick_label_rect_y(
+            (float(value) - y_center) * unit_scale, zero_u, w, h,
+        )
+        for value, _text, w, h in y_tick_payload
+    ]
+    x_tick_suppressed = [False] * len(x_tick_payload)
+    y_tick_suppressed = [False] * len(y_tick_payload)
+
+    parts: dict = {}
+    point_payload = []
+    point_label_rects: list = []
+    for index, point in enumerate(values["points"]):
+        px, py = point["x"], point["y"]
+        if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
+            raise ValueError(
+                f"point ({px}, {py}) outside plane [{x_min}, {x_max}] x [{y_min}, {y_max}]"
+            )
+        u, v = project(px, py)
+        parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
+        label_text = _coordinate_label(px, py)
+        label_w, label_h = measurer.measure(label_text, "label")
+        chosen_dx, chosen_dy, chosen_rect = _pick_point_label_offset(
+            u, v, label_w, label_h,
+            x_tick_rects, y_tick_rects,
+            x_tick_suppressed, y_tick_suppressed,
+            point_label_rects,
+        )
+        if chosen_rect is None:
+            chosen_dx, chosen_dy = _point_label_candidates(label_w, label_h)[0]
+            chosen_rect = _point_label_rect(u, v, chosen_dx, chosen_dy, label_w, label_h)
+            for i, tr in enumerate(x_tick_rects):
+                if not x_tick_suppressed[i] and _rects_overlap(chosen_rect, tr):
+                    x_tick_suppressed[i] = True
+            for i, tr in enumerate(y_tick_rects):
+                if not y_tick_suppressed[i] and _rects_overlap(chosen_rect, tr):
+                    y_tick_suppressed[i] = True
+        point_label_rects.append(chosen_rect)
+        point_payload.append({
+            "x": u, "y": v, "label": label_text,
+            "label_width": label_w, "label_height": label_h,
+            "label_dx": chosen_dx, "label_dy": chosen_dy,
+        })
+
+    if grid_enabled:
+        x_grid_lines = tuple(
+            (float(value) - x_center) * unit_scale
+            for value in _integer_ticks_in_span(x_min, x_max)
+        )
+        y_grid_lines = tuple(
+            (float(value) - y_center) * unit_scale
+            for value in _integer_ticks_in_span(y_min, y_max)
+        )
+    else:
+        x_grid_lines = ()
+        y_grid_lines = ()
+
     bounds = _coordinate_plane_bounds(
         extent_x, extent_y, zero_u, zero_v,
         point_payload, x_tick_payload, y_tick_payload,
+        x_tick_suppressed, y_tick_suppressed,
         unit_scale=unit_scale, x_center=x_center, y_center=y_center,
     )
     return _measured_visual(
@@ -642,17 +700,85 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "point_label_offset": COORDINATE_POINT_LABEL_OFFSET,
             "tick_label_gap": COORDINATE_TICK_LABEL_GAP,
             "x_ticks": tuple(
-                {"value": value, "u": (float(value) - x_center) * unit_scale,
-                 "label": text, "label_width": w, "label_height": h}
-                for value, text, w, h in x_tick_payload
+                {"value": value,
+                 "u": (float(value) - x_center) * unit_scale,
+                 "label": ("" if x_tick_suppressed[i] else text),
+                 "label_width": w, "label_height": h}
+                for i, (value, text, w, h) in enumerate(x_tick_payload)
             ),
             "y_ticks": tuple(
-                {"value": value, "v": (float(value) - y_center) * unit_scale,
-                 "label": text, "label_width": w, "label_height": h}
-                for value, text, w, h in y_tick_payload
+                {"value": value,
+                 "v": (float(value) - y_center) * unit_scale,
+                 "label": ("" if y_tick_suppressed[i] else text),
+                 "label_width": w, "label_height": h}
+                for i, (value, text, w, h) in enumerate(y_tick_payload)
             ),
+            "grid": grid_enabled,
+            "x_grid_lines": x_grid_lines,
+            "y_grid_lines": y_grid_lines,
         },
     )
+
+
+def _rects_overlap(a, b) -> bool:
+    return a[0] < b[1] and a[1] > b[0] and a[2] < b[3] and a[3] > b[2]
+
+
+def _tick_label_rect_x(u, zero_v, w, h):
+    cy = zero_v - COORDINATE_TICK_LABEL_GAP - h / 2
+    return (u - w / 2, u + w / 2, cy - h / 2, cy + h / 2)
+
+
+def _tick_label_rect_y(v, zero_u, w, h):
+    cx = zero_u - COORDINATE_TICK_LABEL_GAP - w / 2
+    return (cx - w / 2, cx + w / 2, v - h / 2, v + h / 2)
+
+
+def _point_label_candidates(label_w, label_h):
+    off = COORDINATE_POINT_LABEL_OFFSET
+    return (
+        (0.0, off + label_h / 2),          # above
+        (off + label_w / 2, 0.0),          # right
+        (-(off + label_w / 2), 0.0),       # left
+        (0.0, -(off + label_h / 2)),       # below
+    )
+
+
+def _point_label_rect(u, v, dx, dy, w, h):
+    cx, cy = u + dx, v + dy
+    return (cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2)
+
+
+def _pick_point_label_offset(
+    u, v, label_w, label_h,
+    x_tick_rects, y_tick_rects,
+    x_tick_suppressed, y_tick_suppressed,
+    point_label_rects,
+):
+    """Return the first quadrant offset whose rect does not collide.
+
+    Returns (dx, dy, rect) on success; (None, None, None) when every
+    quadrant collides -- the caller then falls back to the default quadrant
+    and suppresses the tick labels the fallback overlaps.
+    """
+    for dx, dy in _point_label_candidates(label_w, label_h):
+        rect = _point_label_rect(u, v, dx, dy, label_w, label_h)
+        if any(
+            _rects_overlap(rect, tr)
+            for i, tr in enumerate(x_tick_rects)
+            if not x_tick_suppressed[i]
+        ):
+            continue
+        if any(
+            _rects_overlap(rect, tr)
+            for i, tr in enumerate(y_tick_rects)
+            if not y_tick_suppressed[i]
+        ):
+            continue
+        if any(_rects_overlap(rect, pr) for pr in point_label_rects):
+            continue
+        return dx, dy, rect
+    return None, None, None
 
 
 def _coordinate_label(x, y) -> str:
@@ -660,15 +786,21 @@ def _coordinate_label(x, y) -> str:
 
 
 def _integer_ticks_in_span(low, high) -> list:
-    """Whole-number ticks inside [low, high], capped for legibility."""
+    """Whole-number ticks inside [low, high], capped for legibility.
+
+    A wide span (e.g. [0, 10**12]) would materialize every integer before the
+    thinning step ran, exhausting memory. Compute the stride from the count
+    up front so `range` yields at most COORDINATE_PLANE_MAX_TICKS_PER_AXIS
+    values regardless of span size.
+    """
     lo, hi = int(ceil(float(low))), int(floor(float(high)))
     if hi < lo:
         return []
-    values = list(range(lo, hi + 1))
-    if len(values) > COORDINATE_PLANE_MAX_TICKS_PER_AXIS:
-        step = -(-len(values) // COORDINATE_PLANE_MAX_TICKS_PER_AXIS)
-        values = values[::step]
-    return values
+    count = hi - lo + 1
+    if count > COORDINATE_PLANE_MAX_TICKS_PER_AXIS:
+        stride = -(-count // COORDINATE_PLANE_MAX_TICKS_PER_AXIS)
+        return list(range(lo, hi + 1, stride))
+    return list(range(lo, hi + 1))
 
 
 def _coordinate_tick_payload(tick_values, unit_scale, measurer, *, axis: str):
@@ -736,6 +868,7 @@ def _require_coordinate_tick_labels_do_not_collide(spec, tick_payload, unit_scal
 def _coordinate_plane_bounds(
     extent_x, extent_y, zero_u, zero_v,
     point_payload, x_tick_payload, y_tick_payload,
+    x_tick_suppressed, y_tick_suppressed,
     *, unit_scale, x_center, y_center,
 ):
     """Widen the raw axis rectangle so no label overhangs its neighbour.
@@ -744,24 +877,29 @@ def _coordinate_plane_bounds(
     label centred on its tick's u can stretch past the axis's left/right
     endpoints, and a y-axis tick label centred on its tick's v can stretch
     past its top/bottom endpoints, so the union has to include each label's
-    full rectangle rather than only the axis-perpendicular strip.
+    full rectangle rather than only the axis-perpendicular strip. Point
+    labels contribute their chosen quadrant's rectangle; suppressed tick
+    labels contribute nothing because the renderer skips them.
     """
     left, right = -extent_x, extent_x
     bottom, top = -extent_y, extent_y
     for point in point_payload:
-        label_center_x = point["x"]
-        label_center_y = (
-            point["y"] + COORDINATE_POINT_LABEL_OFFSET + point["label_height"] / 2
-        )
+        label_center_x = point["x"] + point["label_dx"]
+        label_center_y = point["y"] + point["label_dy"]
         left = min(left, label_center_x - point["label_width"] / 2)
         right = max(right, label_center_x + point["label_width"] / 2)
         top = max(top, label_center_y + point["label_height"] / 2)
-    for value, _text, w, h in x_tick_payload:
+        bottom = min(bottom, label_center_y - point["label_height"] / 2)
+    for i, (value, _text, w, h) in enumerate(x_tick_payload):
+        if x_tick_suppressed[i]:
+            continue
         u = (float(value) - x_center) * unit_scale
         left = min(left, u - w / 2)
         right = max(right, u + w / 2)
         bottom = min(bottom, zero_v - COORDINATE_TICK_LABEL_GAP - h)
-    for value, _text, w, h in y_tick_payload:
+    for i, (value, _text, w, h) in enumerate(y_tick_payload):
+        if y_tick_suppressed[i]:
+            continue
         v = (float(value) - y_center) * unit_scale
         top = max(top, v + h / 2)
         bottom = min(bottom, v - h / 2)

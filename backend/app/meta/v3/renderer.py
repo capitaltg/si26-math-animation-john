@@ -362,6 +362,20 @@ def _build_coordinate_plane(measured, placed):
     zero_v = payload["axis_zero_v"] * scale
     axis_y = cy + zero_v
     axis_x = cx + zero_u
+    grid_lines = []
+    if payload.get("grid"):
+        for u_value in payload.get("x_grid_lines", ()):
+            u = u_value * scale + cx
+            grid_lines.append(Line(
+                _array(Point(u, cy - extent_y)),
+                _array(Point(u, cy + extent_y)),
+            ).set_opacity(0.25))
+        for v_value in payload.get("y_grid_lines", ()):
+            v = v_value * scale + cy
+            grid_lines.append(Line(
+                _array(Point(cx - extent_x, v)),
+                _array(Point(cx + extent_x, v)),
+            ).set_opacity(0.25))
     x_axis = Line(
         _array(Point(cx - extent_x, axis_y)),
         _array(Point(cx + extent_x, axis_y)),
@@ -380,26 +394,39 @@ def _build_coordinate_plane(measured, placed):
             _array(Point(u, axis_y - tick_len)),
             _array(Point(u, axis_y + tick_len)),
         ))
-        label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
-        tick_labels.append(_text(tick["label"], "label", Point(u, label_y), scale))
+        # An empty label means the measurer suppressed it because a point label
+        # would have drawn over it -- keep the tick mark, drop the glyph.
+        if tick["label"]:
+            label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
+            tick_labels.append(_text(tick["label"], "label", Point(u, label_y), scale))
     for tick in payload["y_ticks"]:
         v = tick["v"] * scale + cy
         tick_mobjects.append(Line(
             _array(Point(axis_x - tick_len, v)),
             _array(Point(axis_x + tick_len, v)),
         ))
-        label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
-        tick_labels.append(_text(tick["label"], "label", Point(label_x, v), scale))
+        if tick["label"]:
+            label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
+            tick_labels.append(_text(tick["label"], "label", Point(label_x, v), scale))
     children = _parts_as_dots(measured, offset, "point")
     point_labels = []
-    point_offset = payload["point_label_offset"]
     for point in payload["points"]:
         u = point["x"] * scale + cx
         v = point["y"] * scale + cy
-        label_y = v + (point_offset + point["label_height"] / 2) * scale
-        point_labels.append(_text(point["label"], "label", Point(u, label_y), scale))
+        # Quadrant offset is chosen at measurement so the label rectangle
+        # cannot collide with any tick label rectangle or with a prior point
+        # label; a legacy payload written before the collision search shipped
+        # falls back to the historical above-the-dot placement.
+        if "label_dx" in point:
+            label_x = u + point["label_dx"] * scale
+            label_y = v + point["label_dy"] * scale
+        else:
+            point_offset = payload["point_label_offset"]
+            label_x = u
+            label_y = v + (point_offset + point["label_height"] / 2) * scale
+        point_labels.append(_text(point["label"], "label", Point(label_x, label_y), scale))
     root = VGroup(
-        x_axis, y_axis, *tick_mobjects, *tick_labels,
+        *grid_lines, x_axis, y_axis, *tick_mobjects, *tick_labels,
         *children.values(), *point_labels,
     )
     return root, children
