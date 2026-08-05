@@ -1,4 +1,4 @@
-from math import ceil, cos, sin, tau
+from math import ceil, cos, floor, sin, tau
 from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
@@ -57,6 +57,7 @@ _SUPPORTED_STRATEGIES = {
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
+    "coordinate_plane": {"group_reveal"},
 }
 
 
@@ -534,6 +535,95 @@ def _tape_label_bounds(box: Bounds, *, upper: bool) -> Bounds:
     )
 
 
+#: The plane's half-extent in scene units. Chosen once so every downstream
+#: ticket that plots on a coordinate_plane places a point at the same fraction
+#: of the frame -- an M17-style transformation and an M21-style scatter share
+#: the same grid without renegotiating axis spans.
+COORDINATE_PLANE_HALF_WIDTH = 2.6
+COORDINATE_PLANE_HALF_HEIGHT = 2.2
+
+#: One tick per integer inside the declared span, up to this many. A denser
+#: grid would need labels the ticks cannot fit without collision (see
+#: `number_line`'s inter-label gate) and the archetype is foundational, not a
+#: ready-to-render scatter plot -- downstream tickets tighten this as needed.
+COORDINATE_PLANE_MAX_TICKS_PER_AXIS = 10
+
+
+def _measure_coordinate_plane(*, spec, values, measurer):
+    """Axes centred on the frame with plotted points as addressable parts.
+
+    The plane's numeric span is declared on the visual, and every point is
+    projected into a fixed scene-coord rectangle so downstream tickets can
+    reuse the kind without renegotiating axis extent. Refuses a point outside
+    the declared span rather than clipping silently -- an off-grid point
+    passing quietly would let a plan claim (2, 3) is on screen while the dot
+    was drawn against the axis wall.
+    """
+    x_min, x_max = values["x_min"], values["x_max"]
+    y_min, y_max = values["y_min"], values["y_max"]
+    if x_max <= x_min:
+        raise ValueError("coordinate_plane x_max must exceed x_min")
+    if y_max <= y_min:
+        raise ValueError("coordinate_plane y_max must exceed y_min")
+    half_w, half_h = COORDINATE_PLANE_HALF_WIDTH, COORDINATE_PLANE_HALF_HEIGHT
+    span_x = float(x_max - x_min)
+    span_y = float(y_max - y_min)
+    def project(px, py):
+        u = (float(px - x_min) / span_x) * (2 * half_w) - half_w
+        v = (float(py - y_min) / span_y) * (2 * half_h) - half_h
+        return u, v
+    parts: dict = {}
+    point_payload = []
+    for index, point in enumerate(values["points"]):
+        px, py = point["x"], point["y"]
+        if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
+            raise ValueError(
+                f"point ({px}, {py}) outside plane [{x_min}, {x_max}] x [{y_min}, {y_max}]"
+            )
+        u, v = project(px, py)
+        parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
+        point_payload.append({"x": u, "y": v, "label": _coordinate_label(px, py)})
+    # Ticks inside the span for the plane to read as a grid, not two bare lines.
+    x_ticks = _integer_ticks_in_span(x_min, x_max)
+    y_ticks = _integer_ticks_in_span(y_min, y_max)
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(-half_w, half_w, -half_h, half_h),
+        parts=parts,
+        payload={
+            "x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max,
+            "half_width": half_w, "half_height": half_h,
+            "points": tuple(point_payload),
+            "x_ticks": tuple(
+                {"value": value, "u": project(value, y_min)[0]} for value in x_ticks
+            ),
+            "y_ticks": tuple(
+                {"value": value, "v": project(x_min, value)[1]} for value in y_ticks
+            ),
+        },
+    )
+
+
+def _coordinate_label(x, y) -> str:
+    return f"({format_number(x)}, {format_number(y)})"
+
+
+def _integer_ticks_in_span(low, high) -> list:
+    """Whole-number ticks inside [low, high], capped so the axis stays legible.
+
+    Skips the endpoints when they are already integers -- the axis line itself
+    already reaches them, so a tick on top adds ink without adding information.
+    """
+    lo, hi = int(ceil(float(low))), int(floor(float(high)))
+    if hi < lo:
+        return []
+    values = list(range(lo, hi + 1))
+    if len(values) > COORDINATE_PLANE_MAX_TICKS_PER_AXIS:
+        step = -(-len(values) // COORDINATE_PLANE_MAX_TICKS_PER_AXIS)
+        values = values[::step]
+    return values
+
+
 def _measure_ordered_values(*, spec, values, measurer):
     return measure_ordered_values(
         ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45,
@@ -560,4 +650,5 @@ def default_visual_registry() -> VisualRegistry:
     registry.register("object_set", _measure_object_set)
     registry.register("label", _measure_label)
     registry.register("answer_expression", _measure_answer)
+    registry.register("coordinate_plane", _measure_coordinate_plane)
     return registry

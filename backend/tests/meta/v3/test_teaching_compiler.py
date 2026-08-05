@@ -2037,3 +2037,92 @@ def test_regroup_and_magnitude_comparison_plans_pass_every_quality_gate(compile_
     )
     bar_report = validate_static_quality(bar_plan, bar_program)
     assert bar_report.passed, [check for check in bar_report.checks if not check.passed]
+
+
+def test_coordinate_plane_plan_plotting_two_points_compiles(compile_context):
+    """M14 acceptance fixture: a plan whose primary visual is a coordinate_plane
+    with the two points (2, 3) and (-1, 4) compiles into a scene program and
+    passes every static quality gate.
+
+    Foundational: the plane exposes each plotted point as a `point` semantic
+    part, and downstream tickets (M10, M12, M13, M17, M21) target those parts
+    without renegotiating the plane's numeric span or its scene-coord extent.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Plot ordered pairs on a coordinate plane.",
+        "primary_visual": {
+            "kind": "coordinate_plane", "ref": "plane",
+            "x_min": {"node": "literal", "value": -3},
+            "x_max": {"node": "literal", "value": 5},
+            "y_min": {"node": "literal", "value": -3},
+            "y_max": {"node": "literal", "value": 5},
+            "points": [
+                {"x": {"node": "literal", "value": 2}, "y": {"node": "literal", "value": 3}},
+                {"x": {"node": "literal", "value": -1}, "y": {"node": "literal", "value": 4}},
+            ],
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "plane"}],
+             "intent": "introduce the coordinate plane"},
+            {"id": "focus_first", "kind": "focus",
+             "targets": [{"visual_ref": "plane", "part": "point", "index": 0}],
+             "intent": "point out the first plotted pair"},
+            {"id": "focus_second", "kind": "derive",
+             "targets": [{"visual_ref": "plane", "part": "point", "index": 1}],
+             "intent": "point out the second plotted pair"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "plane"}],
+             "intent": "name the two plotted points"},
+        ],
+        "variation_seed": "m14-plot",
+    })
+
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=2), frozenset(), compile_context,
+    )
+
+    plane_visual = next(v for v in program.visuals if v.ref == "plane")
+    assert plane_visual.kind == "coordinate_plane"
+    assert [(float(p.x.value), float(p.y.value)) for p in plane_visual.points] == [
+        (2.0, 3.0), (-1.0, 4.0),
+    ]
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_coordinate_plane_rejects_a_point_target_beyond_the_declared_points(compile_context):
+    """A plan indexing past the plotted points names something never drawn."""
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Plot ordered pairs on a coordinate plane.",
+        "primary_visual": {
+            "kind": "coordinate_plane", "ref": "plane",
+            "x_min": {"node": "literal", "value": -3},
+            "x_max": {"node": "literal", "value": 5},
+            "y_min": {"node": "literal", "value": -3},
+            "y_max": {"node": "literal", "value": 5},
+            "points": [
+                {"x": {"node": "literal", "value": 2}, "y": {"node": "literal", "value": 3}},
+            ],
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "plane"}],
+             "intent": "introduce the coordinate plane"},
+            {"id": "focus_missing", "kind": "focus",
+             "targets": [{"visual_ref": "plane", "part": "point", "index": 4}],
+             "intent": "name a point that was not plotted"},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "plane"}],
+             "intent": "state the coordinates"},
+        ],
+        "variation_seed": "m14-bad-index",
+    })
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        compile_teaching_plan(plan, LiteralNode(value=2), frozenset(), compile_context)
+
+    assert exc_info.value.failure.code == "target_index_out_of_range"

@@ -137,6 +137,17 @@ def evaluate_program_visual(
             "source_unit": visual.source_unit,
             "target_unit": visual.target_unit,
         }
+    if kind == "coordinate_plane":
+        return _evaluated_spec(visual), {
+            "x_min": _evaluate(visual.x_min, values),
+            "x_max": _evaluate(visual.x_max, values),
+            "y_min": _evaluate(visual.y_min, values),
+            "y_max": _evaluate(visual.y_max, values),
+            "points": [
+                {"x": _evaluate(point.x, values), "y": _evaluate(point.y, values)}
+                for point in visual.points
+            ],
+        }
     if kind == "label":
         return _evaluated_spec(visual), {"text": visual.text}
     if kind == "answer_expression":

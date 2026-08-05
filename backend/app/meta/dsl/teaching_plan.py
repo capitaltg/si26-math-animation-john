@@ -138,11 +138,51 @@ class LabelVisual(BaseModel):
     text: ProseText = Field(min_length=1, max_length=80)
 
 
+class CoordinatePointNode(BaseModel):
+    """One plotted (x, y) pair on a coordinate_plane.
+
+    x/y are expressions so a fixture param may drive the coordinates the way
+    it drives every other visual's numeric fields. Both must resolve inside the
+    plane's declared span; the measurer rejects an out-of-range point.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    x: ExpressionNode
+    y: ExpressionNode
+
+
+class CoordinatePlaneVisual(BaseModel):
+    """A Cartesian grid with plotted points.
+
+    Foundational archetype for MCAP 5.G.A.1-2 / 6.NS.C.6c / 6.NS.C.8 and the
+    substrate downstream tickets attach transformations, scatter plots, and
+    line/polygon drawings to. The plane's numeric span is declared here so the
+    axes never renegotiate their extent per downstream ticket -- a point at
+    (2, 3) sits in the same fraction of the frame regardless of the strategy.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["coordinate_plane"] = "coordinate_plane"
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    x_min: ExpressionNode
+    x_max: ExpressionNode
+    y_min: ExpressionNode
+    y_max: ExpressionNode
+    points: list[CoordinatePointNode] = Field(
+        default_factory=list, max_length=8,
+        description=(
+            "Points to plot as labelled dots. Each point's coordinates must lie "
+            "inside the declared span; at most eight points fit the plane at a "
+            "legible size."
+        ),
+    )
+
+
 SemanticVisualSpec = Annotated[
     Union[
         OrderedValuesVisual, RectangleMeasurementVisual, NumberLineVisual,
         GridVisual, PartitionVisual, BarVisual, ObjectSetVisual, LabelVisual,
-        UnitTapeVisual,
+        UnitTapeVisual, CoordinatePlaneVisual,
     ],
     Field(discriminator="kind"),
 ]

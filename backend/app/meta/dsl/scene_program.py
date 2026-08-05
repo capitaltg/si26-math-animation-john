@@ -4,8 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.teaching_plan import (
-    BarVisual, GridVisual, LabelVisual, NumberLineVisual, ObjectSetVisual,
-    PartitionVisual, UnitTapeVisual,
+    BarVisual, CoordinatePlaneVisual, GridVisual, LabelVisual, NumberLineVisual,
+    ObjectSetVisual, PartitionVisual, UnitTapeVisual,
 )
 from app.meta.dsl.v3_common import (
     MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MIN_ACTION_SECONDS, MIN_SCENE_SECONDS,
@@ -69,12 +69,16 @@ class UnitTapeProgramVisual(UnitTapeVisual):
     initial_role: StyleRole = "structure"
 
 
+class CoordinatePlaneProgramVisual(CoordinatePlaneVisual):
+    initial_role: StyleRole = "structure"
+
+
 ProgramVisual = Annotated[
     Union[
         OrderedValuesProgramVisual, RectangleProgramVisual,
         NumberLineProgramVisual, GridProgramVisual, PartitionProgramVisual,
         BarProgramVisual, ObjectSetProgramVisual, LabelProgramVisual,
-        AnswerProgramVisual, UnitTapeProgramVisual,
+        AnswerProgramVisual, UnitTapeProgramVisual, CoordinatePlaneProgramVisual,
     ],
     Field(discriminator="kind"),
 ]

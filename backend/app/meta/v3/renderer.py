@@ -205,6 +205,8 @@ def _build_visual(placed, palette: str):
         root.add(*edges.values(), *dimension_labels.values())
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
+    elif "x_ticks" in payload:
+        root, children = _build_coordinate_plane(measured, placed)
     elif "markers" in payload:
         root, children = _line_visual(placed, "marker")
         root.add(*_number_line_labels(measured, placed))
@@ -337,6 +339,42 @@ def _number_line_labels(measured, placed):
         for (part_name, index), part in sorted(measured.parts.items(), key=lambda item: item[0][1])
         if part_name == "marker"
     ]
+
+
+def _build_coordinate_plane(measured, placed):
+    """Axes with integer ticks, plus one dot per plotted point.
+
+    Point positions come from `measured.parts` (already scaled by layout) so
+    the dots inherit the lesson's uniform scale like every other part-derived
+    child. Tick and axis endpoints come from payload and are scaled explicitly,
+    matching how `_line_visual` handles the number line.
+    """
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    half_w = payload["half_width"] * scale
+    half_h = payload["half_height"] * scale
+    cx, cy = offset.x, offset.y
+    x_axis = Line(
+        _array(Point(cx - half_w, cy)), _array(Point(cx + half_w, cy)),
+    )
+    y_axis = Line(
+        _array(Point(cx, cy - half_h)), _array(Point(cx, cy + half_h)),
+    )
+    tick_len = 0.08 * scale
+    tick_mobjects = []
+    for tick in payload["x_ticks"]:
+        u = tick["u"] * scale + cx
+        tick_mobjects.append(Line(
+            _array(Point(u, cy - tick_len)), _array(Point(u, cy + tick_len)),
+        ))
+    for tick in payload["y_ticks"]:
+        v = tick["v"] * scale + cy
+        tick_mobjects.append(Line(
+            _array(Point(cx - tick_len, v)), _array(Point(cx + tick_len, v)),
+        ))
+    children = _parts_as_dots(measured, offset, "point")
+    root = VGroup(x_axis, y_axis, *tick_mobjects, *children.values())
+    return root, children
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):

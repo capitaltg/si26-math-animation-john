@@ -36,6 +36,15 @@ class SceneTextMeasurer:
         ("bar", "magnitude_comparison", {"value": Fraction(3), "maximum": Fraction(5)}, ("segment", 4)),
         ("object_set", "group_reveal", {"count": 6}, ("item", 5)),
         ("label", "group_reveal", {"text": "Answer"}, None),
+        (
+            "coordinate_plane", "group_reveal",
+            {
+                "x_min": Fraction(-3), "x_max": Fraction(5),
+                "y_min": Fraction(-3), "y_max": Fraction(5),
+                "points": [{"x": Fraction(2), "y": Fraction(3)}, {"x": Fraction(-1), "y": Fraction(4)}],
+            },
+            ("point", 1),
+        ),
     ],
 )
 def test_default_registry_measures_literal_visuals_with_finite_root_and_child_anchors(
@@ -347,3 +356,53 @@ def test_a_number_line_marker_label_is_a_decimal_not_a_ratio():
     )
 
     assert measured.payload["marker_labels"] == ("2.75",)
+
+
+def test_a_coordinate_plane_places_plotted_points_inside_a_fixed_scene_extent():
+    """The M14 fixture: plot (2, 3) and (-1, 4) on a plane spanning [-3, 5].
+
+    The plane's scene-coord extent is fixed (see COORDINATE_PLANE_HALF_WIDTH /
+    _HALF_HEIGHT), so a downstream ticket that reuses the kind gets the same
+    frame fraction per data point regardless of the numeric span the lesson
+    declares. Both points land inside the plane's bounds and every point is
+    addressable as a `point` semantic part.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-3), "x_max": Fraction(5),
+            "y_min": Fraction(-3), "y_max": Fraction(5),
+            "points": [
+                {"x": Fraction(2), "y": Fraction(3)},
+                {"x": Fraction(-1), "y": Fraction(4)},
+            ],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    for index in (0, 1):
+        part = measured.parts[("point", index)]
+        assert measured.bounds.left <= part.bounds.left
+        assert measured.bounds.right >= part.bounds.right
+        assert measured.bounds.bottom <= part.bounds.bottom
+        assert measured.bounds.top >= part.bounds.top
+    labels = tuple(point["label"] for point in measured.payload["points"])
+    assert labels == ("(2, 3)", "(-1, 4)")
+
+
+def test_a_coordinate_plane_rejects_a_point_outside_the_declared_span():
+    """A dot outside the plane would draw against the axis wall while the plan
+    still claimed the fixture value was on screen. Refuse at measurement so the
+    fixture author sees the mismatch."""
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(0), "x_max": Fraction(4),
+                "y_min": Fraction(0), "y_max": Fraction(4),
+                "points": [{"x": Fraction(5), "y": Fraction(2)}],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert "outside" in str(exc_info.value)
