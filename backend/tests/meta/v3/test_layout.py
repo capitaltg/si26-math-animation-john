@@ -288,25 +288,57 @@ def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_e
     assert _by_ref(with_relation) == _by_ref(without_relation)
 
 
-def _horizontal_overlap(first, second):
-    return max(first.left, second.left) < min(first.right, second.right)
+def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale():
+    """Renderer-backed regression: build the callout with Manim exactly the
+    way `renderer._build_relation` does (`Text` at `FONT_SIZES["label"]`
+    plus an `Arrow`), position it at the layout's placed anchor, and
+    verify its rendered bottom sits above the answer's top. A fixed
+    per-character estimate understates wide-glyph widths, so the check
+    reads actual Manim bounds rather than trusting an estimator."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    measurer = _WidthPerCharacterMeasurer()
+    primary = _tape_like_primary(height=1.0, width=4.0)
+    answer = _answer("2750 meters", measurer)
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson([primary, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    anchor = by_ref["tape"].anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+
+    rendered_bottom = float(rendered.get_bottom()[1])
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    assert rendered_bottom >= answer_top - 1e-6, (
+        f"rendered callout bottom {rendered_bottom:g} overruns "
+        f"answer top {answer_top:g}"
+    )
+    assert rendered_bottom >= SAFE_FRAME.bottom - 1e-6, (
+        f"rendered callout bottom {rendered_bottom:g} escapes safe frame"
+    )
 
 
-def _vertical_overlap(first, second):
-    return max(first.bottom, second.bottom) < min(first.top, second.top)
-
-
-def test_wide_bottom_callout_overlapping_a_taller_side_forfeits_band_padding_credit():
-    """When the callout's estimated horizontal reach intersects a taller side
-    visual's x-range, its downward envelope would render into the side's
-    pixels (rendered `callout_collision`). The layout must not credit that
-    occupied band padding as if it were empty room for the callout.
-
-    Same geometry as the disjoint-callout tall-side case, but with a
-    ``1 km = 1000 m`` label the estimator gives ~2.6 units wide -- enough
-    that the callout at box[0].x = -1.5 (range ~(-2.8, -0.2)) overlaps the
-    left side stack (~(-4.45, -2.45)) and thereby loses its band-padding
-    credit."""
+def test_bottom_callout_on_a_primary_beside_a_taller_side_visual_forfeits_band_credit():
+    """A taller side visual drops band_bottom below `primary.bounds.bottom`,
+    but that padding is occupied by the side over the side's x-range;
+    counting it as empty callout room lets the rendered gate catch a
+    `callout_collision`. Verifying disjointness would need the callout's
+    Manim-measured width against the side's *scaled* placed range (a fixed
+    per-char estimate understates wide glyphs like "WWWWWW" by ~2x, and
+    side ranges scale while the callout does not), so the layout forfeits
+    the credit rather than risking a false positive. The lesson rejects at
+    compile time rather than dead-ending at the render probe."""
     primary = _tape_like_primary(height=1.0, width=4.0)
     tall_side = MeasuredVisual(
         ref="tall", bounds=Bounds(-1.0, 1.0, -4.25, 4.25),
@@ -316,80 +348,14 @@ def test_wide_bottom_callout_overlapping_a_taller_side_forfeits_band_padding_cre
         ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
         parts={}, paths={}, payload={},
     )
-    relations = [_callout(
-        "tape", part="box", index=0, anchor="bottom", text="1 km = 1000 m",
-    )]
+    relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
 
-    # Without band-padding credit, the constraint drops the scale to 0.6961
-    # -- below MIN_TEXT_SCALE = 0.7 -- and the layout raises rather than
-    # producing a placement that would render as a callout_collision.
+    # Column: band_h(8.5) + GAP(0.45) + answer_h(0.55) = 9.5. Without band
+    # padding credited, the callout constraint drops the scale to
+    # (7.2 - 0.9) / (9.5 - 0.45) = 0.6961 -- below MIN_TEXT_SCALE = 0.7.
     with pytest.raises(V3ValidationError) as excinfo:
         place_vertical_lesson([primary, tall_side, answer], relations)
     assert excinfo.value.failure.code == "below_minimum_text_scale"
-
-
-def test_wide_bottom_callout_disjoint_from_side_would_not_overlap_side_at_render():
-    """Complements the collision guard: when the callout does stay clear of
-    the side visual's x-range at the solved scale, its rendered envelope
-    also stays clear -- the disjointness check is scale-invariant."""
-    primary = _tape_like_primary(height=1.0, width=4.0)
-    tall_side = MeasuredVisual(
-        ref="tall", bounds=Bounds(-1.0, 1.0, -4.25, 4.25),
-        parts={}, paths={}, payload={},
-    )
-    answer = MeasuredVisual(
-        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
-        parts={}, paths={}, payload={},
-    )
-    # Short callout (half-width ~0.1 unscaled) sitting under box[0] at
-    # x = -1.5; the left side stack starts at x = -2.45, so the two are
-    # comfortably disjoint at every scale.
-    relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
-
-    placed = place_vertical_lesson([primary, tall_side, answer], relations)
-
-    by_ref = {item.measured.ref: item for item in placed}
-    scale = by_ref["tape"].scale
-    anchor = by_ref["tape"].anchor(part="box", index=0, name="bottom")
-    half = 0.5 * len("!") * 0.2 * scale  # rendered half-width at the fitted scale
-    callout_bounds = Bounds(
-        anchor.x - half, anchor.x + half, anchor.y - CALLOUT_ENVELOPE, anchor.y,
-    )
-    side_bounds = by_ref["tall"].bounds
-    assert not (
-        _horizontal_overlap(callout_bounds, side_bounds)
-        and _vertical_overlap(callout_bounds, side_bounds)
-    ), "callout and side bounds must not overlap at the fitted scale"
-
-
-def test_bottom_callout_room_includes_band_padding_from_taller_side_visuals():
-    """A side visual taller than the primary drops band_bottom below
-    `primary.bounds.bottom` by half the difference: side visuals share the
-    primary's center Y, so the band extends downward by (side_h - primary_h)
-    / 2 more than the primary alone. That extra room absorbs some of the
-    callout envelope; missing it drives the fitted scale below
-    MIN_TEXT_SCALE and rejects lessons that comfortably fit."""
-    primary = _tape_like_primary(height=1.0, width=4.0)
-    tall_side = MeasuredVisual(
-        ref="tall", bounds=Bounds(-1.0, 1.0, -4.25, 4.25),
-        parts={}, paths={}, payload={},
-    )
-    answer = MeasuredVisual(
-        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
-        parts={}, paths={}, payload={},
-    )
-    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
-
-    placed = place_vertical_lesson([primary, tall_side, answer], relations)
-
-    by_ref = {item.measured.ref: item for item in placed}
-    # Column: band_h(8.5) + GAP(0.45) + answer_h(0.55) = 9.5. Without band
-    # padding in room, the callout constraint drops the scale to
-    # (7.2 - 0.9) / (9.5 - 0.45) = 0.6961 -- below MIN_TEXT_SCALE = 0.7.
-    # With band_padding = (8.5 - 1.0)/2 = 3.75, room = 4.2, so
-    # room * unpadded_scale = 4.2 * 7.2/9.5 = 3.18 already exceeds the
-    # envelope; `_fit_vertical_scale` picks the unpadded scale 7.2/9.5.
-    assert by_ref["tape"].scale == pytest.approx(7.2 / 9.5, abs=1e-3)
 
 
 def test_bottom_callout_stays_in_frame_when_no_below_stack_absorbs_the_gap():

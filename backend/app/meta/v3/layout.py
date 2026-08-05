@@ -17,12 +17,6 @@ GAP = 0.45
 #: of the lesson's uniform scale, so the space to reserve for it does not
 #: shrink alongside the visuals (see #82).
 CALLOUT_ENVELOPE = 0.9
-#: Approximate world-unit width per character of a callout's label text at
-#: `FONT_SIZES["label"] = 36`. Manim's default `Text` measures roughly 0.24
-#: units per character at `font_size = 48`; scaling that to 36 and rounding
-#: up gives 0.2, which is deliberately generous -- an over-estimate keeps
-#: the disjointness check on the safe side of the actual callout width.
-CALLOUT_LABEL_CHAR_WIDTH = 0.2
 #: The answer used to be placed in a reserved strip at the bottom of the frame,
 #: which read as a caption stapled under the lesson rather than as its outcome.
 #: It is now arranged with everything else, so the instructional frame is the
@@ -96,35 +90,33 @@ def _bottom_callout_room_per_scale(arrangement, relations):
     """Room, per unit of `scale`, between a bottom-anchored callout's anchor
     on the primary and whatever the callout tip must stay above.
 
-    Three summands, all in unscaled units:
+    Two summands, both in unscaled units:
     - `interior`: room within the primary's own bounds below the anchor.
       rectangle_measurement's length label pushes bounds.bottom ~0.68
       below length_edge[0].bottom, so a callout there absorbs the envelope
       without a reservation.
-    - `band_padding`: half the amount a taller side visual makes the band
-      exceed the primary. Side visuals share the primary's center Y, so an
-      8.5-high side beside a 1.0-high primary drops band_bottom another
-      3.75 below primary.bounds.bottom. That padding is occupied by the
-      side over the side's x-range, though, so it counts as callout room
-      only when the callout is horizontally disjoint from every side visual
-      -- otherwise the callout would render into the side's pixels and the
-      rendered `callout_collision` gate would fire.
     - `GAP` when `arrangement.below` is nonempty: the gap
       `_place_instructional` inserts between the primary band and the below
       stack. Answerless layouts insert no such gap.
 
-    Different callouts on the same primary can score different room
-    (different anchors, different text widths); the tightest one dictates
-    what the vertical constraint has to satisfy.
+    A taller side visual pulls band_bottom below primary.bounds.bottom, but
+    that band padding is *occupied* by the side over the side's x-range --
+    counting it as empty callout room lets the callout render into the
+    side's pixels (`callout_collision`). Verifying disjointness would need
+    the callout's rendered width against the side's *scaled* placed range;
+    the width depends on glyph shape (a "WWWWWW" measures ~2.7 units where
+    a fixed-per-char estimate says 1.2) and side ranges scale while the
+    callout does not, so the two are not comparable without the measurer.
+    Forfeit the credit rather than risk the false positive; the lesson
+    rejects at compile time with `below_minimum_text_scale` rather than
+    dead-ending at the rendered gate.
 
-    Returns None when no bottom-anchored callout targets the primary, so the
-    layout skips the callout math entirely.
+    The tightest callout dictates the constraint. Returns None when no
+    bottom-anchored callout targets the primary.
     """
     primary = arrangement.primary
     if primary is None or not relations:
         return None
-    band_padding = max(0.0, (_band_height(arrangement) - _height(primary)) / 2)
-    side_x_ranges = _side_x_ranges(arrangement)
     below_gap = GAP if arrangement.below else 0.0
     tightest = None
     for relation in relations:
@@ -140,44 +132,9 @@ def _bottom_callout_room_per_scale(arrangement, relations):
         except KeyError:
             # Leave anchor validity to `resolve_relation`.
             continue
-        interior = anchor_point.y - primary.bounds.bottom
-        half_width = _estimated_callout_half_width(getattr(relation, "text", ""))
-        callout_x_range = (anchor_point.x - half_width, anchor_point.x + half_width)
-        can_use_band = all(
-            _x_ranges_disjoint(callout_x_range, side_range)
-            for side_range in side_x_ranges
-        )
-        room = interior + (band_padding if can_use_band else 0.0) + below_gap
+        room = (anchor_point.y - primary.bounds.bottom) + below_gap
         tightest = room if tightest is None else min(tightest, room)
     return tightest
-
-
-def _estimated_callout_half_width(text) -> float:
-    length = max(1, len(text or ""))
-    return length * CALLOUT_LABEL_CHAR_WIDTH / 2
-
-
-def _side_x_ranges(arrangement) -> list[tuple[float, float]]:
-    """Placed x-ranges of the primary's side stacks in unscaled units.
-
-    `_place_supporting_side` starts each side stack GAP past the primary's
-    edge and extends outward by the stack's total width. Every visual scales
-    uniformly, so a disjointness check is scale-invariant and can run on
-    unscaled bounds.
-    """
-    primary = arrangement.primary
-    ranges: list[tuple[float, float]] = []
-    if arrangement.right:
-        start = primary.bounds.right + GAP
-        ranges.append((start, start + _stack_width(arrangement.right)))
-    if arrangement.left:
-        end = primary.bounds.left - GAP
-        ranges.append((end - _stack_width(arrangement.left), end))
-    return ranges
-
-
-def _x_ranges_disjoint(a: tuple[float, float], b: tuple[float, float]) -> bool:
-    return a[1] <= b[0] or b[1] <= a[0]
 
 
 def _callout_pad(callout_room_per_scale, scale):
