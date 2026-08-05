@@ -20,15 +20,19 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
 
-      # Manim render tests shell out to ffmpeg, link against cairo/pango, and
-      # render numeric labels (NumberLine tick numbers) via LaTeX -> dvisvgm.
+      # Manim render tests shell out to ffmpeg and link against cairo/pango.
+      # Every rendered glyph goes through Pango-based `manim.Text` (see
+      # `app/meta/v3/renderer.py::_text` and `manim_measurer.py`); no code
+      # path calls `MathTex` or `Tex`, so the ~2 GB texlive stack the
+      # workflow used to pull in (which added 30-40 minutes to a cold
+      # runner because `setup-python` caches pip, not apt) is not needed.
+      # If a future visual introduces `MathTex`, reinstate
+      # texlive-latex-extra + dvisvgm alongside this list.
       - name: Install system deps for Manim rendering
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg libcairo2-dev libpango1.0-dev pkg-config \
-            texlive texlive-latex-extra texlive-fonts-extra \
-            texlive-latex-recommended texlive-science tipa dvisvgm
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libcairo2-dev libpango1.0-dev pkg-config
 
       - name: Install backend and dev deps
         run: pip install -e ".[dev]"
