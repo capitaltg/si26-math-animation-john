@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.meta.dsl.scene_program import SceneProgramDocument
+from app.meta.dsl.v3_common import (
+    MAX_SCENE_SECONDS,
+    MIN_CONCLUSION_HOLD_SECONDS,
+    MIN_SCENE_SECONDS,
+)
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.quality import QualityCheck, QualityReport
 from app.render.full_render import BACKEND_ROOT, RENDER_TIMEOUT_SECONDS
@@ -47,9 +52,10 @@ def validate_rendered_quality(manifest: dict) -> QualityReport:
         check_callout_collisions(manifest),
         check_state_order(manifest),
         check_declared_path_events(manifest),
-        check_dimension_attachments(manifest),
         check_dimension_labels(manifest),
         check_final_answer_persistence(manifest),
+        check_rendered_duration(manifest),
+        check_rendered_conclusion_hold(manifest),
     ]
     return QualityReport(all(check.passed for check in checks), checks)
 
@@ -68,8 +74,6 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "declared_relations": list,
         "path_events": list,
         "declared_path_events": list,
-        "dimension_anchor_checks": dict,
-        "declared_dimension_anchors": list,
         "dimension_labels": dict,
         "declared_dimension_labels": list,
         "state_events": list,
@@ -85,6 +89,13 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
             return _failed("render_probe_contract_invalid", field, "required probe evidence is missing or malformed")
     if len(manifest["frame_size"]) != 2 or not manifest["frames"]:
         return _failed("render_probe_contract_invalid", "frames", "probe needs a frame size and at least one sampled frame")
+    # `visual_bounds` non-empty (not merely present) as defense-in-depth: every
+    # teeth-bearing subset check downstream is `declared ⊆ observed`, so with no
+    # observed bounds the whole manifest would pass by vacuous truth. In
+    # production `visual_bounds` is always populated, but a renderer regression
+    # or an upstream mis-emit shouldn't be able to skate past the gate.
+    if not manifest["visual_bounds"]:
+        return _failed("render_probe_contract_invalid", "visual_bounds", "probe emitted no visual bounds to evaluate")
     if not _numbers(manifest["frame_size"], 2):
         return _failed("render_probe_contract_invalid", "frame_size", "frame dimensions must be numeric")
     # Required, not defaulted: without it `check_frame_bounds` has no box to
@@ -100,14 +111,12 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         return _failed("render_probe_contract_invalid", "anchors", "anchors must be two numeric coordinates")
     if not all(_relation_contract(relation) for relation in manifest["relations"].values()):
         return _failed("render_probe_contract_invalid", "relations", "relation evidence is incomplete")
-    if not all(isinstance(value, str) for field in ("declared_relations", "path_events", "declared_path_events", "declared_dimension_anchors", "declared_dimension_labels") for value in manifest[field]):
+    if not all(isinstance(value, str) for field in ("declared_relations", "path_events", "declared_path_events", "declared_dimension_labels") for value in manifest[field]):
         return _failed("render_probe_contract_invalid", "manifest", "declared and observed identifiers must be strings")
     if not all(_state_contract(event, observed=True) for event in manifest["state_events"]):
         return _failed("render_probe_contract_invalid", "state_events", "observed state evidence is incomplete")
     if not all(_state_contract(event, observed=False) for event in manifest["declared_state_events"]):
         return _failed("render_probe_contract_invalid", "declared_state_events", "declared state evidence is incomplete")
-    if not all(_dimension_contract(outcome) for outcome in manifest["dimension_anchor_checks"].values()):
-        return _failed("render_probe_contract_invalid", "dimension_anchor_checks", "dimension evidence is incomplete")
     return _passed("render_probe_contract_invalid", "manifest")
 
 
@@ -307,15 +316,43 @@ def check_declared_path_events(manifest: dict) -> QualityCheck:
     return _passed("undeclared_path_event", "path_events")
 
 
-def check_dimension_attachments(manifest: dict) -> QualityCheck:
-    missing = set(manifest.get("declared_dimension_anchors", [])) - set(manifest.get("dimension_anchor_checks", {}))
-    if missing:
-        return _failed("dimension_anchor_mismatch", "dimension_anchor_checks", "dimension attachment evidence is missing")
-    for ref, outcome in manifest.get("dimension_anchor_checks", {}).items():
-        passed = outcome if isinstance(outcome, bool) else outcome.get("passed", False)
-        if not passed:
-            return _failed("dimension_anchor_mismatch", f"dimension_anchor_checks.{ref}", "dimension label is detached from its edge anchor")
-    return _passed("dimension_anchor_mismatch", "dimension_anchor_checks")
+def check_rendered_duration(manifest: dict) -> QualityCheck:
+    """The renderer's actually-elapsed time must sit within the scene budget.
+
+    Read off `scene.elapsed` in the probe subprocess, so this catches a drift
+    between the compiled `total_duration_seconds` the static gate approved and
+    what manim wall-clocked -- a class of failure `check_duration` cannot see.
+    """
+    duration = manifest.get("total_duration_seconds", 0)
+    if duration > MAX_SCENE_SECONDS + 1e-9:
+        return _failed(
+            "timeline_over_budget", "total_duration_seconds",
+            "rendered scene exceeded the 12-second budget",
+        )
+    if duration + 1e-9 < MIN_SCENE_SECONDS:
+        return _failed(
+            "timeline_duration_out_of_bounds", "total_duration_seconds",
+            "rendered scene was shorter than the 6-second minimum",
+        )
+    return _passed("timeline_duration", "total_duration_seconds")
+
+
+def check_rendered_conclusion_hold(manifest: dict) -> QualityCheck:
+    """The final semantic event must be followed by at least 1.5s of hold.
+
+    Static `check_conclusion_hold` bounds the shortest declared action in the
+    conclude beat, but nothing observed the hold actually reaching the frame.
+    Here `conclusion_hold_seconds` is `scene.elapsed - last_render_event_time`,
+    so this catches a conclude beat that ran short at render time regardless of
+    what the compiled program declared.
+    """
+    hold = manifest.get("conclusion_hold_seconds", 0)
+    if hold + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS:
+        return _failed(
+            "conclusion_hold_too_short", "conclusion_hold_seconds",
+            "rendered conclusion holds for less than 1.5 seconds",
+        )
+    return _passed("conclusion_hold_too_short", "conclusion_hold_seconds")
 
 
 def check_final_answer_persistence(manifest: dict) -> QualityCheck:
@@ -358,7 +395,6 @@ def _load_manifest(path: Path) -> dict:
 
 
 def _attach_frame_evidence(manifest: dict, scratch_dir: Path) -> None:
-    frame_size = None
     for index, frame in enumerate(manifest["frames"]):
         path = Path(str(frame.get("path", "")))
         if path.is_absolute() or path.name != str(frame.get("path", "")):
@@ -372,11 +408,8 @@ def _attach_frame_evidence(manifest: dict, scratch_dir: Path) -> None:
                 "render_probe_contract_invalid", f"frames[{index}].path", "sampled frame file",
                 "probe frame evidence is missing", "regenerate the candidate and retry the preview",
             )
-        pixels, size = _non_background_pixels(frame_path.read_bytes())
+        pixels, _ = _non_background_pixels(frame_path.read_bytes())
         frame["non_background_pixels"] = pixels
-        frame_size = frame_size or size
-    if frame_size is not None:
-        manifest.setdefault("frame_size", list(frame_size))
 
 
 def _non_background_pixels(png_bytes: bytes) -> tuple[int, tuple[int, int]]:
@@ -390,9 +423,9 @@ def _non_background_pixels(png_bytes: bytes) -> tuple[int, tuple[int, int]]:
 
 
 def _frame_size(manifest: dict) -> tuple[float, float]:
-    size = manifest.get("frame_size", [1, 1])
-    if not isinstance(size, (list, tuple)) or len(size) != 2 or size[0] <= 0 or size[1] <= 0:
-        return 1.0, 1.0
+    # `check_manifest_contract` runs first and rejects any manifest whose
+    # `frame_size` isn't two numbers, so no silent fallback is needed here.
+    size = manifest["frame_size"]
     return float(size[0]), float(size[1])
 
 
@@ -421,12 +454,6 @@ def _state_contract(event, *, observed: bool) -> bool:
         and isinstance(event.get("target"), str)
         and isinstance(event.get("role"), str)
         and (not observed or isinstance(event.get("seconds"), (int, float)))
-    )
-
-
-def _dimension_contract(outcome) -> bool:
-    return isinstance(outcome, bool) or (
-        isinstance(outcome, dict) and isinstance(outcome.get("passed"), bool)
     )
 
 

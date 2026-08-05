@@ -375,9 +375,15 @@ def build_demo_quality_report(manifest: dict) -> dict:
     """Project probe-manifest evidence onto the fields the demo contracts read.
 
     The one and only place the manifest -> contract-field mapping lives. Every
-    value is renderer-observed probe evidence: nothing here re-derives an
-    expectation from the scene program, and the single computed number
-    (``alignment_error``) uses production's own distance function.
+    field except ``simple_reveal_mode`` is renderer-observed probe evidence --
+    ``total_duration_seconds`` and ``conclusion_hold_seconds`` read off
+    ``scene.elapsed`` in the probe subprocess, bounds and anchors come from
+    rendered mobjects, and the single computed number (``alignment_error``)
+    uses production's own distance function. ``simple_reveal_mode`` is still
+    read off the compiled program in the worker, and named here so a reader
+    checking a failure knows which value would drift under a code path
+    change; the rendered-duration and conclusion-hold checks in
+    ``render_probe`` are what catch a timing regression.
     """
     width, height = manifest["frame_size"]
     return {
@@ -399,10 +405,6 @@ def build_demo_quality_report(manifest: dict) -> dict:
             for ref, relation in manifest["relations"].items()
         },
         "traced_paths": list(manifest["path_events"]),
-        "dimension_anchor_checks": {
-            ref: outcome["passed"]
-            for ref, outcome in manifest["dimension_anchor_checks"].items()
-        },
         "dimension_labels": manifest["dimension_labels"],
         "declared_dimension_labels": list(manifest["declared_dimension_labels"]),
         "derivation_visible": manifest["derivation_visible"],

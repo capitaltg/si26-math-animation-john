@@ -1,12 +1,17 @@
 """Executable acceptance contracts for the two demo lessons.
 
-These are the plan's last gate: each assertion reads renderer-observed probe
-evidence for the *published* median and perimeter templates (see
+These are the plan's last gate: each assertion reads probe-manifest evidence
+for the *published* median and perimeter templates (see
 ``tests/meta/test_demo_end_to_end.py`` for the runbook that produces it) and
-compares it against what the lesson must teach. Expected values are derived from
-the real compiler and the real probe manifest, never copied out of a passing
-run, so a regression in compilation, layout, resolution, styling or rendering
-fails a named assertion here.
+compares it against what the lesson must teach. Almost every projected field
+is renderer-observed -- bounds and anchors from rendered mobjects, timing
+from ``scene.elapsed``. The one exception is ``simple_reveal_mode``, which
+the worker still reads off the compiled program; the rendered gates in
+``app/meta/v3/render_probe.py`` are what enforce the observed values against
+the shared bounds in ``app/meta/dsl/v3_common.py``. Expected values are
+derived from the real compiler and the real probe manifest, never copied out
+of a passing run, so a regression in compilation, layout, resolution, styling
+or rendering fails a named assertion here.
 
 Two tiers of assertion live below, and the difference matters when reading a
 failure:
