@@ -1,9 +1,13 @@
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
 
-from app.meta.v3.geometry import Bounds
-from app.meta.v3.layout import SAFE_FRAME, place_vertical_lesson
+from app.meta.v3.errors import V3ValidationError
+from app.meta.v3.geometry import Bounds, MeasuredVisual, SemanticPart
+from app.meta.v3.layout import (
+    CALLOUT_ENVELOPE, MIN_TEXT_SCALE, SAFE_FRAME, place_vertical_lesson,
+)
 from app.meta.v3.rectangle_measurement import measure_rectangle
 from app.meta.v3.visual_registry import default_visual_registry
 
@@ -208,3 +212,408 @@ def test_an_answer_only_scene_is_centred_rather_than_failing_to_place():
     answer, = place_vertical_lesson([_answer("2750 meters", measurer)])
 
     assert answer.bounds.center.y == pytest.approx(0.0)
+
+
+def _tape_like_primary(ref="tape", height=0.6, width=4.0):
+    """A primary whose parts sit flush with its outer bottom edge (unit_tape).
+
+    Isolates the property that unit_tape.box[0].bottom coincides with the
+    visual's bounds.bottom -- the geometry that leaves a bottom-anchored
+    callout no interior room to render into.
+    """
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
+    box = Bounds(-width / 2, -width / 2 + 1.0, -height / 2, height / 2)
+    return MeasuredVisual(
+        ref=ref, bounds=bounds,
+        parts={("box", 0): SemanticPart("box", 0, box)},
+        paths={}, payload={},
+    )
+
+
+def _interior_bottom_anchor_primary(ref="tape", height=2.0, width=4.0):
+    """A primary whose `box[0]` occupies the upper half, so
+    `box[0].bottom` sits at the primary's center Y -- not at
+    `primary.bounds.bottom`. A stand-in for any visual anchored on an
+    interior part (a two-row grid anchored on the upper row's bottom, for
+    example) rather than on its outer edge.
+    """
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
+    box = Bounds(-width / 2, -width / 2 + 1.0, 0.0, height / 2)
+    return MeasuredVisual(
+        ref=ref, bounds=bounds,
+        parts={("box", 0): SemanticPart("box", 0, box)},
+        paths={}, payload={},
+    )
+
+
+def _callout(visual_ref, part, index, anchor, text=""):
+    return SimpleNamespace(
+        target=SimpleNamespace(
+            visual_ref=visual_ref, part=part, index=index, anchor=anchor,
+        ),
+        text=text,
+    )
+
+
+def test_bottom_anchored_callout_on_primary_reserves_room_below_it():
+    """The reported #82 scenario: a callout anchored to `box[0].bottom` on a
+    unit_tape-like primary must not overrun the answer stacked below it. The
+    layout has to reserve enough clearance below the primary that the
+    callout's fixed downward envelope fits."""
+    measurer = _WidthPerCharacterMeasurer()
+    measured = [_tape_like_primary(), _answer("2750 meters", measurer)]
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson(measured, relations)
+    by_ref = {item.measured.ref: item for item in placed}
+
+    primary_bottom = by_ref["tape"].bounds.bottom
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    clearance = primary_bottom - answer_top
+    # Without the reservation the two are separated only by `GAP`; with the
+    # reservation the callout's downward envelope also fits, so a callout tip
+    # at the primary's own bottom edge lands well above the answer.
+    assert clearance >= CALLOUT_ENVELOPE - 1e-9, (
+        f"answer clearance {clearance:g} < callout envelope {CALLOUT_ENVELOPE:g}"
+    )
+
+
+def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_extra():
+    """If the anchor already sits far enough above the primary's outer bottom
+    that the envelope fits inside the visual's own bounds, the layout must
+    not push the answer further away for it -- otherwise every measurement
+    lesson with a labelled edge would pay for space it doesn't need."""
+    measurer = _WidthPerCharacterMeasurer()
+    # A primary whose bottom bounds sit `CALLOUT_ENVELOPE` below its box.
+    height = 0.6
+    interior = CALLOUT_ENVELOPE + 0.1
+    box = Bounds(-2.0, 2.0, -height / 2, height / 2)
+    bounds = Bounds(-2.0, 2.0, box.bottom - interior, box.top)
+    primary = MeasuredVisual(
+        ref="rect", bounds=bounds,
+        parts={("edge", 0): SemanticPart("edge", 0, box)},
+        paths={}, payload={},
+    )
+    relations = [_callout("rect", part="edge", index=0, anchor="bottom")]
+
+    with_relation = place_vertical_lesson(
+        [primary, _answer("22", measurer)], relations,
+    )
+    without_relation = place_vertical_lesson([primary, _answer("22", measurer)])
+
+    def _by_ref(placed):
+        return {item.measured.ref: item.bounds for item in placed}
+    assert _by_ref(with_relation) == _by_ref(without_relation)
+
+
+def test_multiline_callout_descent_exceeds_the_fixed_envelope():
+    """Renderer-backed rationale for the schema rejecting newlines: a
+    two-line label plus its arrow and buff renders more than
+    `CALLOUT_ENVELOPE` below the anchor, so the layout's fixed
+    single-line reservation would let a multi-line callout overrun into
+    the row below. Schema validation catches it earlier."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    anchor = np.array([0.0, 0.0, 0.0])
+    label = Text("first line\nsecond line", font_size=FONT_SIZES["label"])
+    label.next_to(anchor, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), anchor, buff=0.08)
+    rendered = VGroup(arrow, label)
+    descent = float(anchor[1] - rendered.get_bottom()[1])
+    assert descent > CALLOUT_ENVELOPE, (
+        f"two-line callout descent {descent:g} does not exceed the "
+        f"reserved envelope {CALLOUT_ENVELOPE:g}; the schema newline "
+        f"reject would then be over-cautious"
+    )
+
+
+def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale():
+    """Renderer-backed regression: build the callout with Manim exactly the
+    way `renderer._build_relation` does (`Text` at `FONT_SIZES["label"]`
+    plus an `Arrow`), position it at the layout's placed anchor, and
+    verify its rendered bottom sits above the answer's top. A fixed
+    per-character estimate understates wide-glyph widths, so the check
+    reads actual Manim bounds rather than trusting an estimator."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    measurer = _WidthPerCharacterMeasurer()
+    primary = _tape_like_primary(height=1.0, width=4.0)
+    answer = _answer("2750 meters", measurer)
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson([primary, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    anchor = by_ref["tape"].anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+
+    rendered_bottom = float(rendered.get_bottom()[1])
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    assert rendered_bottom >= answer_top - 1e-6, (
+        f"rendered callout bottom {rendered_bottom:g} overruns "
+        f"answer top {answer_top:g}"
+    )
+    assert rendered_bottom >= SAFE_FRAME.bottom - 1e-6, (
+        f"rendered callout bottom {rendered_bottom:g} escapes safe frame"
+    )
+
+
+def test_bottom_callout_side_check_stays_conservative_at_smaller_scales():
+    """Callout envelope is fixed in world units while side visuals scale
+    with the lesson, so at a fitted scale below 1.0 the callout occupies a
+    larger fraction of the unscaled frame than at scale 1.0. Checking
+    overlap at scale 1.0 alone misses cases that overlap at the fitted
+    scale. Here the anchor sits 1.0 above the side's top (in unscaled
+    units): CALLOUT_ENVELOPE=0.9 does not reach the side at scale 1, but
+    at MIN_TEXT_SCALE=0.7 the effective envelope in unscaled coords is
+    ~1.286 and the callout drops into the side's band."""
+    primary = MeasuredVisual(
+        ref="tape",
+        bounds=Bounds(-2.0, 2.0, -2.0, 2.0),
+        parts={("box", 0): SemanticPart("box", 0, Bounds(-2.0, 2.0, 1.5, 1.5))},
+        paths={}, payload={},
+    )
+    modest_side = MeasuredVisual(
+        ref="side", bounds=Bounds(-1.0, 1.0, -0.5, 0.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
+    assert CALLOUT_ENVELOPE / MIN_TEXT_SCALE > 1.0 > CALLOUT_ENVELOPE, (
+        "fixture is only meaningful when the ordinary envelope clears the "
+        "1.0-unit gap and the scale-corrected envelope does not"
+    )
+
+    placed = place_vertical_lesson([primary, modest_side, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    # Without the /MIN_TEXT_SCALE correction the side would still sit
+    # beside the primary and overlap the primary vertically; with it, the
+    # side gets stacked.
+    assert not _vertical_overlap(by_ref["tape"].bounds, by_ref["side"].bounds), (
+        "side must not sit beside the primary when the callout would drop "
+        "into its band at the fitted scale"
+    )
+
+
+def test_bottom_callout_on_an_interior_anchor_forces_same_height_sides_to_stack():
+    """The stack rule is per-anchor, not primary-height-vs-side-height. A
+    2.0-high primary whose `box[0].bottom` sits at its own center Y drops
+    the callout into (-0.9, 0) around center Y; a 2.0-high side beside it
+    would span (-1.0, 1.0) around the same center Y and overlap. The side
+    has to stack even though it is the same height as the primary."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    primary = _interior_bottom_anchor_primary(height=2.0, width=4.0)
+    same_height_side = MeasuredVisual(
+        ref="side", bounds=Bounds(-1.0, 1.0, -1.0, 1.0),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson(
+        [primary, same_height_side, answer], relations,
+    )
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape, side = by_ref["tape"], by_ref["side"]
+    assert not _vertical_overlap(tape.bounds, side.bounds), (
+        "side must not sit alongside the primary when its y-interval "
+        "would overlap the callout's y-interval"
+    )
+    anchor = tape.anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+    rendered_bounds = Bounds(
+        left=float(rendered.get_left()[0]), right=float(rendered.get_right()[0]),
+        bottom=float(rendered.get_bottom()[1]), top=float(rendered.get_top()[1]),
+    )
+    assert not (
+        _horizontal_overlap(rendered_bounds, side.bounds)
+        and _vertical_overlap(rendered_bounds, side.bounds)
+    ), "rendered callout bounds overlap the side visual"
+
+
+def test_bottom_callout_forces_a_taller_side_visual_out_of_the_beside_slot():
+    """Rendered side-collision regression: a 1.0-high primary beside a
+    3.0-high side visual placed adjacent to the primary would give a
+    fixed-envelope callout on the primary a side visual to render into.
+    `_arrange` sees the bottom-anchored callout and puts every side visual
+    taller than the primary into a stacked row instead, so no side visual
+    shares the callout's vertical band."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    primary = _tape_like_primary(height=1.0, width=4.0)
+    tall_side = MeasuredVisual(
+        ref="tall", bounds=Bounds(-1.0, 1.0, -1.5, 1.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson([primary, tall_side, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape, side = by_ref["tape"], by_ref["tall"]
+    # Side must not sit alongside the primary -- its y-band would overlap
+    # the callout's y-band otherwise.
+    assert not _vertical_overlap(tape.bounds, side.bounds), (
+        "a taller side visual must be stacked above or below the primary "
+        "when the primary has a bottom-anchored callout"
+    )
+    # And, rendered end-to-end, the actual callout mobject shares no pixels
+    # with the side visual either.
+    anchor = tape.anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+    rendered_bounds = Bounds(
+        left=float(rendered.get_left()[0]), right=float(rendered.get_right()[0]),
+        bottom=float(rendered.get_bottom()[1]), top=float(rendered.get_top()[1]),
+    )
+    assert not (
+        _horizontal_overlap(rendered_bounds, side.bounds)
+        and _vertical_overlap(rendered_bounds, side.bounds)
+    ), "rendered callout bounds overlap the side visual"
+
+
+def _horizontal_overlap(first, second):
+    return max(first.left, second.left) < min(first.right, second.right)
+
+
+def _vertical_overlap(first, second):
+    return max(first.bottom, second.bottom) < min(first.top, second.top)
+
+
+def test_bottom_callout_on_a_primary_with_a_much_taller_side_visual_still_rejects():
+    """When the taller side moved out of the beside slot cannot fit in a
+    stacked row either, the lesson rejects at compile time. A 8.5-high
+    side stacked above a 1.0-high primary with a 0.55-high answer builds
+    a 10.95-unit column against the 7.2-unit frame -- there is no scale
+    that fits."""
+    primary = _tape_like_primary(height=1.0, width=4.0)
+    tall_side = MeasuredVisual(
+        ref="tall", bounds=Bounds(-1.0, 1.0, -4.25, 4.25),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
+
+    with pytest.raises(V3ValidationError) as excinfo:
+        place_vertical_lesson([primary, tall_side, answer], relations)
+    assert excinfo.value.failure.code == "below_minimum_text_scale"
+
+
+def test_bottom_callout_stays_in_frame_when_no_below_stack_absorbs_the_gap():
+    """Answerless layout: `_place_instructional` inserts a gap below the
+    primary only when there is a below stack to push. Crediting a phantom
+    `GAP * scale` against the envelope in that case shrinks the reservation
+    below what the callout actually needs and drops its tip past the safe
+    frame's bottom edge."""
+    primary = _tape_like_primary(height=6.0, width=4.0)
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson([primary], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape = by_ref["tape"]
+    # `box[0].bottom` sits at the primary's own outer bottom, so the callout
+    # tip is at `anchor_y - CALLOUT_ENVELOPE`.
+    anchor_y = tape.anchor(part="box", index=0, name="bottom").y
+    callout_tip_y = anchor_y - CALLOUT_ENVELOPE
+    assert callout_tip_y >= SAFE_FRAME.bottom - 1e-9, (
+        f"callout tip {callout_tip_y:g} escapes frame bottom {SAFE_FRAME.bottom:g}"
+    )
+
+
+def test_bottom_callout_pad_credits_the_gap_already_below_the_primary():
+    """Reserving the full CALLOUT_ENVELOPE ignores the GAP the layout already
+    inserts between the primary band and whatever sits below it. On a
+    near-limit column that difference decides whether the lesson fits: a 9.2
+    unit column against a 7.2 unit frame lands at scale 0.72 when the gap is
+    credited, and 0.6848 (below MIN_TEXT_SCALE) when it is not."""
+    primary = _tape_like_primary(height=4.0, width=4.0)
+    support = MeasuredVisual(
+        ref="support", bounds=Bounds(-3.0, 3.0, -1.5, 1.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-2.0, 2.0, -0.65, 0.65),
+        parts={}, paths={}, payload={},
+    )
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson([primary, support, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    # Column: 4.0 + 0.45 + 3.0 + 0.45 + 1.3 = 9.2. Scale = (7.2 - 0.9) /
+    # (9.2 - 0.45) = 6.3/8.75 = 0.72.
+    assert by_ref["tape"].scale == pytest.approx(0.72, abs=1e-3)
+    primary_bottom = by_ref["tape"].bounds.bottom
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    # The scaled gap plus the reservation must together hold the envelope.
+    assert primary_bottom - answer_top >= CALLOUT_ENVELOPE - 1e-9
+
+
+def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_nothing():
+    """The reservation is scoped to the primary because that is the visual
+    the answer is stacked directly below. A callout targeting a supporting
+    visual is not currently addressed by #82 and must not silently shrink
+    unrelated lessons."""
+    measurer = _WidthPerCharacterMeasurer()
+    measured = [
+        _label("primary", "P", measurer),
+        _label("supporting", "note", measurer),
+        _answer("22", measurer),
+    ]
+    relations = [_callout("supporting", part=None, index=None, anchor="bottom")]
+
+    with_relation = place_vertical_lesson(measured, relations)
+    without_relation = place_vertical_lesson(measured)
+
+    assert {item.measured.ref: item.bounds for item in with_relation} == {
+        item.measured.ref: item.bounds for item in without_relation
+    }

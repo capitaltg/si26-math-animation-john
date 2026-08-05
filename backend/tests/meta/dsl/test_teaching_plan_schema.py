@@ -97,6 +97,26 @@ def test_every_generated_text_field_rejects_renderer_controls(field_name, bad_te
         TeachingPlanDocument.model_validate(_plan_with_generated_text(field_name, bad_text))
 
 
+@pytest.mark.parametrize("bad_text", [
+    "first line\nsecond line",
+    "top\rbottom",
+    "one\r\ntwo",
+    "vert\vtab",
+    "form\ffeed",
+    "line sep",
+    "para sep",
+])
+def test_plan_rejects_multiline_callout_request_text(bad_text):
+    """A plan-authored callout label rides the same single-line rendered
+    envelope that the compiled `CalloutRelation` does; reject line breaks
+    at the plan schema too so authors get a clear failure rather than a
+    rendered overflow."""
+    with pytest.raises(ValidationError, match="single line"):
+        TeachingPlanDocument.model_validate(
+            _plan_with_generated_text("callout_text", bad_text),
+        )
+
+
 @pytest.mark.parametrize("bad_text", ["Circle()", "x = 1"])
 def test_identifier_fields_reject_bare_calls_and_assignments(bad_text):
     # Prose fields deliberately allow these -- "Area (square units)" and

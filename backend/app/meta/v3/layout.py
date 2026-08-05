@@ -10,6 +10,13 @@ from app.meta.v3.geometry import (
 SAFE_FRAME = Bounds(-6.6, 6.6, -3.6, 3.6)
 MIN_TEXT_SCALE = 0.7
 GAP = 0.45
+#: The downward reach of a rendered callout below its anchor point: one line of
+#: `FONT_SIZES["label"]` text plus the arrow that connects the label to the
+#: anchor, plus the `next_to` buff. Fixed in world units because
+#: `renderer._build_relation` builds the callout at that font size regardless
+#: of the lesson's uniform scale, so the space to reserve for it does not
+#: shrink alongside the visuals (see #82).
+CALLOUT_ENVELOPE = 0.9
 #: The answer used to be placed in a reserved strip at the bottom of the frame,
 #: which read as a caption stapled under the lesson rather than as its outcome.
 #: It is now arranged with everything else, so the instructional frame is the
@@ -52,9 +59,15 @@ class _Arrangement:
     below: list[MeasuredVisual]
 
 
-def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[PlacedVisual]:
-    arrangement = _arrange(measured_visuals)
-    scale = min(1.0, _fit_instructional_scale(arrangement, INSTRUCTIONAL_FRAME))
+def place_vertical_lesson(
+    measured_visuals: Sequence[MeasuredVisual],
+    relations: Sequence[object] = (),
+) -> list[PlacedVisual]:
+    arrangement = _arrange(measured_visuals, relations)
+    callout_room = _bottom_callout_room_per_scale(arrangement, relations)
+    scale = min(1.0, _fit_instructional_scale(
+        arrangement, INSTRUCTIONAL_FRAME, callout_room,
+    ))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
             code="below_minimum_text_scale",
@@ -63,14 +76,81 @@ def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[Pl
             observed=f"{scale:g}",
             hint="reduce visual content so the lesson remains readable",
         ))
+    primary_bottom_pad = _callout_pad(callout_room, scale)
     placed_by_ref = {
         item.measured.ref: item
-        for item in _place_instructional(arrangement, INSTRUCTIONAL_FRAME, scale)
+        for item in _place_instructional(
+            arrangement, INSTRUCTIONAL_FRAME, scale, primary_bottom_pad,
+        )
     }
     return [placed_by_ref[item.ref] for item in measured_visuals]
 
 
-def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
+def _bottom_callout_room_per_scale(arrangement, relations):
+    """Room, per unit of `scale`, between a bottom-anchored callout's anchor
+    on the primary and whatever the callout tip must stay above.
+
+    Two summands, both in unscaled units:
+    - `interior`: room within the primary's own bounds below the anchor.
+      rectangle_measurement's length label pushes bounds.bottom ~0.68
+      below length_edge[0].bottom, so a callout there absorbs the envelope
+      without a reservation.
+    - `GAP` when `arrangement.below` is nonempty: the gap
+      `_place_instructional` inserts between the primary band and the below
+      stack. Answerless layouts insert no such gap.
+
+    A taller side visual pulls band_bottom below primary.bounds.bottom, but
+    that band padding is *occupied* by the side over the side's x-range --
+    counting it as empty callout room lets the callout render into the
+    side's pixels (`callout_collision`). Verifying disjointness would need
+    the callout's rendered width against the side's *scaled* placed range;
+    the width depends on glyph shape (a "WWWWWW" measures ~2.7 units where
+    a fixed-per-char estimate says 1.2) and side ranges scale while the
+    callout does not, so the two are not comparable without the measurer.
+    Forfeit the credit rather than risk the false positive; the lesson
+    rejects at compile time with `below_minimum_text_scale` rather than
+    dead-ending at the rendered gate.
+
+    The tightest callout dictates the constraint. Returns None when no
+    bottom-anchored callout targets the primary.
+    """
+    primary = arrangement.primary
+    if primary is None or not relations:
+        return None
+    below_gap = GAP if arrangement.below else 0.0
+    tightest = None
+    for relation in relations:
+        target = getattr(relation, "target", None)
+        if target is None or getattr(target, "visual_ref", None) != primary.ref:
+            continue
+        if getattr(target, "anchor", None) != "bottom":
+            continue
+        try:
+            anchor_point = primary.anchor(
+                part=target.part, index=target.index, name="bottom",
+            )
+        except KeyError:
+            # Leave anchor validity to `resolve_relation`.
+            continue
+        room = (anchor_point.y - primary.bounds.bottom) + below_gap
+        tightest = room if tightest is None else min(tightest, room)
+    return tightest
+
+
+def _callout_pad(callout_room_per_scale, scale):
+    """Fixed world-unit clearance to add below the primary band for a
+    bottom-anchored callout. Only the shortfall against the envelope,
+    after crediting the room already available at the solved `scale`,
+    has to be reserved.
+    """
+    if callout_room_per_scale is None:
+        return 0.0
+    return max(0.0, CALLOUT_ENVELOPE - callout_room_per_scale * scale)
+
+
+def _arrange(
+    instructional: Sequence[MeasuredVisual], relations: Sequence[object] = (),
+) -> _Arrangement:
     """Send each supporting visual beside the primary, or to a row of its own.
 
     A visual placed beside the primary has to fit in half the frame minus the
@@ -82,6 +162,14 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
 
     The split is decided on unscaled measurements so it does not depend on the
     scale being solved for.
+
+    Side visuals share the primary's center Y, so any side whose vertical
+    interval overlaps a bottom-anchored callout's `(anchor - ENVELOPE,
+    anchor)` interval would let the callout render into the side's pixels.
+    A same-height side beside a primary whose callout anchor sits at the
+    primary's center overlaps just as an 8.5-high side beside a 1.0-high
+    primary with an anchor at the bottom edge does. Route every such side
+    into the stacked pile instead.
 
     The answer is exempt from the split: it takes the last row whenever there is
     anything else to arrange, and becomes the primary itself when it is alone.
@@ -96,13 +184,71 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
         return _Arrangement(answer, [], [], [], [])
     primary, *supporting = rest
     budget = _side_budget(primary, INSTRUCTIONAL_FRAME)
-    beside = [item for item in supporting if _width(item) <= budget]
-    stacked = [item for item in supporting if _width(item) > budget]
+    callout_intervals = _bottom_callout_y_intervals(primary, relations)
+    beside, stacked = [], []
+    for item in supporting:
+        if _width(item) > budget:
+            stacked.append(item)
+        elif _side_overlaps_any_interval(item, callout_intervals):
+            stacked.append(item)
+        else:
+            beside.append(item)
     left, right = _balanced_pair(beside, _stack_width)
     above, below = _balanced_pair(stacked, lambda items: _stack_height(items, GAP))
     if answer is not None:
         below = [*below, answer]
     return _Arrangement(primary, left, right, above, below)
+
+
+def _bottom_callout_y_intervals(primary, relations) -> list[tuple[float, float]]:
+    """Vertical intervals a bottom-anchored callout on the primary occupies,
+    relative to the primary's center Y, in the primary's unscaled
+    coordinates.
+
+    Side visuals share the primary's center Y and scale uniformly with the
+    lesson, so their `(-h/2, h/2)` intervals live in the same unscaled
+    frame as the primary. The callout envelope does not scale, though --
+    `renderer._build_relation` fixes `FONT_SIZES["label"]` -- so the
+    envelope in unscaled terms is `CALLOUT_ENVELOPE / scale`, and at
+    smaller scales the callout spans a larger fraction of the unscaled
+    frame. To keep the check conservative at every legal scale, divide by
+    `MIN_TEXT_SCALE`: at that worst case the callout is largest relative
+    to the visuals, so an interval that clears the check here clears it at
+    every scale >= MIN_TEXT_SCALE.
+    """
+    if primary is None:
+        return []
+    envelope = CALLOUT_ENVELOPE / MIN_TEXT_SCALE
+    intervals = []
+    for relation in relations:
+        target = getattr(relation, "target", None)
+        if target is None or getattr(target, "visual_ref", None) != primary.ref:
+            continue
+        if getattr(target, "anchor", None) != "bottom":
+            continue
+        try:
+            anchor_point = primary.anchor(
+                part=target.part, index=target.index, name="bottom",
+            )
+        except KeyError:
+            continue
+        top = anchor_point.y - primary.bounds.center.y
+        intervals.append((top - envelope, top))
+    return intervals
+
+
+def _side_overlaps_any_interval(
+    item: MeasuredVisual, intervals: Sequence[tuple[float, float]],
+) -> bool:
+    if not intervals:
+        return False
+    half = _height(item) / 2
+    side_interval = (-half, half)
+    return any(_intervals_overlap(side_interval, interval) for interval in intervals)
+
+
+def _intervals_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return not (a[1] <= b[0] or b[1] <= a[0])
 
 
 def _side_budget(primary: MeasuredVisual, frame: Bounds) -> float:
@@ -124,12 +270,16 @@ def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
     return sum(item.bounds.top - item.bounds.bottom for item in items) + gap * (len(items) - 1)
 
 
-def _fit_instructional_scale(arrangement: _Arrangement, frame: Bounds) -> float:
+def _fit_instructional_scale(
+    arrangement: _Arrangement, frame: Bounds,
+    callout_room_per_scale: float | None = None,
+) -> float:
     if arrangement.primary is None:
         return 1.0
     primary = arrangement.primary
-    vertical_scale = _fit_extent(
+    vertical_scale = _fit_vertical_scale(
         _column_height(arrangement, GAP), frame.top - frame.bottom,
+        callout_room_per_scale,
     )
     half_width = (frame.right - frame.left) / 2
     horizontal_scale = min(
@@ -161,6 +311,38 @@ def _fit_extent(extent: float, available: float) -> float:
     return available / extent if extent else 1.0
 
 
+def _fit_vertical_scale(
+    column_h: float, frame_h: float, callout_room_per_scale,
+) -> float:
+    """The largest scale that fits the column and any callout envelope.
+
+    Without a bottom callout on the primary this is just `frame_h / column_h`.
+    With one, the callout adds a fixed world-unit demand (`CALLOUT_ENVELOPE`)
+    which is not scaled. `callout_room_per_scale * s` of that demand is met
+    by clearance already present at that scale (see
+    `_bottom_callout_room_per_scale` for the summands).
+
+    The joint vertical constraint is
+    `column_h * s + max(0, CALLOUT_ENVELOPE - room_per_scale * s) <= frame_h`,
+    linear in `s` on each side of the transition.
+    """
+    if not column_h:
+        return 1.0
+    unpadded_scale = frame_h / column_h
+    if callout_room_per_scale is None:
+        return unpadded_scale
+    if callout_room_per_scale * unpadded_scale >= CALLOUT_ENVELOPE:
+        # Already-present room absorbs the envelope at the ordinary scale;
+        # no pad, no scale penalty.
+        return unpadded_scale
+    denominator = column_h - callout_room_per_scale
+    if denominator <= 0:
+        # Room-per-scale outweighs the whole column; nothing left for the pad
+        # to bind against.
+        return 1.0
+    return (frame_h - CALLOUT_ENVELOPE) / denominator
+
+
 def _horizontal_extent(primary: MeasuredVisual, supporting: Sequence[MeasuredVisual]) -> float:
     primary_half_width = (primary.bounds.right - primary.bounds.left) / 2
     if not supporting:
@@ -185,6 +367,7 @@ def _balanced_pair(items, extent_of):
 
 def _place_instructional(
     arrangement: _Arrangement, frame: Bounds, scale: float,
+    primary_bottom_pad: float = 0.0,
 ) -> list[PlacedVisual]:
     if arrangement.primary is None:
         return []
@@ -198,8 +381,10 @@ def _place_instructional(
     band_height = _band_height(scaled)
 
     # Lay the column out from its top edge so the whole thing -- rows above, the
-    # primary's band, rows below -- ends up centred in the frame.
-    column_top = frame.center.y + _column_height(scaled, gap) / 2
+    # primary's band, rows below -- ends up centred in the frame. The bottom
+    # callout pad is a fixed world-unit reservation that widens the column
+    # only between the primary and whatever sits below it.
+    column_top = frame.center.y + (_column_height(scaled, gap) + primary_bottom_pad) / 2
     placed = _stack_rows(scaled.above, column_top, gap, scale)
     band_top = column_top - (_stack_height(scaled.above, gap) + gap if scaled.above else 0.0)
     center_y = band_top - band_height / 2
@@ -216,7 +401,9 @@ def _place_instructional(
     placed.extend(_place_supporting_side(left, primary_bounds, center_y, -1, scale))
     placed.extend(_place_supporting_side(right, primary_bounds, center_y, 1, scale))
     band_bottom = center_y - band_height / 2
-    placed.extend(_stack_rows(scaled.below, band_bottom - gap, gap, scale))
+    placed.extend(_stack_rows(
+        scaled.below, band_bottom - gap - primary_bottom_pad, gap, scale,
+    ))
     return placed
 
 

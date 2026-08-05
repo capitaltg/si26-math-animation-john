@@ -9,7 +9,7 @@ from app.meta.dsl.teaching_plan import (
 )
 from app.meta.dsl.v3_common import (
     MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MIN_ACTION_SECONDS, MIN_SCENE_SECONDS,
-    AnchorRef, GeneratedText, ProseText, StyleRole, TargetRef,
+    AnchorRef, CalloutText, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 
 
@@ -85,7 +85,7 @@ class CalloutRelation(BaseModel):
     kind: Literal["callout"] = "callout"
     ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     target: AnchorRef
-    text: ProseText = Field(min_length=1, max_length=80)
+    text: CalloutText = Field(min_length=1, max_length=80)
 
 
 Relation = CalloutRelation

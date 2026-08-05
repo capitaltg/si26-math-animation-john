@@ -66,8 +66,38 @@ def validate_prose_text(value: str) -> str:
     return _validate_against(value, _SHARED_TEXT_RULES)
 
 
+#: Every character `str.splitlines()` treats as a line break. Manim's
+#: `Text` renders each of these as a new line too, so any of them in a
+#: callout label would push extra lines past the fixed rendered envelope
+#: sized for a single line. Includes U+2028 and U+2029 (LINE / PARAGRAPH
+#: SEPARATOR), which a plain `"\n" in value` check would let through.
+_LINE_SEPARATORS = frozenset((
+    "\n", "\r", "\v", "\f",
+    "\x1c", "\x1d", "\x1e", "\x85",
+    " ", " ",
+))
+
+
+def validate_single_line_callout_text(value: str) -> str:
+    """Callout labels ride a fixed-height rendered envelope (see layout's
+    `CALLOUT_ENVELOPE`) sized for a single line of `FONT_SIZES["label"]`
+    text. A line break in the label renders extra lines below the anchor
+    that the layout has not reserved room for, so the callout would overrun
+    into whatever sits below it. Reject at schema time rather than
+    discovering the overflow at render.
+    """
+    if any(sep in value for sep in _LINE_SEPARATORS):
+        raise ValueError("callout text must be a single line (no line breaks)")
+    return value
+
+
 GeneratedText = Annotated[str, AfterValidator(validate_generated_text)]
 ProseText = Annotated[str, AfterValidator(validate_prose_text)]
+CalloutText = Annotated[
+    str,
+    AfterValidator(validate_prose_text),
+    AfterValidator(validate_single_line_callout_text),
+]
 
 
 class TargetRef(BaseModel):
