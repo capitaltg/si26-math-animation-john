@@ -298,8 +298,18 @@ class TeachingPlanDocument(BaseModel):
                         "stages entirely on its own; move its custom actions to another beat"
                     )
         if self.strategy == "magnitude_comparison":
+            # Same selection rule as the expander -- the first focus/derive
+            # beat that names the primary visual. Guarding only the first
+            # focus/derive beat (regardless of what it targets) would let the
+            # actual sweep beat carry custom actions when an earlier
+            # focus/derive beat targets something else.
+            primary_ref = self.primary_visual.ref
             sweep_beat = next(
-                (beat for beat in self.beats if beat.kind in {"focus", "derive"}),
+                (
+                    beat for beat in self.beats
+                    if beat.kind in {"focus", "derive"}
+                    and any(target.visual_ref == primary_ref for target in beat.targets)
+                ),
                 None,
             )
             if sweep_beat is not None and sweep_beat.custom_actions:

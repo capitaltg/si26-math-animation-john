@@ -3,7 +3,7 @@ from dataclasses import asdict
 from app.meta.dsl.expression import compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
-from app.meta.v3.beat_expander import expand_beats
+from app.meta.v3.beat_expander import expand_beats, magnitude_sweep_beat_id
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
 from app.meta.v3.timeline import schedule_beats
@@ -220,7 +220,8 @@ def _validate_regroup_compatibility(plan):
 def _validate_magnitude_comparison_compatibility(plan):
     spec = plan.primary_visual
     if spec.kind == "bar":
-        if _literal_integer(spec.value) is None:
+        value = _literal_integer(spec.value)
+        if value is None:
             _fail(
                 "magnitude_comparison_requires_literal_bar_value", "primary_visual.value",
                 "a literal whole-number bar value so the sweep addresses "
@@ -228,7 +229,25 @@ def _validate_magnitude_comparison_compatibility(plan):
                 _describe_expression(spec.value),
                 "set value to a literal integer, or use a different strategy",
             )
+        if value < 1:
+            # An empty sweep leaves the beat with no actions and falls through
+            # to a whole-visual focus -- the same shape as `group_reveal`, and
+            # the exact bug #66 targets. A bar with value 0 has no magnitude to
+            # animate; use a different strategy.
+            _fail(
+                "magnitude_comparison_requires_positive_bar_value", "primary_visual.value",
+                "a bar value of at least 1 so the sweep animates at least one segment",
+                str(value),
+                "use a different strategy for a zero-magnitude bar, or raise value",
+            )
     else:  # number_line
+        if not spec.markers:
+            _fail(
+                "magnitude_comparison_requires_at_least_one_marker", "primary_visual.markers",
+                "at least one marker so the sweep animates at least one part",
+                "no markers",
+                "declare the markers you want swept, or use a different strategy",
+            )
         for index, marker in enumerate(spec.markers):
             if marker.node != "literal":
                 _fail(
@@ -238,6 +257,18 @@ def _validate_magnitude_comparison_compatibility(plan):
                     _describe_expression(marker),
                     "set every marker to a literal number, or use a different strategy",
                 )
+    _require_owned_sweep_beat(plan)
+
+
+def _require_owned_sweep_beat(plan):
+    if magnitude_sweep_beat_id(plan) is None:
+        _fail(
+            "magnitude_comparison_requires_sweep_beat", "beats",
+            f"a focus or derive beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the sweep on",
+            "no focus/derive beat names the primary visual",
+            "add a focus or derive beat whose targets include the primary visual",
+        )
 
 
 def _describe_expression(expression):

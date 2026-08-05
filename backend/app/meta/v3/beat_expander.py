@@ -61,6 +61,7 @@ class BeatExpander:
         self.answer_expression = answer_expression
 
     def expand(self, plan):
+        self._sweep_beat_id = magnitude_sweep_beat_id(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -164,8 +165,7 @@ class BeatExpander:
             minimum_seconds = min(_SECONDS_PER_PAIR * pair_count, _MAX_ELIMINATION_SECONDS)
         return minimum_seconds, weight
 
-    @staticmethod
-    def _slot_count(plan, beat, actions):
+    def _slot_count(self, plan, beat, actions):
         """Choose a slot count that groups related role changes into one instant.
 
         `timeline.schedule_beats` otherwise derives slots from the action count
@@ -191,7 +191,10 @@ class BeatExpander:
             if layout is not None:
                 rows, _columns, _count = layout
                 return rows
-        if plan.strategy == "magnitude_comparison" and beat.kind in {"focus", "derive"}:
+        if (
+            plan.strategy == "magnitude_comparison"
+            and beat.id == getattr(self, "_sweep_beat_id", None)
+        ):
             indices = _magnitude_indices(plan.primary_visual)
             if indices:
                 return len(indices)
@@ -280,13 +283,17 @@ class BeatExpander:
             if actions:
                 return actions
 
-        if beat.kind in {"focus", "derive"} and plan.strategy == "magnitude_comparison":
+        if (
+            plan.strategy == "magnitude_comparison"
+            and beat.id == getattr(self, "_sweep_beat_id", None)
+        ):
             # Focus the primary visual's magnitude-carrying parts one at a
             # time, so the observed extent sweeps left to right and the
-            # animation teaches the magnitude rather than asserting it. Without
-            # this branch a magnitude_comparison plan on a `bar` or
-            # `number_line` renders as a whole-visual focus -- the same shape
-            # as `group_reveal`.
+            # animation teaches the magnitude rather than asserting it.
+            # Only one beat owns the sweep -- the first focus/derive beat that
+            # names the primary visual -- and every later focus/derive beat
+            # falls through to `_generic_role_change`, so two derive beats do
+            # not double-stage one sweep.
             actions = self._magnitude_comparison_actions(plan, current_roles)
             if actions:
                 return actions
@@ -536,6 +543,34 @@ class BeatExpander:
 
 def expand_beats(plan, answer_expression):
     return BeatExpander(answer_expression=answer_expression).expand(plan)
+
+
+def magnitude_sweep_beat_id(plan):
+    """The single beat magnitude_comparison stages its sweep on, or None.
+
+    The first focus/derive beat that names the primary visual owns the sweep;
+    later focus/derive beats behave normally. Selecting one specific beat
+    matters twice over:
+
+    - The expander otherwise emits the sweep on EVERY focus/derive beat, so
+      two derive beats double-stage the same segment-by-segment recolour.
+    - `_slot_count` sizes the beat by the sweep's own action count; a beat
+      that instead targets a supporting caption but happens to be a focus
+      beat would inherit that sizing, and the caption's actions would land in
+      the wrong slots.
+
+    Picking by `beat.targets` filters those cases explicitly rather than
+    relying on the plan author to write the beats in the right order.
+    """
+    if plan.strategy != "magnitude_comparison":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == primary_ref for target in beat.targets):
+            return beat.id
+    return None
 
 
 def _literal_int(expression):

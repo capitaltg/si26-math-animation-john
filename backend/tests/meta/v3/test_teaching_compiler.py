@@ -1611,6 +1611,138 @@ def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_c
     assert [action.target.index for action in focus_actions] == [0, 1, 2]
 
 
+def test_magnitude_comparison_rejects_a_zero_magnitude_bar(compile_context):
+    """A bar with value 0 has nothing to sweep. The empty sweep would fall
+    through to a whole-visual focus -- the group_reveal shape bug #66 targets.
+    """
+    raw = _bar_magnitude_plan(value=0, maximum=5).model_dump()
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_positive_bar_value"):
+        compile_teaching_plan(plan, LiteralNode(value=0), frozenset(), compile_context)
+
+
+def test_magnitude_comparison_rejects_a_number_line_with_no_markers(compile_context):
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare magnitudes on an empty line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [],
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "sweep markers"},
+            {"id": "state", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state"},
+        ],
+        "variation_seed": "empty-line",
+    })
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_at_least_one_marker"):
+        compile_teaching_plan(plan, LiteralNode(value=0), frozenset(), compile_context)
+
+
+def test_magnitude_comparison_stages_the_sweep_on_exactly_one_beat(compile_context):
+    """Two focus/derive beats naming the primary visual would double-stage the
+    same sweep. The second beat must fall through to `_generic_role_change`.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+         "intent": "sweep magnitude"},
+        {"id": "again", "kind": "focus", "targets": [{"visual_ref": "usage"}],
+         "intent": "focus the bar as a whole"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    swept = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    later = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "again" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    assert [action.target.index for action in swept] == [0, 1, 2]
+    assert not later, "the second focus/derive beat must not restage the sweep"
+
+
+def test_magnitude_comparison_skips_beats_that_target_only_a_supporting_visual(compile_context):
+    """A derive beat that names only a caption must not sweep the bar's
+    segments. `beat.targets` filters out those beats before the sweep runs.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "current usage"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "read_caption", "kind": "derive", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption text"},
+        {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+         "intent": "sweep magnitude"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    program = compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+    caption_beat_actions = [
+        entry.action for entry in program.timeline if entry.beat_id == "read_caption"
+    ]
+    assert not any(
+        action.kind == "set_role"
+        and getattr(action.target, "visual_ref", None) == "usage"
+        for action in caption_beat_actions
+    ), "the caption-only beat must not restyle the bar"
+    swept = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus" and entry.action.target.part == "segment"
+    ]
+    assert swept == [0, 1, 2], "the sweep must still run on the beat that names the bar"
+
+
+def test_magnitude_comparison_requires_a_focus_or_derive_beat_naming_the_primary(compile_context):
+    """No focus/derive beat targets the primary bar -- the sweep has nowhere
+    to land, so the plan must be refused rather than silently rendering as
+    group_reveal.
+    """
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["supporting_visuals"] = [
+        {"kind": "label", "ref": "caption", "text": "current usage"},
+    ]
+    raw["beats"] = [
+        {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+         "intent": "show the bar"},
+        {"id": "read_caption", "kind": "derive", "targets": [{"visual_ref": "caption"}],
+         "intent": "read the caption only"},
+        {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+         "intent": "state the value"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_sweep_beat"):
+        compile_teaching_plan(plan, LiteralNode(value=3), frozenset(), compile_context)
+
+
 def test_magnitude_comparison_number_line_sweeps_markers_left_to_right(compile_context):
     """Markers declared out of numeric order (8, 2, 5) must still animate in
     left-to-right axis order (2, 5, 8 -- indices 1, 2, 0), or the sweep reads
