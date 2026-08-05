@@ -24,6 +24,7 @@ def valid_manifest():
         "frame_size": [900, 500],
         "total_duration_seconds": 7.5,
         "conclusion_hold_seconds": 1.5,
+        "final_beat_observed": True,
         "simple_reveal_mode": "together",
         "frames": [
             {"beat_id": "reveal_values", "seconds": 1.5, "path": "probe-0.png", "non_background_pixels": 150},
@@ -92,6 +93,7 @@ def valid_manifest():
     ("nan_frame_height", "render_probe_contract_invalid"),
     ("nan_duration", "render_probe_contract_invalid"),
     ("nan_hold", "render_probe_contract_invalid"),
+    ("missing_final_beat", "conclusion_hold_too_short"),
 ])
 def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, expected_code):
     manifest = {**valid_manifest}
@@ -169,6 +171,12 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         manifest["total_duration_seconds"] = float("nan")
     elif mutation == "nan_hold":
         manifest["conclusion_hold_seconds"] = float("nan")
+    elif mutation == "missing_final_beat":
+        # A conclude beat that compiled to nothing leaves the probe with no
+        # final-beat semantic play to anchor the hold on. The gate must fail
+        # explicitly rather than reusing a previous beat's timing.
+        manifest["final_beat_observed"] = False
+        manifest["conclusion_hold_seconds"] = 0.0
 
     report = validate_rendered_quality(manifest)
 

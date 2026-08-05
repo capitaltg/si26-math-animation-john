@@ -94,17 +94,23 @@ def _render_probe(
 
     from manim import Scene, config, tempconfig
 
+    final_beat_id = resolved.timeline[-1].beat_id
+
     class ProbeScene(Scene):
         def __init__(self):
             super().__init__()
             self.elapsed = 0.0
-            # `elapsed` at the moment the last semantic-bearing play STARTED.
-            # `conclusion_hold_seconds` is then `elapsed - last_semantic_play_start`,
-            # so a zero-duration final action leaves this equal to `elapsed` and
-            # the hold reads as 0 -- retaining an earlier non-zero measurement
-            # (as a "last non-zero run_time" tracker would) would silently pass
-            # the hold gate on a conclude beat whose final play carried no time.
-            self.last_semantic_play_start = 0.0
+            # `elapsed` at the moment the last play carrying a semantic event
+            # from the FINAL beat started. Scoping to the final beat is what
+            # makes `conclusion_hold_seconds` measure the conclude beat's own
+            # hold rather than time trailing an arbitrary earlier beat -- a
+            # conclude that compiled to nothing would otherwise reuse the
+            # previous beat's anchor and the gate could still pass.
+            #: `None` until the final beat's first semantic play is observed;
+            #  a manifest emitted with it still None fails the hold gate
+            #  explicitly, rather than reporting a hold of 0 alongside a
+            #  passing manifest.
+            self.last_final_beat_play_start = None
             self.frames = []
             self.captured_beats = set()
             self.rendered = None
@@ -123,13 +129,13 @@ def _render_probe(
             duration = kwargs.get("run_time", 0.0)
             events = tuple(getattr(animations[0], "_semantic_events", ())) if animations else ()
             # Manim's own follow-up calls into `Scene.play` (compilation of an
-            # `AnimationGroup`, wrap-up passes) reach us with `run_time=0` and no
-            # `_semantic_events`; scoping the observation to plays that carried a
-            # semantic payload keeps this measurement on renderer instructions.
-            # Recording the start BEFORE `super().play()` so a zero-duration
-            # semantic play still updates the anchor.
-            if events:
-                self.last_semantic_play_start = self.elapsed
+            # `AnimationGroup`, wrap-up passes) reach us with `run_time=0` and
+            # no `_semantic_events`, so scoping the observation to semantic
+            # plays keeps this measurement on renderer instructions. Recording
+            # the start BEFORE `super().play()` so a zero-duration final play
+            # still updates the anchor -- hold then reads as 0 and is rejected.
+            if any(event["beat_id"] == final_beat_id for event in events):
+                self.last_final_beat_play_start = self.elapsed
             result = super().play(*animations, **kwargs)
             self.elapsed += duration
             self.render_events.extend(self._observe_render_event(event) for event in events)
@@ -222,15 +228,17 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
     path_events = [event["path_ref"] for event in scene.render_events if event["path_ref"] is not None]
     state_events = _state_events(scene.render_events, resolved)
     # `scene.elapsed` is the wall time the probe subprocess actually spent in
-    # play/wait calls; `scene.last_semantic_play_start` is the elapsed at the
-    # moment the last semantic-bearing play STARTED, so `conclusion_hold_seconds`
-    # is the interval that final play took plus any trailing wait. Reading off
-    # scene state rather than off `resolved.total_duration_seconds` is what
-    # gives the "rendered" duration and conclusion-hold checks real teeth --
-    # otherwise they would just re-verify the compiled number the static gate
-    # already asserted. Anchoring on the semantic play's start (not on its
-    # observed run_time) also makes a zero-duration final action read as
-    # hold = 0 instead of retaining an earlier action's run_time.
+    # play/wait calls; `scene.last_final_beat_play_start` is the elapsed at
+    # the start of the LAST play that carried a semantic event from the final
+    # beat. Reading off scene state rather than off
+    # `resolved.total_duration_seconds` is what gives the "rendered" duration
+    # and conclusion-hold checks real teeth -- otherwise they would just
+    # re-verify the compiled number the static gate already asserted.
+    # Scoping the hold anchor to the final beat means a conclude beat that
+    # compiled to nothing reports `final_beat_observed=False` and the hold
+    # gate rejects it explicitly, rather than reusing the previous beat's
+    # anchor and silently passing.
+    final_beat_observed = scene.last_final_beat_play_start is not None
     return {
         "frame_size": [width, height],
         # The box `place_vertical_lesson` lays out into, in the same pixel
@@ -239,7 +247,10 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         # to the wider physical frame.
         "safe_frame": _pixel_bounds(SAFE_FRAME, width, height),
         "total_duration_seconds": scene.elapsed,
-        "conclusion_hold_seconds": scene.elapsed - scene.last_semantic_play_start,
+        "final_beat_observed": final_beat_observed,
+        "conclusion_hold_seconds": (
+            scene.elapsed - scene.last_final_beat_play_start if final_beat_observed else 0.0
+        ),
         "simple_reveal_mode": _simple_reveal_mode(resolved),
         "frames": scene.frames,
         "visual_bounds": visual_bounds,

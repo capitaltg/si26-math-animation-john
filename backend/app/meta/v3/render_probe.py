@@ -74,6 +74,7 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "frame_size": (list, tuple),
         "total_duration_seconds": (int, float),
         "conclusion_hold_seconds": (int, float),
+        "final_beat_observed": bool,
         "simple_reveal_mode": (str, type(None)),
         "frames": list,
         "safe_frame": (list, tuple),
@@ -359,14 +360,21 @@ def check_rendered_duration(manifest: dict) -> QualityCheck:
 
 
 def check_rendered_conclusion_hold(manifest: dict) -> QualityCheck:
-    """The final semantic event must be followed by at least 1.5s of hold.
+    """The final beat must produce at least 1.5s of hold at render time.
 
     Static `check_conclusion_hold` bounds the shortest declared action in the
     conclude beat, but nothing observed the hold actually reaching the frame.
-    Here `conclusion_hold_seconds` is `scene.elapsed - last_render_event_time`,
-    so this catches a conclude beat that ran short at render time regardless of
-    what the compiled program declared.
+    Here `conclusion_hold_seconds` is the interval from the last final-beat
+    semantic play's start to scene end, and `final_beat_observed` records
+    whether that final beat produced any semantic play at all -- a conclude
+    beat that compiled to nothing must fail the gate rather than fall back to
+    an earlier beat's timing.
     """
+    if not manifest.get("final_beat_observed", False):
+        return _failed(
+            "conclusion_hold_too_short", "final_beat_observed",
+            "the final beat produced no semantic play at render time",
+        )
     hold = manifest.get("conclusion_hold_seconds", 0)
     if hold + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS:
         return _failed(
