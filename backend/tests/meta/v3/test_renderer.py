@@ -260,6 +260,36 @@ def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
     assert not missing, f"{kind} declares targetable parts the renderer never builds: {missing}"
 
 
+def test_number_line_draws_its_line_through_its_markers():
+    """The line must pass through its own marker dots, not sit below them.
+
+    `_measure_number_line` reserves a label strip beneath the line (so a
+    following visual is not laid out on top of the marker labels), which makes
+    the measured bounds' vertical center land below 0 -- while marker parts
+    stay measured at y=0. `_line_visual` used to derive the line's y from
+    `bounds.center.y`, so it drifted below its dots by however tall the label
+    strip was. It now reads `payload["line_center_y"]` instead, which the
+    marker parts also sit at.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
+        {
+            "minimum": Fraction(0), "maximum": Fraction(3000),
+            "markers": [Fraction(0), Fraction(2750), Fraction(3000)],
+        },
+        ManimTextMeasurer(),
+    )
+    root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+
+    line = next(mobject for mobject in root.submobjects if isinstance(mobject, Line))
+    dots = [value for key, value in children.items() if key[0] == "marker"]
+    assert dots
+
+    line_ys = {line.get_start()[1], line.get_end()[1]}
+    dot_ys = {dot.get_center()[1] for dot in dots}
+    assert line_ys == dot_ys
+
+
 def _scaled_down_lesson_plan():
     """A rectangle plus a label wide enough that layout must scale the lesson down.
 

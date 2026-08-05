@@ -288,7 +288,11 @@ def _text(text: str, font_role: str, center: Point, scale: float = 1.0):
 
 
 def _line_visual(bounds: Bounds, measured, offset: Point, part_name: str):
-    root = Line(_array(Point(bounds.left, bounds.center.y)), _array(Point(bounds.right, bounds.center.y)))
+    # The line's y comes from the payload, not `bounds.center.y`: the bounds
+    # reserve a label strip below the line (see `_measure_number_line`), so
+    # their vertical center no longer sits where the line and its markers do.
+    y = measured.payload["line_center_y"] + offset.y
+    root = Line(_array(Point(bounds.left, y)), _array(Point(bounds.right, y)))
     children = _parts_as_dots(measured, offset, part_name)
     root_group = VGroup(root, *children.values())
     return root_group, children
