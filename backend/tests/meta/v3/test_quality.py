@@ -13,7 +13,7 @@ from app.meta.dsl.teaching_plan import (
 from app.meta.dsl.v3_common import AnchorRef, CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
-from app.meta.v3.quality import validate_static_quality
+from app.meta.v3.quality import QualityCheck, QualityReport, validate_static_quality
 
 
 @dataclass(frozen=True)
@@ -613,8 +613,43 @@ def test_report_raises_first_structured_failure_without_candidate_contents(valid
     with pytest.raises(V3ValidationError, match="serial_simple_reveal") as exc_info:
         report.require_passed()
 
-    assert exc_info.value.failure.hint == "revise the teaching plan and regenerate the candidate"
+    failed = next(check for check in report.checks if not check.passed)
+    assert failed.detail in exc_info.value.failure.hint
     assert "v4" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("code", "path", "detail"),
+    [
+        # Representative static-layer failure (app/meta/v3/quality.py).
+        ("serial_simple_reveal", "timeline[0].action.mode", "ordered values must reveal together"),
+        # Representative rendered-layer failure (app/meta/v3/render_probe.py) --
+        # reused because `QualityReport.require_passed` serves both layers.
+        ("callout_collision", "relations.rel_a.bounds", "callout overlaps an unrelated visual"),
+    ],
+)
+def test_the_quality_hint_carries_the_check_and_its_diagnosis(code, path, detail):
+    """Every `_failed(...)` site knows what is wrong; the retry loop only sees
+    `code`, `path`, and `hint` (see `_STABLE_REPAIR_FEEDBACK_FIELDS` in
+    `app/meta/draft_generation.py`). Before this test, `require_passed` stamped
+    the same generic hint on every failure and the per-check diagnosis (held in
+    `detail`, forwarded through `observed`) never reached the model -- so the
+    retry proposed the same repair unchanged. The forwarded `hint` must name
+    the check and carry something the model can act on for each failure.
+    """
+    report = QualityReport(
+        passed=False,
+        checks=[QualityCheck(code=code, passed=False, path=path, detail=detail)],
+    )
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        report.require_passed()
+
+    failure = exc_info.value.failure
+    assert failure.code == code
+    assert failure.path == path
+    assert detail in failure.hint
+    assert failure.hint != "revise the teaching plan and regenerate the candidate"
 
 
 def _plan_with_a_redundant_reveal_beat():
