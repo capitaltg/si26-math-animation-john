@@ -165,13 +165,18 @@ def _answer_expression():
 
 
 def _compile(plan):
+    from app.meta.dsl.expression import FieldContract
     from app.meta.dsl.v3_common import CompileContext
     from app.meta.v3.compiler import compile_teaching_plan
 
     return compile_teaching_plan(
         plan,
         _answer_expression(),
-        frozenset({"distance_km"}),
+        FieldContract(
+            scalars=frozenset({"distance_km"}),
+            arrays={},
+            scalar_minimums={"distance_km": Fraction(1)},
+        ),
         CompileContext(concept_family="transform_other", grade_band="3-5"),
     )
 

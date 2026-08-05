@@ -336,4 +336,8 @@ def field_contract_for(document: ParamsDocument) -> FieldContract:
             spec.name: frozenset(item.name for item in spec.item_fields)
             for spec in document.fields if spec.type == "array"
         },
+        scalar_minimums={
+            spec.name: Fraction(spec.minimum).limit_denominator(10**9)
+            for spec in document.fields if spec.type in ("integer", "decimal")
+        },
     )
