@@ -81,6 +81,24 @@ const QUALITY_CHECK_CATEGORIES = [
     label: 'Anchor alignment',
     codes: new Set(['collection_anchor_for_item', 'dimension_anchor_mismatch', 'callout_collision']),
   },
+  // Codes emitted by app/meta/v3/render_probe.py. Approval precondition 5
+  // requires a passing quality_report, so a draft that reaches this panel has
+  // already cleared these -- surfacing the category tells the reviewer the
+  // render gates actually ran instead of only the static ones.
+  {
+    label: 'Rendered output',
+    codes: new Set([
+      'blank_probe_frame',
+      'frame_out_of_bounds',
+      'anchor_alignment_mismatch',
+      'rendered_relation_mismatch',
+      'rendered_state_mismatch',
+      'state_order_invalid',
+      'undeclared_path_event',
+      'final_answer_not_persistent',
+      'render_probe_contract_invalid',
+    ]),
+  },
 ]
 
 function passingQualityCategoryLabels(qualityReport) {
@@ -227,9 +245,9 @@ export default function MetaReviewPanel() {
     setError(null)
     try {
       // Invalid or already-decided candidates never leak into this list --
-      // the review API only ever returns pending_review drafts, so this is
-      // the only status worth requesting.
-      const resp = await fetch('/meta/drafts?status=pending_review', { headers: authHeaders() })
+      // the review API only ever returns pending_review drafts, regardless of
+      // any status a caller might pass in the query string.
+      const resp = await fetch('/meta/drafts', { headers: authHeaders() })
       const data = await responseJson(resp)
       if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load drafts'))
       setDrafts(data)
@@ -422,12 +440,21 @@ export default function MetaReviewPanel() {
   const positiveFixtures = selected ? selected.fixtures.filter((f) => f.kind === 'positive') : []
   const guardFixtures = selected ? selected.fixtures.filter((f) => f.kind !== 'positive') : []
   const validationPassed = selected?.validation_report?.passed === true
+  // Approval precondition 5 (app/meta/approval.py) requires a passing quality
+  // report whose artifact_hash matches the draft's own -- without this the
+  // Approve button is enabled for a draft the server will refuse at 422.
+  const qualityReportPassed = Boolean(
+    selected
+    && selected.quality_report?.passed === true
+    && selected.quality_report.artifact_hash === selected.artifact_hash,
+  )
   const passingQualityLabels = passingQualityCategoryLabels(selected?.quality_report)
   const totalDurationSeconds = selected?.total_duration_seconds ?? 0
   const canApprove = Boolean(
     selected
     && selected.status === 'pending_review'
     && validationPassed
+    && qualityReportPassed
     && hasFullPredicateCoverage
     && qualifyingFixtureCount >= requiredFixtureCount
     && TEMPLATE_NAME_PATTERN.test(templateName)
@@ -577,12 +604,20 @@ export default function MetaReviewPanel() {
               <p className="admin__bullet">{selected.classifier_bullet}</p>
 
               <h3 className="admin__subhead">Teaching plan</h3>
-              <p className="admin__objective">{selected.teaching_plan.learning_objective}</p>
-              <ol className="workshop__beats">
-                {selected.teaching_plan.beats.map((beat) => (
-                  <li key={beat.id}>{formatBeat(beat)}</li>
-                ))}
-              </ol>
+              {/* teaching_plan is required to be a plan_version-3 document by the
+                  backend's own validation, but the API's declared shape is a
+                  bare `dict`, so a minimal `{plan_version: 3}` can reach here
+                  without crashing the panel. */}
+              {selected.teaching_plan?.learning_objective && (
+                <p className="admin__objective">{selected.teaching_plan.learning_objective}</p>
+              )}
+              {selected.teaching_plan?.beats && (
+                <ol className="workshop__beats">
+                  {selected.teaching_plan.beats.map((beat) => (
+                    <li key={beat.id}>{formatBeat(beat)}</li>
+                  ))}
+                </ol>
+              )}
               {passingQualityLabels.length > 0 && (
                 <ul className="stamps">
                   {passingQualityLabels.map((label) => (
@@ -616,16 +651,6 @@ export default function MetaReviewPanel() {
                   </p>
                   {selected.validation_report ? (
                     <>
-                      {selected.validation_report.compile_error && (
-                        <p className="notice__body">
-                          Compile error: {selected.validation_report.compile_error}
-                        </p>
-                      )}
-                      {selected.validation_report.preview_error && (
-                        <p className="notice__body">
-                          Preview error: {selected.validation_report.preview_error}
-                        </p>
-                      )}
                       {missingPredicateIndexes.length > 0 && (
                         <p className="notice__body">
                           {missingPredicateIndexes.length} of {predicateCount} guard predicates

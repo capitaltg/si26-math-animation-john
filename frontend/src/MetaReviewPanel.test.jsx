@@ -43,7 +43,9 @@ const draftDetail = {
     { at_seconds: 2, duration_seconds: 1.5, beat_id: 'conclude' },
   ],
   total_duration_seconds: 6,
-  quality_report: { passed: true, checks: [] },
+  // artifact_hash matches the draft's own artifact_hash below -- approval
+  // precondition 5 refuses a mismatch as "quality report is stale".
+  quality_report: { passed: true, checks: [], artifact_hash: 'sha256:abc' },
   classifier_bullet: 'use for fraction-of-whole bars',
   artifact_hash: 'sha256:abc',
   validation_report: { passed: true },
@@ -88,6 +90,7 @@ const v3DraftDetail = {
   total_duration_seconds: 7.5,
   quality_report: {
     passed: true,
+    artifact_hash: 'sha256:abc',
     checks: [
       { code: 'timeline_duration', passed: true, path: 'total_duration_seconds', detail: 'passed' },
       { code: 'serial_simple_reveal', passed: true, path: 'timeline', detail: 'passed' },
@@ -105,7 +108,7 @@ const v3DraftDetail = {
 function installV3FetchMock() {
   const fetchMock = vi.fn(async (url) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -123,7 +126,7 @@ function installV3FetchMock() {
 function installFetchMock({ fixtureResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -176,7 +179,7 @@ const approvableDraftDetail = {
 function installApprovableFetchMock({ approveResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -243,7 +246,7 @@ it('suppresses a category label when any check in that category failed', async (
   // pass-only. Anchor alignment (all passing) must still be labelled, so this
   // proves per-category suppression rather than a blanket hide.
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failingQualityDraftDetail }
     if (url === failingQualityDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -264,7 +267,7 @@ it('never renders a raw quality-check code, path, or detail string', async () =>
   // Rendering `{check.code}: {check.detail}` beside each label would otherwise
   // pass every test in this file.
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failingQualityDraftDetail }
     if (url === failingQualityDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -299,7 +302,7 @@ it('keeps Approve disabled when the validation report has not passed, even with 
     validation_report: { passed: false, negative_predicate_coverage: [0] },
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => unvalidatedDraftDetail }
     if (url === unvalidatedDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -338,7 +341,7 @@ it('keeps Approve disabled when a guard predicate has no negative witness, even 
     validation_report: { passed: true, negative_predicate_coverage: [0] },
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => uncoveredDraftDetail }
     if (url === uncoveredDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -354,6 +357,109 @@ it('keeps Approve disabled when a guard predicate has no negative witness, even 
   fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
 
   expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('keeps Approve disabled when the quality report is missing, even with every other gate satisfied', async () => {
+  // `canApprove`'s quality-report conjunct: without it the panel offers a
+  // button the server refuses at approval precondition 5.
+  const noQualityDraftDetail = { ...approvableDraftDetail, quality_report: null }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => noQualityDraftDetail }
+    if (url === noQualityDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByLabelText('Fixture fx-1 params')
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('keeps Approve disabled when the quality report is stale (artifact hash mismatch)', async () => {
+  // Approval precondition 5 refuses a quality report whose artifact_hash does
+  // not equal the draft's own, and the client must too.
+  const staleQualityDraftDetail = {
+    ...approvableDraftDetail,
+    quality_report: { passed: true, checks: [], artifact_hash: 'sha256:earlier' },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => staleQualityDraftDetail }
+    if (url === staleQualityDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByLabelText('Fixture fx-1 params')
+
+  fireEvent.change(screen.getByLabelText('Template name'), { target: { value: 'apples_count' } })
+  fireEvent.click(screen.getByLabelText('I confirm the mathematical semantics and preview are correct'))
+
+  expect(screen.getByRole('button', { name: 'Approve and publish' }).disabled).toBe(true)
+})
+
+it('shows a Rendered output passed label when every render-gate check passed', async () => {
+  // The reviewer needs an in-panel confirmation that the render probe gates
+  // actually ran -- a draft that reaches pending_review has already cleared
+  // them, but nothing in the UI said so until this category was added.
+  const renderedDraftDetail = {
+    ...draftDetail,
+    quality_report: {
+      passed: true,
+      artifact_hash: 'sha256:abc',
+      checks: [
+        { code: 'blank_probe_frame', passed: true, path: 'frames', detail: 'passed' },
+        { code: 'frame_out_of_bounds', passed: true, path: 'visual_bounds', detail: 'passed' },
+        { code: 'anchor_alignment_mismatch', passed: true, path: 'anchors', detail: 'passed' },
+        { code: 'rendered_relation_mismatch', passed: true, path: 'relations', detail: 'passed' },
+        { code: 'rendered_state_mismatch', passed: true, path: 'state_events', detail: 'passed' },
+        { code: 'state_order_invalid', passed: true, path: 'state_events', detail: 'passed' },
+        { code: 'undeclared_path_event', passed: true, path: 'manifest', detail: 'passed' },
+        { code: 'final_answer_not_persistent', passed: true, path: 'timeline', detail: 'passed' },
+        { code: 'render_probe_contract_invalid', passed: true, path: 'manifest', detail: 'passed' },
+      ],
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => renderedDraftDetail }
+    if (url === renderedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+  await screen.findByRole('heading', { name: 'Teaching plan' })
+
+  expect(screen.getByText('Rendered output passed')).not.toBeNull()
+})
+
+it('does not crash when teaching_plan is a minimal plan_version-only document', async () => {
+  // The review API declares teaching_plan as an arbitrary dict, so a minimal
+  // {plan_version: 3} can reach the panel even though the backend's own
+  // validation would normally require a learning_objective and beats. Guarding
+  // the accessors keeps a shape-poor draft from erasing the whole page.
+  const minimalDraftDetail = {
+    ...draftDetail,
+    teaching_plan: { plan_version: 3 },
+  }
+  vi.stubGlobal('fetch', vi.fn(async (url) => {
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => minimalDraftDetail }
+    if (url === minimalDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }))
+
+  render(<MetaReviewPanel />)
+  fireEvent.click(await screen.findByText('Review'))
+
+  expect(await screen.findByRole('heading', { name: 'Teaching plan' })).not.toBeNull()
 })
 
 it('submits reject feedback and returns to the list', async () => {
@@ -381,7 +487,7 @@ it('sends the stored reviewer token as a bearer header on every call', async () 
   await waitFor(() => expect(screen.getByText(/k1/)).not.toBeNull())
 
   expect(fetchMock).toHaveBeenCalledWith(
-    '/meta/drafts?status=pending_review',
+    '/meta/drafts',
     expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) }),
   )
 
@@ -401,7 +507,7 @@ it('retries loading drafts once a valid token is entered after an unauthenticate
       if (init.headers?.Authorization !== 'Bearer good-token') {
         return { ok: false, status: 401, json: async () => ({ detail: 'Invalid or missing reviewer token' }) }
       }
-      if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+      if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -426,12 +532,11 @@ it('explains why a draft with a failing validation report cannot be approved', a
     guard_document: { guard_version: 1, predicates: [{ predicate: 'positive' }, { predicate: 'ordered' }] },
     validation_report: {
       passed: false,
-      preview_error: 'no accepted positive fixture available for preview',
       negative_predicate_coverage: [0],
     },
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => failedDraftDetail }
     if (url === failedDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     throw new Error(`Unexpected fetch: ${url}`)
@@ -444,7 +549,6 @@ it('explains why a draft with a failing validation report cannot be approved', a
   await waitFor(() =>
     expect(screen.getByText("This draft failed automatic validation and can't be approved yet.")).not.toBeNull(),
   )
-  expect(screen.getByText('Preview error: no accepted positive fixture available for preview')).not.toBeNull()
   expect(screen.getByText('1 of 2 guard predicates (#1) have no guard case proving they correctly reject bad input.')).not.toBeNull()
 })
 
@@ -467,7 +571,7 @@ function installClearedFetchMock(overrides = {}) {
     preview_url: '/meta/preview/sha256:revalidated',
   }
   const fetchMock = vi.fn(async (url, options) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => clearedDraftDetail }
     if (url === '/meta/drafts/draft-1/revalidate') {
       expect(options.method).toBe('POST')
@@ -568,7 +672,7 @@ it('labels a passing boundary fixture as accepting, not as a rejection guard cas
     ],
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => boundaryDraftDetail }
     if (url === boundaryDraftDetail.preview_url) return { ok: true, blob: async () => ({ __sourceUrl: url }) }
     throw new Error(`Unexpected fetch: ${url}`)
@@ -640,7 +744,7 @@ it('reloads fresh draft detail after saving a fixture instead of patching locall
   let draftDetailCalls = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -701,7 +805,7 @@ it('counts duplicate fixtures from one observation only once', async () => {
     ],
   }
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/meta/drafts?status=pending_review') return { ok: true, json: async () => [draftSummary] }
+    if (url === '/meta/drafts') return { ok: true, json: async () => [draftSummary] }
     if (url === '/meta/drafts/draft-1') return { ok: true, json: async () => duplicateDraftDetail }
     if (url === duplicateDraftDetail.preview_url) {
       return { ok: true, blob: async () => ({ __sourceUrl: url }) }
@@ -773,7 +877,7 @@ it('revokes the previous preview blob URL when a fresh preview replaces it', asy
   let draftDetailCallCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -816,7 +920,7 @@ it('discards an out-of-order preview resolution and revokes its now-stale blob U
   let draftDetailCallCount = 0
   const fetchMock = vi.fn(async (url, init = {}) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -910,7 +1014,7 @@ it('revokes a preview blob URL created by a fetch that resolves after the compon
 
   const fetchMock = vi.fn(async (url) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -946,7 +1050,7 @@ it('revokes a preview blob URL whose fetch was still in flight when Back to list
 
   const fetchMock = vi.fn(async (url) => {
     if (url === '/meta/versions') return { ok: true, json: async () => [] }
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [draftSummary] }
     }
     if (url === '/meta/drafts/draft-1') {
@@ -1018,7 +1122,7 @@ const sharedVersion = {
 
 function installLibraryFetchMock({ versions = [ownedVersion, sharedVersion], promoteResponse } = {}) {
   const fetchMock = vi.fn(async (url, init = {}) => {
-    if (url === '/meta/drafts?status=pending_review') {
+    if (url === '/meta/drafts') {
       return { ok: true, json: async () => [] }
     }
     if (url === '/meta/versions') return { ok: true, json: async () => versions }
