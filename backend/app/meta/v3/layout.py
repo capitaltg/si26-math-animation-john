@@ -10,6 +10,13 @@ from app.meta.v3.geometry import (
 SAFE_FRAME = Bounds(-6.6, 6.6, -3.6, 3.6)
 MIN_TEXT_SCALE = 0.7
 GAP = 0.45
+#: The downward reach of a rendered callout below its anchor point: one line of
+#: `FONT_SIZES["label"]` text plus the arrow that connects the label to the
+#: anchor, plus the `next_to` buff. Fixed in world units because
+#: `renderer._build_relation` builds the callout at that font size regardless
+#: of the lesson's uniform scale, so the space to reserve for it does not
+#: shrink alongside the visuals (see #82).
+CALLOUT_ENVELOPE = 0.9
 #: The answer used to be placed in a reserved strip at the bottom of the frame,
 #: which read as a caption stapled under the lesson rather than as its outcome.
 #: It is now arranged with everything else, so the instructional frame is the
@@ -52,9 +59,15 @@ class _Arrangement:
     below: list[MeasuredVisual]
 
 
-def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[PlacedVisual]:
+def place_vertical_lesson(
+    measured_visuals: Sequence[MeasuredVisual],
+    relations: Sequence[object] = (),
+) -> list[PlacedVisual]:
     arrangement = _arrange(measured_visuals)
-    scale = min(1.0, _fit_instructional_scale(arrangement, INSTRUCTIONAL_FRAME))
+    primary_bottom_pad = _primary_bottom_callout_pad(arrangement.primary, relations)
+    scale = min(1.0, _fit_instructional_scale(
+        arrangement, INSTRUCTIONAL_FRAME, primary_bottom_pad,
+    ))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
             code="below_minimum_text_scale",
@@ -65,9 +78,45 @@ def place_vertical_lesson(measured_visuals: Sequence[MeasuredVisual]) -> list[Pl
         ))
     placed_by_ref = {
         item.measured.ref: item
-        for item in _place_instructional(arrangement, INSTRUCTIONAL_FRAME, scale)
+        for item in _place_instructional(
+            arrangement, INSTRUCTIONAL_FRAME, scale, primary_bottom_pad,
+        )
     }
     return [placed_by_ref[item.ref] for item in measured_visuals]
+
+
+def _primary_bottom_callout_pad(primary, relations):
+    """Extra clearance to reserve below the primary for bottom-anchored callouts.
+
+    The callout renders below its anchor at a fixed world-unit envelope,
+    regardless of the lesson's uniform scale (renderer._build_relation uses a
+    fixed `FONT_SIZES["label"]`). If the primary already has interior room
+    between the anchor and its outer bounds -- rectangle_measurement, for
+    example, extends its bounds down to enclose its length label -- the
+    envelope may fit inside that room; only the shortfall has to be reserved.
+    """
+    if primary is None or not relations:
+        return 0.0
+    pad = 0.0
+    for relation in relations:
+        target = getattr(relation, "target", None)
+        if target is None:
+            continue
+        if getattr(target, "visual_ref", None) != primary.ref:
+            continue
+        if getattr(target, "anchor", None) != "bottom":
+            continue
+        try:
+            anchor_point = primary.anchor(
+                part=target.part, index=target.index, name="bottom",
+            )
+        except KeyError:
+            # Leave anchor validity to `resolve_relation`, which will raise a
+            # structured V3Failure with a matching hint.
+            continue
+        interior = anchor_point.y - primary.bounds.bottom
+        pad = max(pad, CALLOUT_ENVELOPE - interior)
+    return max(0.0, pad)
 
 
 def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
@@ -124,13 +173,18 @@ def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
     return sum(item.bounds.top - item.bounds.bottom for item in items) + gap * (len(items) - 1)
 
 
-def _fit_instructional_scale(arrangement: _Arrangement, frame: Bounds) -> float:
+def _fit_instructional_scale(
+    arrangement: _Arrangement, frame: Bounds, primary_bottom_pad: float = 0.0,
+) -> float:
     if arrangement.primary is None:
         return 1.0
     primary = arrangement.primary
-    vertical_scale = _fit_extent(
-        _column_height(arrangement, GAP), frame.top - frame.bottom,
-    )
+    # `primary_bottom_pad` is a fixed world-unit reservation for a bottom
+    # callout on the primary; it does not scale with the visuals, so subtract
+    # it from the available vertical frame before dividing by the (scaled)
+    # column height.
+    available_height = (frame.top - frame.bottom) - primary_bottom_pad
+    vertical_scale = _fit_extent(_column_height(arrangement, GAP), available_height)
     half_width = (frame.right - frame.left) / 2
     horizontal_scale = min(
         _fit_extent(_horizontal_extent(primary, arrangement.left), half_width),
@@ -185,6 +239,7 @@ def _balanced_pair(items, extent_of):
 
 def _place_instructional(
     arrangement: _Arrangement, frame: Bounds, scale: float,
+    primary_bottom_pad: float = 0.0,
 ) -> list[PlacedVisual]:
     if arrangement.primary is None:
         return []
@@ -198,8 +253,10 @@ def _place_instructional(
     band_height = _band_height(scaled)
 
     # Lay the column out from its top edge so the whole thing -- rows above, the
-    # primary's band, rows below -- ends up centred in the frame.
-    column_top = frame.center.y + _column_height(scaled, gap) / 2
+    # primary's band, rows below -- ends up centred in the frame. The bottom
+    # callout pad is a fixed world-unit reservation that widens the column
+    # only between the primary and whatever sits below it.
+    column_top = frame.center.y + (_column_height(scaled, gap) + primary_bottom_pad) / 2
     placed = _stack_rows(scaled.above, column_top, gap, scale)
     band_top = column_top - (_stack_height(scaled.above, gap) + gap if scaled.above else 0.0)
     center_y = band_top - band_height / 2
@@ -216,7 +273,9 @@ def _place_instructional(
     placed.extend(_place_supporting_side(left, primary_bounds, center_y, -1, scale))
     placed.extend(_place_supporting_side(right, primary_bounds, center_y, 1, scale))
     band_bottom = center_y - band_height / 2
-    placed.extend(_stack_rows(scaled.below, band_bottom - gap, gap, scale))
+    placed.extend(_stack_rows(
+        scaled.below, band_bottom - gap - primary_bottom_pad, gap, scale,
+    ))
     return placed
 
 

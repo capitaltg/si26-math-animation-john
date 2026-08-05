@@ -1,9 +1,10 @@
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
 
-from app.meta.v3.geometry import Bounds
-from app.meta.v3.layout import SAFE_FRAME, place_vertical_lesson
+from app.meta.v3.geometry import Bounds, MeasuredVisual, SemanticPart
+from app.meta.v3.layout import CALLOUT_ENVELOPE, SAFE_FRAME, place_vertical_lesson
 from app.meta.v3.rectangle_measurement import measure_rectangle
 from app.meta.v3.visual_registry import default_visual_registry
 
@@ -208,3 +209,99 @@ def test_an_answer_only_scene_is_centred_rather_than_failing_to_place():
     answer, = place_vertical_lesson([_answer("2750 meters", measurer)])
 
     assert answer.bounds.center.y == pytest.approx(0.0)
+
+
+def _tape_like_primary(ref="tape", height=0.6, width=4.0):
+    """A primary whose parts sit flush with its outer bottom edge (unit_tape).
+
+    Isolates the property that unit_tape.box[0].bottom coincides with the
+    visual's bounds.bottom -- the geometry that leaves a bottom-anchored
+    callout no interior room to render into.
+    """
+    bounds = Bounds(-width / 2, width / 2, -height / 2, height / 2)
+    box = Bounds(-width / 2, -width / 2 + 1.0, -height / 2, height / 2)
+    return MeasuredVisual(
+        ref=ref, bounds=bounds,
+        parts={("box", 0): SemanticPart("box", 0, box)},
+        paths={}, payload={},
+    )
+
+
+def _callout(visual_ref, part, index, anchor):
+    return SimpleNamespace(
+        target=SimpleNamespace(
+            visual_ref=visual_ref, part=part, index=index, anchor=anchor,
+        ),
+    )
+
+
+def test_bottom_anchored_callout_on_primary_reserves_room_below_it():
+    """The reported #82 scenario: a callout anchored to `box[0].bottom` on a
+    unit_tape-like primary must not overrun the answer stacked below it. The
+    layout has to reserve enough clearance below the primary that the
+    callout's fixed downward envelope fits."""
+    measurer = _WidthPerCharacterMeasurer()
+    measured = [_tape_like_primary(), _answer("2750 meters", measurer)]
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson(measured, relations)
+    by_ref = {item.measured.ref: item for item in placed}
+
+    primary_bottom = by_ref["tape"].bounds.bottom
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    clearance = primary_bottom - answer_top
+    # Without the reservation the two are separated only by `GAP`; with the
+    # reservation the callout's downward envelope also fits, so a callout tip
+    # at the primary's own bottom edge lands well above the answer.
+    assert clearance >= CALLOUT_ENVELOPE - 1e-9, (
+        f"answer clearance {clearance:g} < callout envelope {CALLOUT_ENVELOPE:g}"
+    )
+
+
+def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_extra():
+    """If the anchor already sits far enough above the primary's outer bottom
+    that the envelope fits inside the visual's own bounds, the layout must
+    not push the answer further away for it -- otherwise every measurement
+    lesson with a labelled edge would pay for space it doesn't need."""
+    measurer = _WidthPerCharacterMeasurer()
+    # A primary whose bottom bounds sit `CALLOUT_ENVELOPE` below its box.
+    height = 0.6
+    interior = CALLOUT_ENVELOPE + 0.1
+    box = Bounds(-2.0, 2.0, -height / 2, height / 2)
+    bounds = Bounds(-2.0, 2.0, box.bottom - interior, box.top)
+    primary = MeasuredVisual(
+        ref="rect", bounds=bounds,
+        parts={("edge", 0): SemanticPart("edge", 0, box)},
+        paths={}, payload={},
+    )
+    relations = [_callout("rect", part="edge", index=0, anchor="bottom")]
+
+    with_relation = place_vertical_lesson(
+        [primary, _answer("22", measurer)], relations,
+    )
+    without_relation = place_vertical_lesson([primary, _answer("22", measurer)])
+
+    def _by_ref(placed):
+        return {item.measured.ref: item.bounds for item in placed}
+    assert _by_ref(with_relation) == _by_ref(without_relation)
+
+
+def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_nothing():
+    """The reservation is scoped to the primary because that is the visual
+    the answer is stacked directly below. A callout targeting a supporting
+    visual is not currently addressed by #82 and must not silently shrink
+    unrelated lessons."""
+    measurer = _WidthPerCharacterMeasurer()
+    measured = [
+        _label("primary", "P", measurer),
+        _label("supporting", "note", measurer),
+        _answer("22", measurer),
+    ]
+    relations = [_callout("supporting", part=None, index=None, anchor="bottom")]
+
+    with_relation = place_vertical_lesson(measured, relations)
+    without_relation = place_vertical_lesson(measured)
+
+    assert {item.measured.ref: item.bounds for item in with_relation} == {
+        item.measured.ref: item.bounds for item in without_relation
+    }

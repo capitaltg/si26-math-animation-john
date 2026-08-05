@@ -77,7 +77,7 @@ def resolve_scene(
     for visual in program.visuals:
         evaluated, evaluated_values = evaluate_program_visual(visual, values)
         measured.append(registry.measure(evaluated, evaluated_values, measurer))
-    placed = place_vertical_lesson(measured)
+    placed = place_vertical_lesson(measured, program.relations)
     by_ref = {visual.measured.ref: visual for visual in placed}
     relations = [
         resolve_relation(relation, by_ref, index)
