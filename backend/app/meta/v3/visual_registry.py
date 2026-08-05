@@ -160,6 +160,37 @@ def _require_renderable_extent(measured, values) -> None:
     ))
 
 
+def _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels):
+    """Reject a number_line whose adjacent labels would run into each other.
+
+    The inter-visual overlap gate compares each visual's bounds against every
+    other's, so a collision inside a single visual slips through -- and
+    `_measure_number_line` packs every marker's label onto one strip, so
+    dense magnitudes (250000, 500000, 750000, 1000000 in [0, 1_000_000])
+    put their labels straight on top of each other while `bounds` stay
+    within the frame. Markers may arrive unsorted, so sort by x before
+    checking adjacency.
+    """
+    order = sorted(range(len(marker_xs)), key=lambda i: marker_xs[i])
+    for a, b in zip(order, order[1:]):
+        gap = (marker_xs[b] - label_widths[b] / 2) - (marker_xs[a] + label_widths[a] / 2)
+        if gap >= MARKER_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=f"marker labels separated by at least {MARKER_LABEL_INTER_GAP:g} units",
+            observed=(
+                f"labels {labels[a]!r} and {labels[b]!r} overlap by "
+                f"{MARKER_LABEL_INTER_GAP - gap:.2f} units"
+            ),
+            hint=(
+                "drop intermediate markers or widen the numeric range so "
+                "adjacent labels fit without collision"
+            ),
+        ))
+
+
 def _describe(value):
     if isinstance(value, (list, tuple)):
         return str(len(value))
@@ -178,6 +209,11 @@ def _measured_visual(*, ref, bounds, parts, payload):
 
 #: Clear of the line without crowding it, matching `rectangle_measurement.LABEL_GAP`.
 MARKER_LABEL_GAP = 0.28
+
+#: Minimum whitespace to hold between two adjacent marker labels. The
+#: inter-visual overlap gate cannot catch a collision inside one visual, so
+#: `_measure_number_line` enforces this itself.
+MARKER_LABEL_INTER_GAP = 0.1
 
 
 def _measure_number_line(*, spec, values, measurer):
@@ -203,6 +239,7 @@ def _measure_number_line(*, spec, values, measurer):
     label_height = max(
         (measurer.measure(text, "label")[1] for text in labels), default=0.0,
     )
+    _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels)
     bottom = -0.2 - MARKER_LABEL_GAP - label_height
     # A wide endpoint label overhangs the line's own extent -- if the bounds
     # stopped at +/-2.75, layout would tuck the next visual against the label

@@ -464,7 +464,7 @@ def test_a_number_line_lesson_renders_with_its_marker_labels():
     manifest = run_probe_subprocess(ProbeRequest(
         scene_program=program,
         known_fields=["distance_km"],
-        field_values={"distance_km": 2.75},
+        field_values={"distance_km": 1.5},
     )).manifest
 
     assert "distance_line" in manifest["visual_bounds"]

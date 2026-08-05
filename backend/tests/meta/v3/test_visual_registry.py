@@ -227,11 +227,11 @@ def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
     measured = default_visual_registry().measure(
         SimpleNamespace(kind="number_line", ref="line"),
         {"minimum": Fraction(0), "maximum": Fraction(3000),
-         "markers": [Fraction(0), Fraction(2750), Fraction(3000)]},
+         "markers": [Fraction(0), Fraction(1500), Fraction(3000)]},
         LiteralTextMeasurer(),
     )
 
-    assert measured.payload["marker_labels"] == ("0", "2750", "3000")
+    assert measured.payload["marker_labels"] == ("0", "1500", "3000")
     # The label strip sits below the line's own -0.2 extent.
     assert measured.bounds.bottom < -0.2
     assert measured.payload["label_center_y"] < -0.2
@@ -239,6 +239,29 @@ def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
     # from payload, so bounds can widen to reserve room for endpoint labels
     # without stretching the line under them.
     assert (measured.payload["line_left"], measured.payload["line_right"]) == (-2.75, 2.75)
+
+
+def test_a_number_line_rejects_markers_whose_labels_would_collide():
+    """A magnitude with four evenly-spaced six-digit markers packs its labels
+
+    onto the same strip -- adjacent labels overlap, but the inter-visual
+    overlap gate compares different visuals, so a collision inside one
+    number_line slipped through. Reject at measurement time; hint should
+    steer the generator toward fewer markers or a wider range.
+    """
+    with pytest.raises(V3ValidationError) as excinfo:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="number_line", ref="line"),
+            {"minimum": Fraction(0), "maximum": Fraction(1_000_000),
+             "markers": [Fraction(250_000), Fraction(500_000),
+                         Fraction(750_000), Fraction(1_000_000)]},
+            LiteralTextMeasurer(),
+        )
+    failure = excinfo.value.failure
+    assert failure.code == "visual_extent_unrenderable"
+    assert failure.path == "visuals.line"
+    assert "overlap" in failure.observed
+    assert "adjacent labels" in failure.hint
 
 
 def test_a_number_line_reserves_bounds_for_a_wide_endpoint_label():

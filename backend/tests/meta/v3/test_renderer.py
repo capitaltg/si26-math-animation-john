@@ -275,7 +275,7 @@ def test_number_line_draws_its_line_through_its_markers():
         SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
         {
             "minimum": Fraction(0), "maximum": Fraction(3000),
-            "markers": [Fraction(0), Fraction(2750), Fraction(3000)],
+            "markers": [Fraction(0), Fraction(1500), Fraction(3000)],
         },
         ManimTextMeasurer(),
     )
@@ -305,7 +305,7 @@ def test_number_line_labels_track_layout_scale():
         SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
         {
             "minimum": Fraction(0), "maximum": Fraction(3000),
-            "markers": [Fraction(0), Fraction(2750), Fraction(3000)],
+            "markers": [Fraction(0), Fraction(1500), Fraction(3000)],
         },
         ManimTextMeasurer(),
     )
