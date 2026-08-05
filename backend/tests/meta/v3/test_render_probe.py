@@ -1,7 +1,7 @@
 import pytest
 
 from app.meta.artifacts import artifact_exists
-from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
 from app.meta.dsl.scene_program import RevealAction
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext, TargetRef
@@ -418,3 +418,53 @@ def test_a_structured_failure_inside_the_probe_reaches_the_caller_intact():
     # And the operator gets the traceback the reviewer-facing failure omits.
     assert logged, "a probe crash must log the subprocess stderr for the operator"
     assert "below_minimum_text_scale" in " ".join(str(arg) for arg in logged[0])
+
+
+def test_a_number_line_lesson_renders_with_its_marker_labels():
+    """Labels are built from the payload inside the renderer, so only a real
+    render proves the keys line up. The `vertex` and `object_set` bugs both
+    compiled and passed the static gate, then raised inside `_build_visual`.
+    """
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Place a distance in metres on a number line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "distance_line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 3000},
+            "markers": [
+                {"node": "literal", "value": 0},
+                {"node": "multiply", "operands": [
+                    {"node": "field_ref", "field": "distance_km"},
+                    {"node": "literal", "value": 1000},
+                ]},
+                {"node": "literal", "value": 3000},
+            ],
+        },
+        "strategy": "group_reveal",
+        "answer_unit": "meters",
+        "variation_seed": "number-line-labels",
+        "beats": [
+            {"id": "show_line", "kind": "orient", "targets": [{"visual_ref": "distance_line"}],
+             "intent": "show the scale from zero to three thousand metres"},
+            {"id": "locate", "kind": "derive",
+             "targets": [{"visual_ref": "distance_line", "part": "marker", "index": 1}],
+             "intent": "locate the trail's length on the scale"},
+            {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "distance_line"}],
+             "intent": "state the length in metres"},
+        ],
+    })
+    program = compile_teaching_plan(
+        plan,
+        MultiplyNode(operands=[FieldRefNode(field="distance_km"), LiteralNode(value=1000)]),
+        frozenset({"distance_km"}),
+        CompileContext(concept_family="transform_other", grade_band="3-5"),
+    )
+
+    manifest = run_probe_subprocess(ProbeRequest(
+        scene_program=program,
+        known_fields=["distance_km"],
+        field_values={"distance_km": 1.5},
+    )).manifest
+
+    assert "distance_line" in manifest["visual_bounds"]

@@ -7,6 +7,7 @@ from app.meta.dsl.v3_common import (
     MAX_PLAN_BEATS, MAX_SIMPLE_STAGGER_SECONDS, MIN_PLAN_BEATS,
     AnchorRef, GeneratedText, ProseText, StyleRole, TargetRef,
 )
+from app.meta.v3.visual_registry import MAX_PART_CARDINALITY
 
 
 class OrderedValuesVisual(BaseModel):
@@ -30,16 +31,36 @@ class NumberLineVisual(BaseModel):
     kind: Literal["number_line"] = "number_line"
     ref: GeneratedText
     minimum: ExpressionNode
-    maximum: ExpressionNode
-    markers: list[ExpressionNode] = Field(default_factory=list, max_length=16)
+    maximum: ExpressionNode = Field(description=(
+        "The line's numeric scale, NOT a count of anything drawn. Markers land "
+        "inside fixed bounds, so a line from 0 to a million costs no more to draw "
+        "than one from 0 to 10. Use this visual for any magnitude too large to "
+        "show as individual parts."
+    ))
+    markers: list[ExpressionNode] = Field(
+        default_factory=list, max_length=16,
+        description=(
+            "The values to mark on the line, each labelled with its number. "
+            "Include minimum and maximum among the markers when the learner needs "
+            "the ends labelled."
+        ),
+    )
 
 
 class GridVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["grid"] = "grid"
     ref: GeneratedText
-    rows: ExpressionNode
-    columns: ExpressionNode
+    rows: ExpressionNode = Field(description=(
+        f"Number of rows. One cell rectangle is drawn per row x column, at most "
+        f"{MAX_PART_CARDINALITY} rows and {MAX_PART_CARDINALITY} columns; for a "
+        f"magnitude larger than that use a number_line."
+    ))
+    columns: ExpressionNode = Field(description=(
+        f"Number of columns. One cell rectangle is drawn per row x column, at "
+        f"most {MAX_PART_CARDINALITY} rows and {MAX_PART_CARDINALITY} columns; "
+        f"for a magnitude larger than that use a number_line."
+    ))
 
 
 class PartitionVisual(BaseModel):
@@ -47,22 +68,38 @@ class PartitionVisual(BaseModel):
     kind: Literal["partition"] = "partition"
     ref: GeneratedText
     whole: ExpressionNode
-    parts: ExpressionNode
+    parts: ExpressionNode = Field(description=(
+        f"How many equal parts the whole is divided into, drawn one marker per "
+        f"part, at most {MAX_PART_CARDINALITY}. For a magnitude larger than that "
+        f"use a number_line."
+    ))
 
 
 class BarVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["bar"] = "bar"
     ref: GeneratedText
-    value: ExpressionNode
-    maximum: ExpressionNode
+    value: ExpressionNode = Field(description=(
+        "How much of the bar is filled, in the same units as maximum."
+    ))
+    maximum: ExpressionNode = Field(description=(
+        f"The bar's length as a COUNT of equal segments: one rectangle is drawn "
+        f"per unit, at most {MAX_PART_CARDINALITY}, and only about 29 fit the "
+        f"frame. This is NOT an axis maximum -- a quantity like 2750 out of "
+        f"10000 must not be a bar. Show a magnitude that large on a number_line, "
+        f"whose maximum is a scale."
+    ))
 
 
 class ObjectSetVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["object_set"] = "object_set"
     ref: GeneratedText
-    count: ExpressionNode
+    count: ExpressionNode = Field(description=(
+        f"How many objects to draw, one dot each, five per row, at most "
+        f"{MAX_PART_CARDINALITY}. For a magnitude larger than that use a "
+        f"number_line."
+    ))
 
 
 class LabelVisual(BaseModel):

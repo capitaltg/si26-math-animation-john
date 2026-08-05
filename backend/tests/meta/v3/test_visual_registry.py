@@ -191,3 +191,110 @@ def test_the_answer_visual_is_measured_at_its_widest_stage():
     widest, _height = LiteralTextMeasurer().measure(stages["value"], "label")
     assert measured.bounds.right - measured.bounds.left == pytest.approx(widest)
     assert measured.payload["stages"] == stages
+
+
+def test_the_cardinality_hint_carries_the_cap_and_an_alternative_kind():
+    """The retry loop only forwards `code`, `path` and `hint`.
+
+    `generation_pipeline.generate_and_validate_revision` builds its repair
+    feedback from those three fields, so a ceiling stated only in `expected`
+    never reaches the model. Two Bedrock attempts on job
+    645f54b89af444fca04ea00a25d876cc both proposed `maximum=10000` unchanged,
+    because "reduce the value driving this visual's size" named no target and no
+    alternative -- and no value of `maximum` can draw 2750-out-of-10000 anyway.
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="bar", ref="m_bar"),
+            {"value": Fraction(2750), "maximum": Fraction(10000)},
+            LiteralTextMeasurer(),
+        )
+
+    hint = exc_info.value.failure.hint
+    assert "128" in hint
+    assert "number_line" in hint
+    assert "maximum" in hint
+
+
+def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
+    """A line of unlabelled dots shows a position without saying what it is.
+
+    `number_line` is the kind the cardinality hint steers a large magnitude
+    towards, so it has to teach that magnitude rather than show a bare line.
+    Labels are payload, not parts: nothing addresses them, and
+    `test_a_number_line_keeps_a_large_numeric_range` pins the part count.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(3000),
+         "markers": [Fraction(0), Fraction(1500), Fraction(3000)]},
+        LiteralTextMeasurer(),
+    )
+
+    assert measured.payload["marker_labels"] == ("0", "1500", "3000")
+    # The label strip sits below the line's own -0.2 extent.
+    assert measured.bounds.bottom < -0.2
+    assert measured.payload["label_center_y"] < -0.2
+    # The line's own endpoints stay at +/-2.75 -- `_line_visual` reads these
+    # from payload, so bounds can widen to reserve room for endpoint labels
+    # without stretching the line under them.
+    assert (measured.payload["line_left"], measured.payload["line_right"]) == (-2.75, 2.75)
+
+
+def test_a_number_line_rejects_markers_whose_labels_would_collide():
+    """A magnitude with four evenly-spaced six-digit markers packs its labels
+
+    onto the same strip -- adjacent labels overlap, but the inter-visual
+    overlap gate compares different visuals, so a collision inside one
+    number_line slipped through. Reject at measurement time; hint should
+    steer the generator toward fewer markers or a wider range.
+    """
+    with pytest.raises(V3ValidationError) as excinfo:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="number_line", ref="line"),
+            {"minimum": Fraction(0), "maximum": Fraction(1_000_000),
+             "markers": [Fraction(250_000), Fraction(500_000),
+                         Fraction(750_000), Fraction(1_000_000)]},
+            LiteralTextMeasurer(),
+        )
+    failure = excinfo.value.failure
+    assert failure.code == "visual_extent_unrenderable"
+    assert failure.path == "visuals.line"
+    assert "overlap" in failure.observed
+    # Retry only forwards code/path/hint (see draft_generation), so the
+    # hint has to name the actual colliding labels and steer the generator
+    # AWAY from widening the range (which packs markers closer, not apart).
+    assert "'250000'" in failure.hint and "'500000'" in failure.hint
+    assert "drop" in failure.hint
+    assert "widening" in failure.hint
+
+
+def test_a_number_line_reserves_bounds_for_a_wide_endpoint_label():
+    """A "3000" label centered on the rightmost marker overhangs +2.75.
+
+    Before, horizontal bounds stopped at the line's own extent, so layout
+    tucked the next visual against the label and the two overlapped. Bounds
+    must widen by the label's half-width; the line endpoints live in payload
+    now so widening the strip doesn't stretch the line.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(3000),
+         "markers": [Fraction(0), Fraction(3000)]},
+        LiteralTextMeasurer(),
+    )
+
+    label_half_width = LiteralTextMeasurer().measure("3000", "label")[0] / 2
+    assert measured.bounds.right == pytest.approx(2.75 + label_half_width)
+    assert measured.bounds.left == pytest.approx(-2.75 - LiteralTextMeasurer().measure("0", "label")[0] / 2)
+    assert (measured.payload["line_left"], measured.payload["line_right"]) == (-2.75, 2.75)
+
+
+def test_a_number_line_marker_label_is_a_decimal_not_a_ratio():
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(4), "markers": [Fraction(11, 4)]},
+        LiteralTextMeasurer(),
+    )
+
+    assert measured.payload["marker_labels"] == ("2.75",)

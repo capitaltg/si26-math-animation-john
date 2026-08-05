@@ -260,6 +260,93 @@ def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
     assert not missing, f"{kind} declares targetable parts the renderer never builds: {missing}"
 
 
+def test_number_line_draws_its_line_through_its_markers():
+    """The line must pass through its own marker dots, not sit below them.
+
+    `_measure_number_line` reserves a label strip beneath the line (so a
+    following visual is not laid out on top of the marker labels), which makes
+    the measured bounds' vertical center land below 0 -- while marker parts
+    stay measured at y=0. `_line_visual` used to derive the line's y from
+    `bounds.center.y`, so it drifted below its dots by however tall the label
+    strip was. It now reads `payload["line_center_y"]` instead, which the
+    marker parts also sit at.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
+        {
+            "minimum": Fraction(0), "maximum": Fraction(3000),
+            "markers": [Fraction(0), Fraction(1500), Fraction(3000)],
+        },
+        ManimTextMeasurer(),
+    )
+    root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+
+    line = next(mobject for mobject in root.submobjects if isinstance(mobject, Line))
+    dots = [value for key, value in children.items() if key[0] == "marker"]
+    assert dots
+
+    line_ys = {line.get_start()[1], line.get_end()[1]}
+    dot_ys = {dot.get_center()[1] for dot in dots}
+    assert line_ys == dot_ys
+
+
+def test_number_line_labels_track_layout_scale():
+    """At scale < 1, labels must sit at `label_center_y * scale`, not the raw value.
+
+    `layout.scale_measured_visual` pre-scales bounds and parts but leaves
+    payload alone, so `label_center_y` still holds the unscaled coordinate.
+    The renderer used to add that value straight into the label's y, so the
+    labels drifted below their reserved strip -- the marker dots (whose parts
+    ARE scaled) stayed put, the labels did not.
+    """
+    from app.meta.v3.layout import scale_measured_visual
+
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
+        {
+            "minimum": Fraction(0), "maximum": Fraction(3000),
+            "markers": [Fraction(0), Fraction(1500), Fraction(3000)],
+        },
+        ManimTextMeasurer(),
+    )
+    scale = 0.7
+    scaled = scale_measured_visual(measured, scale)
+    root, _children = _build_visual(PlacedVisual(scaled, Point(0.0, 0.0), scale), "ocean")
+
+    label_texts = [mobject for mobject in root.submobjects if isinstance(mobject, Text)]
+    assert label_texts
+    expected_y = measured.payload["label_center_y"] * scale
+    for label in label_texts:
+        assert label.get_center()[1] == pytest.approx(expected_y, abs=1e-4)
+
+
+def test_number_line_endpoints_track_layout_scale():
+    """The line's endpoints must scale with layout, like every other geometry.
+
+    Payload holds `line_left`/`line_right` as unscaled coordinates so the
+    renderer can draw a line that spans the marker range rather than the wider
+    label-padded bounds. Multiply by `placed.scale` for the same reason
+    `label_center_y` needs it: payload isn't scaled by `scale_measured_visual`.
+    """
+    from app.meta.v3.layout import scale_measured_visual
+
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line", initial_role="neutral"),
+        {
+            "minimum": Fraction(0), "maximum": Fraction(3000),
+            "markers": [Fraction(0), Fraction(3000)],
+        },
+        ManimTextMeasurer(),
+    )
+    scale = 0.7
+    scaled = scale_measured_visual(measured, scale)
+    root, _children = _build_visual(PlacedVisual(scaled, Point(0.0, 0.0), scale), "ocean")
+
+    line = next(mobject for mobject in root.submobjects if isinstance(mobject, Line))
+    assert line.get_start()[0] == pytest.approx(-2.75 * scale, abs=1e-4)
+    assert line.get_end()[0] == pytest.approx(2.75 * scale, abs=1e-4)
+
+
 def _scaled_down_lesson_plan():
     """A rectangle plus a label wide enough that layout must scale the lesson down.
 

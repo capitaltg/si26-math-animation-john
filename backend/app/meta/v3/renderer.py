@@ -200,7 +200,8 @@ def _build_visual(placed, palette: str):
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "markers" in payload:
-        root, children = _line_visual(bounds, measured, placed.offset, "marker")
+        root, children = _line_visual(placed, "marker")
+        root.add(*_number_line_labels(measured, placed))
     elif {"rows", "columns"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "cell")
     elif {"whole", "parts"} <= payload.keys():
@@ -286,11 +287,48 @@ def _text(text: str, font_role: str, center: Point, scale: float = 1.0):
     return mobject
 
 
-def _line_visual(bounds: Bounds, measured, offset: Point, part_name: str):
-    root = Line(_array(Point(bounds.left, bounds.center.y)), _array(Point(bounds.right, bounds.center.y)))
+def _line_visual(placed, part_name: str):
+    # The line's endpoints come from payload, not `bounds.left/right`: the
+    # bounds now reserve a label strip on the sides for wide endpoint labels
+    # (see `_measure_number_line`), so bounds are wider than the line itself.
+    # Payload coords are unscaled -- `layout.scale_measured_visual` scales
+    # bounds and parts but leaves payload alone -- so multiply by
+    # `placed.scale` explicitly, matching how `_text` scales rebuilt glyphs.
+    measured, offset, scale = placed.measured, placed.offset, placed.scale
+    payload = measured.payload
+    y = payload["line_center_y"] * scale + offset.y
+    left = payload["line_left"] * scale + offset.x
+    right = payload["line_right"] * scale + offset.x
+    root = Line(_array(Point(left, y)), _array(Point(right, y)))
     children = _parts_as_dots(measured, offset, part_name)
     root_group = VGroup(root, *children.values())
     return root_group, children
+
+
+def _number_line_labels(measured, placed):
+    """The number under each tick.
+
+    Added to the root group rather than registered as children: nothing addresses
+    a tick label, and `measured.parts` is what the compiler validates plan targets
+    against, so registering them would invent targets no plan should use.
+    """
+    payload = measured.payload
+    # `label_center_y` is a payload coord, which `layout.scale_measured_visual`
+    # leaves at its unscaled value; the marker `part.bounds` next to it *has*
+    # been scaled. Without this multiplication the labels sat at the unscaled
+    # y while the markers sat at the scaled one, so at any layout scale below
+    # 1 the label strip drifted below its reserved band.
+    y = payload["label_center_y"] * placed.scale + placed.offset.y
+    return [
+        _text(
+            payload["marker_labels"][index],
+            "label",
+            Point(part.bounds.center.x + placed.offset.x, y),
+            placed.scale,
+        )
+        for (part_name, index), part in sorted(measured.parts.items(), key=lambda item: item[0][1])
+        if part_name == "marker"
+    ]
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):

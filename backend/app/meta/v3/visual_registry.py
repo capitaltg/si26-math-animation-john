@@ -2,6 +2,7 @@ from math import ceil, cos, sin, tau
 from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
+from app.meta.v3.expression_display import format_number
 from app.meta.v3.geometry import Bounds, SemanticPart
 from app.meta.v3.layout import INSTRUCTIONAL_FRAME, MIN_TEXT_SCALE, SAFE_FRAME
 from app.meta.v3.geometry import MeasuredVisual, TextMeasurer
@@ -84,6 +85,31 @@ _CARDINALITY_FIELDS = {
 MAX_PART_CARDINALITY = 128
 
 
+#: What to reach for when a count-driven visual is too large. `number_line`
+#: places markers inside fixed +/-2.75 bounds, so its `maximum` is a scale and a
+#: line from 0 to a million costs nothing to draw.
+_LARGE_MAGNITUDE_ALTERNATIVE = "a number_line, whose maximum is a scale rather than a part count"
+
+
+def _cardinality_failure(spec, field_name, observed, cap, unit_word) -> V3ValidationError:
+    """A refusal that names the cap, the field, and what to use instead.
+
+    The hint carries all three because it is the only one of these fields the
+    generation retry loop forwards to the model
+    (`draft_generation._STABLE_REPAIR_FEEDBACK_FIELDS`).
+    """
+    return V3ValidationError(V3Failure(
+        code="visual_extent_unrenderable",
+        path=f"visuals.{spec.ref}",
+        expected=f"a {spec.kind} of at most {cap} parts",
+        observed=f"{spec.ref} would draw {observed} parts ({field_name}={observed})",
+        hint=(
+            f"{spec.kind} draws one part per {unit_word}, at most {cap}; "
+            f"reduce {field_name} (currently {observed}) or use {_LARGE_MAGNITUDE_ALTERNATIVE}"
+        ),
+    ))
+
+
 def _require_renderable_cardinality(spec, values) -> None:
     for name in _CARDINALITY_FIELDS.get(spec.kind, ()):
         if name not in values:
@@ -91,14 +117,9 @@ def _require_renderable_cardinality(spec, values) -> None:
         count = _whole(values[name], name) if _is_whole(values[name]) else None
         if count is not None and count <= MAX_PART_CARDINALITY:
             continue
-        observed = _describe(values[name])
-        raise V3ValidationError(V3Failure(
-            code="visual_extent_unrenderable",
-            path=f"visuals.{spec.ref}",
-            expected=f"a {spec.kind} of at most {MAX_PART_CARDINALITY} parts",
-            observed=f"{spec.ref} would draw {observed} parts ({name}={observed})",
-            hint=f"reduce the value driving this visual's size ({name}={observed})",
-        ))
+        raise _cardinality_failure(
+            spec, name, _describe(values[name]), MAX_PART_CARDINALITY, f"unit of {name}",
+        )
 
 
 def _is_whole(value) -> bool:
@@ -139,6 +160,46 @@ def _require_renderable_extent(measured, values) -> None:
     ))
 
 
+def _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels):
+    """Reject a number_line whose adjacent labels would run into each other.
+
+    The inter-visual overlap gate compares each visual's bounds against every
+    other's, so a collision inside a single visual slips through -- and
+    `_measure_number_line` packs every marker's label onto one strip, so
+    dense magnitudes (250000, 500000, 750000, 1000000 in [0, 1_000_000])
+    put their labels straight on top of each other while `bounds` stay
+    within the frame. Markers may arrive unsorted, so sort by x before
+    checking adjacency.
+    """
+    order = sorted(range(len(marker_xs)), key=lambda i: marker_xs[i])
+    for a, b in zip(order, order[1:]):
+        gap = (marker_xs[b] - label_widths[b] / 2) - (marker_xs[a] + label_widths[a] / 2)
+        if gap >= MARKER_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=f"marker labels separated by at least {MARKER_LABEL_INTER_GAP:g} units",
+            observed=(
+                f"labels {labels[a]!r} and {labels[b]!r} overlap by "
+                f"{MARKER_LABEL_INTER_GAP - gap:.2f} units"
+            ),
+            # Retry discards `observed` and only forwards `hint`
+            # (see `draft_generation._STABLE_REPAIR_FEEDBACK_FIELDS`), so
+            # spell the colliding labels here. Do NOT suggest widening the
+            # numeric range: markers are positioned proportionally within
+            # fixed +/-2.75 bounds, so a wider range packs the same markers
+            # closer together, not further apart -- dropping one of the
+            # colliding markers is the only recovery.
+            hint=(
+                f"drop marker {labels[a]!r} or {labels[b]!r} -- their labels "
+                "overlap on the number_line's single label strip; widening "
+                "the numeric range would not help, since markers are placed "
+                "proportionally within fixed horizontal bounds"
+            ),
+        ))
+
+
 def _describe(value):
     if isinstance(value, (list, tuple)):
         return str(len(value))
@@ -155,23 +216,74 @@ def _measured_visual(*, ref, bounds, parts, payload):
     return MeasuredVisual(ref=ref, bounds=bounds, parts=parts, paths={}, payload=payload)
 
 
+#: Clear of the line without crowding it, matching `rectangle_measurement.LABEL_GAP`.
+MARKER_LABEL_GAP = 0.28
+
+#: Minimum whitespace to hold between two adjacent marker labels. The
+#: inter-visual overlap gate cannot catch a collision inside one visual, so
+#: `_measure_number_line` enforces this itself.
+MARKER_LABEL_INTER_GAP = 0.1
+
+
 def _measure_number_line(*, spec, values, measurer):
     minimum, maximum = values["minimum"], values["maximum"]
     if maximum <= minimum:
         raise ValueError("number_line maximum must exceed minimum")
-    left, right = -2.75, 2.75
+    line_left, line_right = -2.75, 2.75
     markers = values["markers"]
     parts = {}
+    labels = []
+    label_widths = []
+    marker_xs = []
     for index, marker in enumerate(markers):
         if not minimum <= marker <= maximum:
             raise ValueError(f"marker {marker} outside [{minimum}, {maximum}]")
-        x = left + (right - left) * float((marker - minimum) / (maximum - minimum))
+        x = line_left + (line_right - line_left) * float((marker - minimum) / (maximum - minimum))
         parts[("marker", index)] = SemanticPart("marker", index, Bounds(x, x, 0, 0))
+        label = format_number(marker)
+        labels.append(label)
+        width, _ = measurer.measure(label, "label")
+        label_widths.append(width)
+        marker_xs.append(x)
+    label_height = max(
+        (measurer.measure(text, "label")[1] for text in labels), default=0.0,
+    )
+    _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels)
+    bottom = -0.2 - MARKER_LABEL_GAP - label_height
+    # A wide endpoint label overhangs the line's own extent -- if the bounds
+    # stopped at +/-2.75, layout would tuck the next visual against the label
+    # and the two would overlap. Widen the bounds so each label's half-width
+    # is reserved; keep the line's own endpoints in payload so `_line_visual`
+    # still draws from marker to marker, not across the padded strip.
+    left_extent = min(
+        (x - width / 2 for x, width in zip(marker_xs, label_widths)),
+        default=line_left,
+    )
+    right_extent = max(
+        (x + width / 2 for x, width in zip(marker_xs, label_widths)),
+        default=line_right,
+    )
+    bounds_left = min(line_left, left_extent)
+    bounds_right = max(line_right, right_extent)
     return _measured_visual(
         ref=spec.ref,
-        bounds=Bounds(left, right, -0.2, 0.2),
+        bounds=Bounds(bounds_left, bounds_right, bottom, 0.2),
         parts=parts,
-        payload={"minimum": minimum, "maximum": maximum, "markers": tuple(markers)},
+        payload={
+            "minimum": minimum, "maximum": maximum, "markers": tuple(markers),
+            "marker_labels": tuple(labels),
+            "label_center_y": bottom + label_height / 2,
+            # Where the marker parts sit (see `Bounds(x, x, 0, 0)` above). The
+            # line's own bounds are no longer vertically symmetric now that
+            # they reserve a label strip below, so `_line_visual` reads this
+            # instead of `bounds.center.y` to stay level with its markers.
+            "line_center_y": 0.0,
+            # The line's own horizontal endpoints. Bounds now include the label
+            # strip's overhang, so `_line_visual` can't derive endpoints from
+            # them without stretching the line under the labels.
+            "line_left": line_left,
+            "line_right": line_right,
+        },
     )
 
 
