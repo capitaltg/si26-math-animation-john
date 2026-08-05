@@ -583,7 +583,23 @@ class BeatExpander:
         if self._current_role(key, current_roles) == role:
             return []
         current_roles[key] = role
+        self._clear_descendant_roles(key, current_roles)
         return [SetRoleAction(target=target, role=role)]
+
+    @staticmethod
+    def _clear_descendant_roles(key, current_roles):
+        """A whole-visual `set_role` restyles descendants in the renderer
+        (`build_role_transition` recolours the whole group). If an earlier
+        explicit descendant role stays in `current_roles`, `_current_role`
+        keeps returning it and a follow-up `_role_change` back to that role
+        is silently dropped as a no-op -- but the frame just switched to the
+        parent's role, so the descendant needs the transition too.
+        """
+        visual_ref, part, index = key
+        if part is not None or index is not None:
+            return
+        for descendant_key in [k for k in current_roles if k[0] == visual_ref and k != key]:
+            del current_roles[descendant_key]
 
     @staticmethod
     def _current_role(key, current_roles):
@@ -632,7 +648,9 @@ class BeatExpander:
         return target.visual_ref, target.part, target.index
 
     def _set_role(self, target, role, current_roles):
-        current_roles[self._target_key(target)] = role
+        key = self._target_key(target)
+        current_roles[key] = role
+        self._clear_descendant_roles(key, current_roles)
         return SetRoleAction(target=target, role=role)
 
 

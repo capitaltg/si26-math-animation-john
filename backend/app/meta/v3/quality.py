@@ -265,13 +265,15 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
                 None,
             )
             reveal_at = reveal_entry.at_seconds if reveal_entry is not None else None
-            # Effective role of box[0] at the reveal beat: an explicit box[0]
-            # set_role wins over a whole-visual set_role (see beat_expander's
-            # `_current_role`), so track them separately and prefer the
-            # explicit one when present. Iterate every entry up to and
-            # including the reveal moment -- ordered by at_seconds so an
-            # entry appended to the timeline is not missed just because it
-            # lands after the reveal in list order.
+            # Effective role of box[0] at the reveal beat. Iterate every entry
+            # up to and including the reveal moment -- ordered by at_seconds so
+            # an entry appended to the timeline is not missed just because it
+            # lands after the reveal in list order. A whole-visual `set_role`
+            # restyles descendants in the renderer (`build_role_transition`
+            # recolours the whole group), so it OVERWRITES any earlier explicit
+            # box[0] role -- preserving the older one would let a plan reset
+            # the tape to `structure` after box[0] was focused and still pass,
+            # while the frame shows no per-one emphasis.
             box_zero_role = None
             whole_visual_role = None
             entries_through_reveal = (
@@ -289,11 +291,7 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
                             box_zero_role = entry.action.role
                         elif target.part is None:
                             whole_visual_role = entry.action.role
-                            # A whole-visual role reassigns box[0]'s
-                            # inherited role only when box[0] has no explicit
-                            # role of its own.
-                            if box_zero_role is None:
-                                box_zero_role = entry.action.role
+                            box_zero_role = entry.action.role
             effective_box_zero_role = box_zero_role or whole_visual_role
             if effective_box_zero_role != "focus":
                 return _failed(

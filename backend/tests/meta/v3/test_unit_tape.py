@@ -448,6 +448,49 @@ def test_unit_rate_quality_gate_catches_whole_tape_focus_at_reveal_beat():
     assert not check_strategy_affordance(plan, with_whole_tape_focus).passed
 
 
+def test_unit_rate_quality_gate_catches_whole_tape_reset_after_box_focus():
+    """A whole-visual `set_role` restyles descendants in the renderer, so a
+    plan that focuses box[0] and then resets the whole tape to `structure`
+    before the reveal ends up with an unemphasised per-one column. The gate
+    must reject that even though box[0] has an earlier explicit focus."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    box_focus_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role"
+        and entry.action.target.visual_ref == "trail_tape"
+        and entry.action.target.part == "box"
+        and entry.action.target.index == 0
+        and entry.action.role == "focus"
+    )
+    reset_at = (box_focus_entry.at_seconds + reveal_entry.at_seconds) / 2
+    assert box_focus_entry.at_seconds < reset_at < reveal_entry.at_seconds
+    whole_tape_reset = TimedAction(
+        at_seconds=reset_at,
+        duration_seconds=box_focus_entry.duration_seconds,
+        beat_id=box_focus_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="structure",
+        ),
+    )
+    with_reset = program.model_copy(update={
+        "timeline": [*program.timeline, whole_tape_reset],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_reset).passed
+
+
 def test_unit_rate_quality_gate_requires_the_per_one_focus():
     from app.meta.v3.quality import check_strategy_affordance
 

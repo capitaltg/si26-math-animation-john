@@ -244,6 +244,28 @@ def test_decimal_field_spec_rejects_default_outside_bounds():
         )
 
 
+def test_decimal_field_spec_rejects_nan_minimum():
+    with pytest.raises(ValidationError):
+        DecimalFieldSpec(
+            name="ratio", label="Ratio", description="", minimum=float("nan"), maximum=1.0,
+        )
+
+
+def test_decimal_field_spec_rejects_infinite_maximum():
+    with pytest.raises(ValidationError):
+        DecimalFieldSpec(
+            name="ratio", label="Ratio", description="", minimum=0.0, maximum=float("inf"),
+        )
+
+
+def test_decimal_field_spec_rejects_infinite_default():
+    with pytest.raises(ValidationError):
+        DecimalFieldSpec(
+            name="ratio", label="Ratio", description="",
+            required=False, default=float("-inf"), minimum=0.0, maximum=1.0,
+        )
+
+
 def test_string_field_spec_rejects_default_longer_than_max_length():
     with pytest.raises(ValidationError):
         StringFieldSpec(

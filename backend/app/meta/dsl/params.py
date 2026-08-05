@@ -1,3 +1,4 @@
+import math
 from fractions import Fraction
 from itertools import product
 from typing import Annotated, Literal, Union
@@ -49,6 +50,20 @@ class DecimalFieldSpec(BaseModel):
     default: float | None = None
     minimum: float
     maximum: float
+
+    @model_validator(mode="after")
+    def _finite_bounds(self):
+        # `Fraction(nan)` raises `ValueError` and `Fraction(inf)` raises
+        # `OverflowError`; both propagate uncaught out of candidate compilation
+        # (`field_contract_for` and value coercion in `DynamicTemplateParams`),
+        # which turns a spec-level input error into a runtime crash. Reject
+        # non-finite bounds up front so the failure surfaces as validation.
+        for name, value in (("minimum", self.minimum), ("maximum", self.maximum), ("default", self.default)):
+            if value is None:
+                continue
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value}")
+        return self
 
     @model_validator(mode="after")
     def _min_le_max(self):
