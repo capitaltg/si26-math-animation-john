@@ -6,9 +6,11 @@ from app.meta.dsl.scene_program import (
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
     ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
     ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
+    UnitTapeProgramVisual,
 )
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.expression_display import has_operation
+from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ _PROGRAM_VISUALS = {
     "bar": (BarProgramVisual, "structure"),
     "object_set": (ObjectSetProgramVisual, "structure"),
     "label": (LabelProgramVisual, "neutral"),
+    "unit_tape": (UnitTapeProgramVisual, "structure"),
 }
 
 _BEAT_TIMING = {
@@ -88,13 +91,19 @@ class BeatExpander:
         expanded = []
         revealed = set()
         boundary_trace_beat_id = self._boundary_trace_beat_id(plan)
+        self._deferred_parts = {
+            spec.ref: DEFERRED_PARTS.get(spec.kind, ())
+            for spec in self._visual_specs(plan)
+        }
+        unit_substitution_beat_id = self._unit_substitution_beat_id(plan)
         answer_declared = any(visual.ref == "evaluated_answer" for visual in visuals)
         answer_target = TargetRef(visual_ref="evaluated_answer")
         work_beat_id = self._work_beat_id(plan) if answer_declared else None
 
         for beat_index, beat in enumerate(plan.beats):
             actions = self._standard_actions(
-                plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
+                plan, beat, relations, current_roles, revealed,
+                boundary_trace_beat_id, unit_substitution_beat_id,
             )
             for action_index, request in enumerate(beat.custom_actions):
                 actions.extend(self._custom_actions(
@@ -214,7 +223,8 @@ class BeatExpander:
         return None
 
     def _standard_actions(
-        self, plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
+        self, plan, beat, relations, current_roles, revealed,
+        boundary_trace_beat_id, unit_substitution_beat_id=None,
     ):
         """Reveal whatever the beat names, then act on it, then add the strategy affordance.
 
@@ -227,6 +237,14 @@ class BeatExpander:
         actions.extend(self._beat_kind_actions(plan, beat, relations, current_roles))
         if plan.strategy == "boundary_trace" and beat.id == boundary_trace_beat_id:
             actions.append(TraceAction(path_ref=f"{plan.primary_visual.ref}.perimeter"))
+        if beat.id == unit_substitution_beat_id:
+            # Emitted directly rather than through `_reveal_unrevealed`: the group
+            # part carries no index, which is the only way to name every box's
+            # label when the box count depends on fixture params.
+            actions.append(RevealAction(
+                targets=[TargetRef(visual_ref=plan.primary_visual.ref, part="target_label")],
+                mode="stagger",
+            ))
         if not actions and not beat.custom_actions:
             actions.extend(self._attention_fallback(beat, current_roles))
         return actions
@@ -271,14 +289,15 @@ class BeatExpander:
             mode = "stagger" if plan.strategy == "short_stagger" else "together"
         return [RevealAction(targets=pending, mode=mode)]
 
-    @staticmethod
-    def _is_revealed(target, revealed):
-        # Revealing a whole visual reveals its parts with it, so a part-level
-        # target is already on screen once its visual is.
-        return (
-            (target.visual_ref, target.part, target.index) in revealed
-            or (target.visual_ref, None, None) in revealed
-        )
+    def _is_revealed(self, target, revealed):
+        # Revealing a whole visual reveals its parts with it -- except the parts
+        # the visual declares deferred, which the renderer keeps out of the root
+        # group precisely so they can arrive later.
+        if (target.visual_ref, target.part, target.index) in revealed:
+            return True
+        if target.part in self._deferred_parts.get(target.visual_ref, ()):
+            return False
+        return (target.visual_ref, None, None) in revealed
 
     def _beat_kind_actions(self, plan, beat, relations, current_roles):
         if beat.kind in {"orient", "reveal"}:
@@ -492,6 +511,23 @@ class BeatExpander:
         for beat in plan.beats:
             if beat.kind in {"organize", "derive", "focus"}:
                 return beat.id
+        return None
+
+    @staticmethod
+    def _unit_substitution_beat_id(plan):
+        """The beat where the target unit's labels arrive.
+
+        `_boundary_trace_beat_id` takes the first beat of any of organize/derive/
+        focus; a substitution belongs on the beat that derives, so `derive` is
+        preferred here. `require_unit_substitution_shape` forbids the plan from
+        staging this itself, so there is no author's version to defer to.
+        """
+        if plan.strategy != "unit_substitution":
+            return None
+        for kinds in ({"derive"}, {"organize"}, {"focus"}):
+            for beat in plan.beats:
+                if beat.kind in kinds:
+                    return beat.id
         return None
 
     def _role_change(self, target, role, current_roles):

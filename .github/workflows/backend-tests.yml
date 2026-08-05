@@ -41,7 +41,20 @@ jobs:
             ffmpeg libcairo2-dev libpango1.0-dev pkg-config
             texlive texlive-latex-extra texlive-fonts-extra
             texlive-latex-recommended texlive-science tipa dvisvgm
-          version: 1
+          version: 2
+
+      # A restored cache copies the package files back but never runs
+      # dpkg's configure step, so LaTeX's `ls-R` filename databases and its
+      # preloaded format files are absent -- `latex` is on PATH and then
+      # fails with "latex error converting to dvi" on the first render. The
+      # cold run that populates the cache configures normally and passes,
+      # which is why this surfaced as a CI failure that only reproduced once
+      # the cache was warm (5m21s green on the cache miss, 3m red on the hit).
+      - name: Rebuild LaTeX databases after cache restore
+        run: |
+          sudo dpkg --configure -a || true
+          sudo texhash
+          sudo fmtutil-sys --all
 
       - name: Install backend and dev deps
         run: pip install -e ".[dev]"

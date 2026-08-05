@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from math import ceil
 
 from app.meta.dsl.expression import compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
@@ -21,6 +22,7 @@ _EXPRESSION_FIELDS = {
     "bar": ("value", "maximum"),
     "object_set": ("count",),
     "label": (),
+    "unit_tape": ("value", "per_unit"),
 }
 
 _PART_CARDINALITY = {
@@ -37,6 +39,11 @@ _PART_CARDINALITY = {
     "bar": {"segment": lambda spec: _literal_integer(spec.maximum)},
     "object_set": {"item": lambda spec: _literal_integer(spec.count)},
     "label": {},
+    "unit_tape": {
+        "box": lambda spec: _literal_ceiling(spec.value),
+        "source_label": lambda spec: _literal_ceiling(spec.value),
+        "target_label": lambda spec: _literal_ceiling(spec.value),
+    },
 }
 
 _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
@@ -490,6 +497,19 @@ def _literal_integer(expression):
     if expression.node != "literal" or not float(expression.value).is_integer():
         return None
     return int(expression.value)
+
+
+def _literal_ceiling(expression):
+    """The box count when the plan states it outright, else unknown.
+
+    A tape's `value` is normally a field reference, so the count is only known
+    once fixture params arrive -- `None` tells `_validate_target` to leave index
+    bounds to the resolver, as it already does for a `bar` with a computed
+    `maximum`.
+    """
+    if expression.node != "literal":
+        return None
+    return ceil(float(expression.value))
 
 
 def _literal_product(left, right):

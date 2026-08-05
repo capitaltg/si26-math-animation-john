@@ -12,7 +12,11 @@
 #    pair, paced at `min(1.3 x pairs, 6.0)` seconds; the plan carries no
 #    `evaluated_answer` visual, and `answer_anchor` names the middle item that
 #    the conclude beat's callout points at instead.
-DSL_COMPILER_VERSION = 5
+# 6: `dsl/teaching_plan.py` gains the `unit_tape` visual kind and the
+#    `unit_substitution` strategy, and `dsl/scene_program.py` gains
+#    `UnitTapeProgramVisual` -- a new frozen visual kind and strategy pairing
+#    that did not previously compile.
+DSL_COMPILER_VERSION = 6
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.

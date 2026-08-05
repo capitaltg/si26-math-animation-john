@@ -27,6 +27,7 @@ from app.meta.manim_primitives.style import resolve_semantic_style
 from app.meta.v3.geometry import Bounds, Point
 from app.meta.v3.manim_measurer import FONT_SIZES
 from app.meta.v3.resolver import ResolvedAction, ResolvedScene
+from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 
 @dataclass(frozen=True)
@@ -208,6 +209,8 @@ def _build_visual(placed, palette: str):
         root = Circle(radius=(bounds.right - bounds.left) / 2).move_to(_array(bounds.center))
         children = _parts_as_dots(measured, placed.offset, "partition")
         root.add(*children.values())
+    elif "boxes" in payload:
+        root, children = _build_unit_tape(measured, placed, palette)
     elif {"value", "maximum"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "segment")
     elif "count" in payload:
@@ -346,6 +349,50 @@ def _parts_as_rectangles(measured, offset: Point, part_name: str):
         if part == part_name
     }
     return VGroup(*children.values()), children
+
+
+def _build_unit_tape(measured, placed, palette: str):
+    """Boxes and source labels on screen; target labels registered but held back.
+
+    `visual_registry.DEFERRED_PARTS` declares `target_label` as arriving later, and
+    the root group is what the whole-visual reveal fades in -- so a target label
+    added to the root would be visible from the first beat, and the staged reveal
+    would fade in something already on screen. They are still registered as
+    children, which is what makes them addressable when their reveal plays.
+    """
+    payload = measured.payload
+    children = {}
+    root = VGroup()
+    deferred = DEFERRED_PARTS.get("unit_tape", ())
+    for index, box in enumerate(payload["boxes"]):
+        box_bounds = _translated(measured.parts[("box", index)].bounds, placed.offset)
+        outline = _rectangle_for_bounds(box_bounds)
+        children[("box", index)] = outline
+        root.add(outline)
+        if box["fill_fraction"] < 1.0:
+            root.add(_partial_fill(box_bounds, box["fill_fraction"], palette))
+        for part in ("source_label", "target_label"):
+            label_bounds = _translated(measured.parts[(part, index)].bounds, placed.offset)
+            text = _text(box[part], "label", label_bounds.center, placed.scale)
+            children[(part, index)] = text
+            if part not in deferred:
+                root.add(text)
+    for part in ("source_label", "target_label"):
+        children[(part, None)] = VGroup(*(
+            children[(part, index)] for index in range(len(payload["boxes"]))
+        ))
+    return root, children
+
+
+def _partial_fill(bounds: Bounds, fraction: float, palette: str):
+    """The shaded portion of the remainder box, so 0.75 of a unit reads as 0.75."""
+    width = (bounds.right - bounds.left) * fraction
+    filled = Rectangle(width=max(width, 0.02), height=bounds.top - bounds.bottom)
+    filled.move_to(_array(Point(bounds.left + width / 2, bounds.center.y)))
+    style = resolve_semantic_style(palette, "focus")
+    _apply_style(filled, style)
+    filled.set_fill(style["color"], opacity=0.3)
+    return filled
 
 
 def _rectangle_for_bounds(bounds: Bounds):

@@ -43,7 +43,7 @@ class VisualRegistry:
         # an oversized count has to be refused while it is still a number.
         _require_renderable_cardinality(spec, values)
         measured = factory(spec=spec, values=values, measurer=measurer)
-        _require_renderable_extent(measured, values)
+        _require_renderable_extent(spec.kind, measured, values)
         return measured
 
 
@@ -56,12 +56,30 @@ _SUPPORTED_STRATEGIES = {
     "bar": {"group_reveal", "short_stagger", "magnitude_comparison"},
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
+    "unit_tape": {"group_reveal", "unit_substitution"},
 }
 
 
-#: Fields whose value sets a visual's size, so a failure can name the number to
-#: change rather than telling a reviewer to "reduce visual content".
-_SIZE_DRIVING_FIELDS = ("maximum", "columns", "rows", "count", "parts", "values")
+#: Per KIND, the fields whose value sets a visual's size, so a failure can name
+#: the number (or string) to change rather than telling a reviewer to "reduce
+#: visual content". Keyed by kind for the same reason `_CARDINALITY_FIELDS`
+#: below is: the same field name means different things on different kinds.
+#: `bar` also carries its own `value` field (the fill amount, in the same
+#: `values` dict as `maximum`), which `_measure_bar` never reads when sizing
+#: the bar -- only `maximum` does -- so a flat, kind-agnostic field-name list
+#: named `value` as a driver alongside `maximum` for every oversized bar. A
+#: tape's width comes from its box count (`value`) AND the widest label, which
+#: is set by `per_unit`, `source_unit` and `target_unit` -- so a within-cap
+#: tape can still overflow the frame on unit text alone, and the field to
+#: shorten is one of these two strings rather than a count.
+_SIZE_DRIVING_FIELDS = {
+    "bar": ("maximum",),
+    "grid": ("rows", "columns"),
+    "object_set": ("count",),
+    "partition": ("parts",),
+    "ordered_values": ("values",),
+    "unit_tape": ("value", "per_unit", "source_unit", "target_unit"),
+}
 
 #: Per KIND, the fields that decide how many semantic parts a factory builds.
 #: Keyed by kind rather than by field name because the same name means different
@@ -76,6 +94,26 @@ _CARDINALITY_FIELDS = {
     "partition": ("parts",),
 }
 
+#: Per KIND, part classes that are NOT on screen when the whole visual is
+#: revealed. The renderer keeps them out of the visual's root group, so they
+#: arrive by their own reveal -- which means the "revealing a visual reveals its
+#: parts" rule that `beat_expander._is_revealed` and `quality.check_repeated_reveal`
+#: both apply has to make an exception for them.
+DEFERRED_PARTS = {"unit_tape": ("target_label",)}
+
+#: One box per whole unit stops being legible past this, and a ninth box would
+#: not fit the 18.9-unit width limit with both labels inside it. `number_line`
+#: covers larger magnitudes.
+MAX_TAPE_BOXES = 8
+
+#: Per KIND, the field a reviewer would change, its cap, and how the part count
+#: is derived from that field's value. Separate from `_CARDINALITY_FIELDS`
+#: because a tape's count is ceil(value): the number to name in the failure and
+#: the number to compare against the cap are different numbers.
+_CARDINALITY_DERIVED = {
+    "unit_tape": ("value", MAX_TAPE_BOXES, lambda value: ceil(value)),
+}
+
 #: The largest part count any kind could ever need. The tightest pitch is a bar
 #: segment at 0.65 units, so the 18.9-unit width limit admits ~29; `object_set`
 #: packs five per row, so the 8.6-unit height limit admits ~65. This is a
@@ -83,6 +121,16 @@ _CARDINALITY_FIELDS = {
 #: looping past what fits, leaving `_require_renderable_extent` to decide
 #: precisely.
 MAX_PART_CARDINALITY = 128
+
+_TAPE_BOX_HEIGHT = 1.1
+_TAPE_BOX_GAP = 0.08
+#: Breathing room either side of the widest label inside a box.
+_TAPE_BOX_PADDING = 0.3
+#: Keeps the source and target label bands from meeting at the box's vertical
+#: midpoint: flush against each other, they read as one block of text rather
+#: than two -- especially before the target label is revealed, when the gap is
+#: the only cue that a second label lives there.
+_TAPE_LABEL_INSET = 0.04
 
 
 #: What to reach for when a count-driven visual is too large. `number_line`
@@ -120,13 +168,23 @@ def _require_renderable_cardinality(spec, values) -> None:
         raise _cardinality_failure(
             spec, name, _describe(values[name]), MAX_PART_CARDINALITY, f"unit of {name}",
         )
+    derived = _CARDINALITY_DERIVED.get(spec.kind)
+    if derived is None:
+        return
+    name, cap, count_from = derived
+    if name not in values:
+        return
+    if count_from(values[name]) > cap:
+        raise _cardinality_failure(
+            spec, name, _describe(values[name]), cap, "whole unit",
+        )
 
 
 def _is_whole(value) -> bool:
     return getattr(value, "denominator", 1) == 1
 
 
-def _require_renderable_extent(measured, values) -> None:
+def _require_renderable_extent(kind, measured, values) -> None:
     """Reject a visual too large to fit the frame at any permitted scale.
 
     `_measure_bar`, `_measure_grid` and `_measure_object_set` derive their extent
@@ -147,16 +205,15 @@ def _require_renderable_extent(measured, values) -> None:
     height = measured.bounds.top - measured.bounds.bottom
     if width <= width_limit and height <= height_limit:
         return
-    drivers = ", ".join(
-        f"{name}={_describe(values[name])}"
-        for name in _SIZE_DRIVING_FIELDS if name in values
-    )
+    driving_names = [name for name in _SIZE_DRIVING_FIELDS.get(kind, ()) if name in values]
+    drivers = ", ".join(f"{name}={_describe(values[name])}" for name in driving_names)
+    fields_to_change = ", ".join(driving_names) if driving_names else "the field driving its size"
     raise V3ValidationError(V3Failure(
         code="visual_extent_unrenderable",
         path=f"visuals.{measured.ref}",
         expected=f"a visual within {width_limit:.1f} x {height_limit:.1f} units",
         observed=f"{measured.ref} spans {width:.1f} x {height:.1f} units ({drivers})",
-        hint=f"reduce the value driving this visual's size ({drivers or 'its size field'})",
+        hint=f"reduce or shorten {fields_to_change} (currently {drivers or 'unknown'})",
     ))
 
 
@@ -201,6 +258,8 @@ def _require_marker_labels_do_not_collide(spec, marker_xs, label_widths, labels)
 
 
 def _describe(value):
+    if isinstance(value, str):
+        return value
     if isinstance(value, (list, tuple)):
         return str(len(value))
     return str(_whole(value, "size") if getattr(value, "denominator", 1) == 1 else value)
@@ -397,6 +456,84 @@ def _measure_answer(*, spec, values, measurer):
     )
 
 
+def _measure_unit_tape(*, spec, values, measurer):
+    """One box per whole source unit, each box measured for both of its labels.
+
+    Both labels are measured even though only the source label is drawn at first:
+    `unit_substitution` reveals the target label mid-lesson, and a box sized for
+    the shorter text would have to grow when the longer one arrives -- reflowing
+    the lesson under the learner. This is the reservation `_measure_answer` makes
+    for the staged answer, applied per box.
+    """
+    value, per_unit = values["value"], values["per_unit"]
+    source_unit, target_unit = values["source_unit"], values["target_unit"]
+    if value <= 0 or per_unit <= 0:
+        raise ValueError("unit_tape value and per_unit must be positive")
+    full_boxes = int(value)
+    remainder = value - full_boxes
+    source_texts = [f"1 {source_unit}"] * full_boxes
+    target_texts = [f"{format_number(per_unit)} {target_unit}"] * full_boxes
+    if remainder:
+        source_texts.append(f"{format_number(remainder)} {source_unit}")
+        target_texts.append(f"{format_number(remainder * per_unit)} {target_unit}")
+    box_width = _TAPE_BOX_PADDING + max(
+        measurer.measure(text, "label")[0] for text in (*source_texts, *target_texts)
+    )
+    box_count = len(source_texts)
+    width = box_count * box_width + (box_count - 1) * _TAPE_BOX_GAP
+    left = -width / 2
+    parts = {}
+    for index in range(box_count):
+        box_left = left + index * (box_width + _TAPE_BOX_GAP)
+        box = Bounds(box_left, box_left + box_width, -_TAPE_BOX_HEIGHT / 2, _TAPE_BOX_HEIGHT / 2)
+        parts[("box", index)] = SemanticPart("box", index, box)
+        parts[("source_label", index)] = SemanticPart(
+            "source_label", index, _tape_label_bounds(box, upper=True),
+        )
+        parts[("target_label", index)] = SemanticPart(
+            "target_label", index, _tape_label_bounds(box, upper=False),
+        )
+    # A group part per label class, because the compiler stages the substitution
+    # without knowing the box count -- `value` is a fixture param at compile time.
+    for part_name in ("source_label", "target_label"):
+        spans = [parts[(part_name, index)].bounds for index in range(box_count)]
+        parts[(part_name, None)] = SemanticPart(part_name, None, Bounds(
+            min(span.left for span in spans), max(span.right for span in spans),
+            min(span.bottom for span in spans), max(span.top for span in spans),
+        ))
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(left, left + width, -_TAPE_BOX_HEIGHT / 2, _TAPE_BOX_HEIGHT / 2),
+        parts=parts,
+        payload={
+            "boxes": tuple(
+                {
+                    "source_label": source_texts[index],
+                    "target_label": target_texts[index],
+                    "fill_fraction": 1.0 if index < full_boxes else float(remainder),
+                }
+                for index in range(box_count)
+            ),
+            "source_unit": source_unit,
+            "target_unit": target_unit,
+        },
+    )
+
+
+def _tape_label_bounds(box: Bounds, *, upper: bool) -> Bounds:
+    """The upper or lower half of a box, where one of its two labels sits.
+
+    Inset so the two bands do not meet: a label sitting flush against the
+    other's edge reads as one block of text rather than two.
+    """
+    quarter = (box.top - box.bottom) / 4
+    center_y = box.center.y + (quarter if upper else -quarter)
+    return Bounds(
+        box.left, box.right,
+        center_y - quarter + _TAPE_LABEL_INSET, center_y + quarter - _TAPE_LABEL_INSET,
+    )
+
+
 def _measure_ordered_values(*, spec, values, measurer):
     return measure_ordered_values(
         ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45,
@@ -419,6 +556,7 @@ def default_visual_registry() -> VisualRegistry:
     registry.register("grid", _measure_grid)
     registry.register("partition", _measure_partition)
     registry.register("bar", _measure_bar)
+    registry.register("unit_tape", _measure_unit_tape)
     registry.register("object_set", _measure_object_set)
     registry.register("label", _measure_label)
     registry.register("answer_expression", _measure_answer)

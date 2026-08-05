@@ -14,7 +14,7 @@ from app.meta.v3.geometry import Bounds, PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
 from app.meta.v3.renderer import _build_visual, render_resolved_scene
 from app.meta.v3.resolver import ResolvedAction, ResolvedScene, ResolvedTarget, resolve_scene
-from app.meta.v3.visual_registry import default_visual_registry
+from app.meta.v3.visual_registry import DEFERRED_PARTS, default_visual_registry
 
 
 def _reveal(mobject):
@@ -229,6 +229,10 @@ _MEASURABLE_VALUES = {
     "bar": {"value": Fraction(3), "maximum": Fraction(5)},
     "object_set": {"count": 6},
     "label": {"text": "Answer"},
+    "unit_tape": {
+        "value": Fraction(11, 4), "per_unit": Fraction(1000),
+        "source_unit": "km", "target_unit": "m",
+    },
 }
 
 
@@ -258,6 +262,36 @@ def test_every_compiler_targetable_part_resolves_to_a_rendered_mobject(kind):
     }
     missing = sorted(targetable - set(children))
     assert not missing, f"{kind} declares targetable parts the renderer never builds: {missing}"
+
+
+@pytest.mark.parametrize("kind", sorted(DEFERRED_PARTS))
+def test_every_deferred_part_is_held_out_of_the_root_group(kind):
+    """A part `DEFERRED_PARTS` declares deferred must actually be missing on screen.
+
+    `beat_expander._is_revealed` and `quality.check_repeated_reveal` both treat a
+    deferred part as legitimately un-revealed by the whole-visual reveal, but
+    neither one holds anything off screen -- the renderer's root group is what
+    actually does that. A kind added to `DEFERRED_PARTS` with no matching
+    renderer change would pass those two gates and then render fully visible
+    from the first beat, so this checks the renderer's own behaviour directly
+    rather than trusting it stays in step with the map by convention. Modeled on
+    `test_every_compiler_targetable_part_resolves_to_a_rendered_mobject` above.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind=kind, ref=kind, initial_role="neutral"), _MEASURABLE_VALUES[kind], ManimTextMeasurer(),
+    )
+    root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+    family = set(root.get_family())
+
+    for part_name in DEFERRED_PARTS[kind]:
+        deferred_mobjects = [
+            mobject for (part, index), mobject in children.items()
+            if part == part_name and index is not None
+        ]
+        assert deferred_mobjects, f"{kind}.{part_name} has no rendered mobjects to check"
+        assert not any(mobject in family for mobject in deferred_mobjects), (
+            f"{kind}.{part_name} is declared deferred but appears in the root group"
+        )
 
 
 def test_number_line_draws_its_line_through_its_markers():

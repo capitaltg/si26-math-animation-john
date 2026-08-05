@@ -87,7 +87,8 @@ class BarVisual(BaseModel):
         f"per unit, at most {MAX_PART_CARDINALITY}, and only about 29 fit the "
         f"frame. This is NOT an axis maximum -- a quantity like 2750 out of "
         f"10000 must not be a bar. Show a magnitude that large on a number_line, "
-        f"whose maximum is a scale."
+        f"whose maximum is a scale, or on a unit_tape when the lesson converts "
+        f"between two units."
     ))
 
 
@@ -102,6 +103,34 @@ class ObjectSetVisual(BaseModel):
     ))
 
 
+class UnitTapeVisual(BaseModel):
+    """A quantity in one unit, drawn as one box per whole unit, named in two units.
+
+    The teaching visual for a conversion: each box carries the source unit's name
+    and, revealed later by `unit_substitution`, the target unit's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["unit_tape"] = "unit_tape"
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    value: ExpressionNode = Field(description=(
+        "How many source units the quantity is, e.g. 2.75 for 2.75 kilometres. "
+        "One box is drawn per whole unit plus one for any remainder, at most 8 "
+        "boxes; for a larger magnitude use a number_line."
+    ))
+    per_unit: ExpressionNode = Field(description=(
+        "How many target units make one source unit, e.g. 1000 for kilometres to "
+        "metres. This is a label number, not a count -- nothing is drawn per "
+        "target unit -- so it may be as large as the conversion requires."
+    ))
+    source_unit: ProseText = Field(min_length=1, max_length=20, description=(
+        "The unit the quantity is given in, as it should read on screen: \"km\"."
+    ))
+    target_unit: ProseText = Field(min_length=1, max_length=20, description=(
+        "The unit being converted to, as it should read on screen: \"m\"."
+    ))
+
+
 class LabelVisual(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["label"] = "label"
@@ -113,6 +142,7 @@ SemanticVisualSpec = Annotated[
     Union[
         OrderedValuesVisual, RectangleMeasurementVisual, NumberLineVisual,
         GridVisual, PartitionVisual, BarVisual, ObjectSetVisual, LabelVisual,
+        UnitTapeVisual,
     ],
     Field(discriminator="kind"),
 ]
@@ -220,7 +250,7 @@ class TeachingPlanDocument(BaseModel):
     supporting_visuals: list[SemanticVisualSpec] = Field(default_factory=list, max_length=4)
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
-        "partition", "regroup", "magnitude_comparison",
+        "partition", "regroup", "magnitude_comparison", "unit_substitution",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
@@ -368,5 +398,40 @@ class TeachingPlanDocument(BaseModel):
                     f"beat {sweep_beat.id!r} is magnitude_comparison's sweep beat, which "
                     "the compiler stages entirely on its own; move its custom actions to "
                     "another beat"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def require_unit_substitution_shape(self):
+        """`unit_substitution` is staged by the compiler, not written by the plan.
+
+        The compiler reveals every `target_label` at the derive beat using the
+        visual's group part. A plan cannot express that: `_validate_target`
+        requires an index for a part target, so a plan reveal could only name one
+        box's label and would leave the rest unrevealed while still looking like
+        an affordance. Same reasoning as `require_pair_elimination_shape`.
+        """
+        if self.strategy != "unit_substitution":
+            return self
+        for beat in self.beats:
+            targets = [
+                *beat.targets,
+                *(
+                    target
+                    for action in beat.custom_actions
+                    for target in (
+                        *getattr(action, "targets", ()),
+                        *(
+                            getattr(action, attribute)
+                            for attribute in ("target", "source")
+                            if getattr(action, attribute, None) is not None
+                        ),
+                    )
+                ),
+            ]
+            if any(target.part == "target_label" for target in targets):
+                raise ValueError(
+                    f"beat {beat.id!r} names target_label, which unit_substitution "
+                    "stages on its own; remove the target or the custom action"
                 )
         return self
