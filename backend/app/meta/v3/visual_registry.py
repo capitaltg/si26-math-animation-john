@@ -582,6 +582,42 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     if y_max <= y_min:
         raise ValueError("coordinate_plane y_max must exceed y_min")
     grid_enabled = bool(values.get("grid", False))
+    # Ticked axes are the coordinate_plane's readable contract; a span with no
+    # integer inside (e.g. 0.1..0.9) yields zero ticks -- refuse rather than
+    # ship an unticked plane the fixture author did not ask for.
+    for axis, low, high in (("x", x_min, x_max), ("y", y_min, y_max)):
+        if not _integer_ticks_in_span(low, high):
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}",
+                expected=f"a {axis}-axis span containing at least one integer tick",
+                observed=(
+                    f"{spec.ref} {axis} span [{format_number(low)}, "
+                    f"{format_number(high)}] contains no integer"
+                ),
+                hint=(
+                    f"widen the {axis} span to include an integer, or shift it "
+                    "so an integer tick falls inside the declared range"
+                ),
+            ))
+    seen_points = set()
+    for point in values["points"]:
+        key = (point["x"], point["y"])
+        if key in seen_points:
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}",
+                expected="distinct point coordinates on the coordinate_plane",
+                observed=(
+                    f"{spec.ref} plots ({format_number(point['x'])}, "
+                    f"{format_number(point['y'])}) more than once"
+                ),
+                hint=(
+                    "remove the duplicate point -- stacked point labels render "
+                    "as overlapping glyphs at the same dot"
+                ),
+            ))
+        seen_points.add(key)
     span_x = float(x_max - x_min)
     span_y = float(y_max - y_min)
     # One scale drawn from whichever axis is tighter, so a unit step in world
@@ -653,8 +689,35 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             point_label_rects,
         )
         if chosen_rect is None:
-            chosen_dx, chosen_dy = _point_label_candidates(label_w, label_h)[0]
-            chosen_rect = _point_label_rect(u, v, chosen_dx, chosen_dy, label_w, label_h)
+            # No fully clear quadrant. A quadrant that only collides with tick
+            # labels is still usable (the collided ticks get suppressed), but a
+            # quadrant that overlaps a prior point label would stack two
+            # coordinate labels on top of each other -- refuse in that case.
+            chosen_dx, chosen_dy, chosen_rect = _pick_point_label_offset_over_ticks(
+                u, v, label_w, label_h,
+                x_tick_rects, y_tick_rects,
+                x_tick_suppressed, y_tick_suppressed,
+                point_label_rects,
+            )
+            if chosen_rect is None:
+                raise V3ValidationError(V3Failure(
+                    code="visual_extent_unrenderable",
+                    path=f"visuals.{spec.ref}",
+                    expected=(
+                        "point labels with a collision-free quadrant on the "
+                        "coordinate_plane"
+                    ),
+                    observed=(
+                        f"{spec.ref} point ({format_number(px)}, "
+                        f"{format_number(py)}) cannot place its label without "
+                        "overlapping another point label"
+                    ),
+                    hint=(
+                        "spread the points, widen the axis span, or drop "
+                        "points -- clustered coordinates leave no quadrant "
+                        "free for the label"
+                    ),
+                ))
             for i, tr in enumerate(x_tick_rects):
                 if not x_tick_suppressed[i] and _rects_overlap(chosen_rect, tr):
                     x_tick_suppressed[i] = True
@@ -775,6 +838,25 @@ def _pick_point_label_offset(
             if not y_tick_suppressed[i]
         ):
             continue
+        if any(_rects_overlap(rect, pr) for pr in point_label_rects):
+            continue
+        return dx, dy, rect
+    return None, None, None
+
+
+def _pick_point_label_offset_over_ticks(
+    u, v, label_w, label_h,
+    x_tick_rects, y_tick_rects,
+    x_tick_suppressed, y_tick_suppressed,
+    point_label_rects,
+):
+    """Second-chance quadrant search: tick collisions allowed, point-label
+    collisions still refused. The caller suppresses any ticks the returned
+    rect overlaps; a prior point label under this rect would produce stacked
+    coordinate glyphs and cannot be suppressed, so those quadrants are
+    skipped."""
+    for dx, dy in _point_label_candidates(label_w, label_h):
+        rect = _point_label_rect(u, v, dx, dy, label_w, label_h)
         if any(_rects_overlap(rect, pr) for pr in point_label_rects):
             continue
         return dx, dy, rect

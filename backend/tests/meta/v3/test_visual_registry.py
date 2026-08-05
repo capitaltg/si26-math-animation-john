@@ -515,3 +515,64 @@ def test_a_coordinate_plane_emits_grid_lines_only_when_the_grid_flag_is_set():
     assert on.payload["grid"] is True
     assert len(on.payload["x_grid_lines"]) == 5
     assert len(on.payload["y_grid_lines"]) == 5
+
+
+def test_a_coordinate_plane_rejects_a_span_with_no_integer_tick():
+    """A fractional span like [0.1, 0.9] carries no integer, so the integer
+    tick generator returns an empty list -- the plane would render axes with
+    no ticks or grid lines. Refuse at measurement so the fixture author fixes
+    the span rather than shipping an unticked plane."""
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(1, 10), "x_max": Fraction(9, 10),
+                "y_min": Fraction(0), "y_max": Fraction(4),
+                "points": [{"x": Fraction(1, 2), "y": Fraction(2)}],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert "integer" in exc_info.value.failure.observed
+
+
+def test_a_coordinate_plane_rejects_duplicate_point_coordinates():
+    """Two points at the same (x, y) stack their labels at one dot; the
+    fallback quadrant would draw one coordinate label on top of the other."""
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-3), "x_max": Fraction(5),
+                "y_min": Fraction(-3), "y_max": Fraction(5),
+                "points": [
+                    {"x": Fraction(2), "y": Fraction(3)},
+                    {"x": Fraction(2), "y": Fraction(3)},
+                ],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert "more than once" in exc_info.value.failure.observed
+
+
+def test_a_coordinate_plane_rejects_points_that_leave_no_free_label_quadrant():
+    """Three points clustered within one world unit exhaust every quadrant for
+    the third label's rectangle -- the earlier fallback silently overlaid it
+    on the second label. Refuse so the crowding surfaces before render."""
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-3), "x_max": Fraction(5),
+                "y_min": Fraction(-3), "y_max": Fraction(5),
+                "points": [
+                    {"x": Fraction(0), "y": Fraction(0)},
+                    {"x": Fraction(1, 20), "y": Fraction(0)},
+                    {"x": Fraction(0), "y": Fraction(1, 20)},
+                ],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert "cannot place its label" in exc_info.value.failure.observed
