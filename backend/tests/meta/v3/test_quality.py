@@ -106,21 +106,6 @@ def apply_literal_test_mutation(candidate, mutation):
             for entry in program.timeline
         ]
         return Candidate(candidate.plan, program.model_copy(update={"timeline": timeline}))
-    if mutation == "initial_answer_focus":
-        # Mutated on the perimeter lesson: the median's answer is one of its own
-        # values, so its program declares no `evaluated_answer` card to give a
-        # premature role to.
-        plan = _perimeter_plan()
-        perimeter = _compile(
-            plan,
-            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
-            {"length", "width"},
-        )
-        visuals = [
-            visual.model_copy(update={"initial_role": "focus"}) if visual.ref == "evaluated_answer" else visual
-            for visual in perimeter.visuals
-        ]
-        return Candidate(plan, perimeter.model_copy(update={"visuals": visuals}))
     if mutation == "row_anchor_for_item":
         relation = program.relations[0]
         row_target = relation.target.model_copy(update={"part": None, "index": None, "anchor": "center"})
@@ -179,8 +164,6 @@ def apply_literal_test_mutation(candidate, mutation):
     if mutation == "overlap_callout":
         duplicate = program.relations[0].model_copy(update={"ref": "second_callout"})
         return Candidate(candidate.plan, program.model_copy(update={"relations": [*program.relations, duplicate]}))
-    if mutation == "extend_to_13_seconds":
-        return Candidate(candidate.plan, program.model_copy(update={"total_duration_seconds": 13.0}))
     if mutation == "repeat_reveal":
         # Two beats naming the same visual compiled to two `reveal` actions on
         # it, so the rendered scene faded the same mobject in twice. Duplicate
@@ -201,16 +184,20 @@ def apply_literal_test_mutation(candidate, mutation):
     raise AssertionError(f"unknown mutation {mutation}")
 
 
+# Removed mutations that bypassed pydantic to fabricate unconstructible inputs:
+# `initial_answer_focus` (AnswerProgramVisual.initial_role is Literal["neutral"];
+# quality.py's initial_role != "neutral" branch is a defensive assertion for a
+# pure invariant, not a live gate) and `extend_to_13_seconds`
+# (SceneProgramDocument.total_duration_seconds has le=MAX_SCENE_SECONDS=12; the
+# `timeline_over_budget` branch is likewise a pure invariant).
 @pytest.mark.parametrize("mutation,expected_code", [
     ("split_group_reveal", "serial_simple_reveal"),
-    ("initial_answer_focus", "premature_answer_emphasis"),
     ("row_anchor_for_item", "collection_anchor_for_item"),
     ("remove_perimeter_trace", "static_process_visual"),
     ("short_final_hold", "conclusion_hold_too_short"),
     ("insert_unexplained_wait", "unexplained_idle_time"),
     ("detach_dimension_label", "dimension_anchor_mismatch"),
     ("overlap_callout", "callout_collision"),
-    ("extend_to_13_seconds", "timeline_over_budget"),
     ("repeat_reveal", "repeated_reveal"),
     ("declare_unused_visual", "unused_visual"),
 ])
@@ -643,13 +630,22 @@ def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid
     report = validate_static_quality(valid_program.plan, valid_program.program)
 
     assert report.passed is True
-    assert report.model_payload() == {
-        "passed": True,
-        "checks": [
-            {"code": check.code, "passed": True, "path": check.path, "detail": check.detail}
-            for check in report.checks
-        ],
-    }
+    payload = report.model_payload()
+    # Payload is a reviewer-safe surface: only the four documented keys, and
+    # nothing from the candidate itself (plans/programs/values).
+    assert set(payload.keys()) == {"passed", "checks"}
+    assert payload["passed"] is True
+    for entry in payload["checks"]:
+        assert set(entry.keys()) == {"code", "passed", "path", "detail"}
+        assert isinstance(entry["code"], str) and entry["code"]
+        assert entry["passed"] is True
+        assert isinstance(entry["path"], str)
+        assert isinstance(entry["detail"], str)
+    serialized = str(payload)
+    # No fixture values (`v1`..`v7`) or plan/program object addresses should
+    # reach the reviewer surface.
+    for field in (f"v{i}" for i in range(1, 8)):
+        assert field not in serialized
 
 
 def test_report_raises_first_structured_failure_without_candidate_contents(valid_program):
@@ -663,7 +659,10 @@ def test_report_raises_first_structured_failure_without_candidate_contents(valid
 
     failed = next(check for check in report.checks if not check.passed)
     assert failed.detail in exc_info.value.failure.hint
-    assert "v4" not in str(exc_info.value)
+    # `V3ValidationError.__str__` composes only compile-time strings
+    # (`code`, `path`, `observed=detail`), so pin the exact shape rather than
+    # asserting a candidate value like `"v4"` cannot leak into it.
+    assert str(exc_info.value) == f"{failed.code} at {failed.path}: {failed.detail}"
 
 
 @pytest.mark.parametrize(

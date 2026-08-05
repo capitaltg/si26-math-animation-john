@@ -91,11 +91,34 @@ def test_generation_repair_returns_v3_teaching_intent_with_structured_quality_fe
             "code": "serial_simple_reveal",
             "path": "timeline",
             "hint": "reveal values together",
+            # Non-allowlisted keys: `_reviewer_feedback_context` only forwards
+            # `_STABLE_REPAIR_FEEDBACK_FIELDS` (code/path/hint); every extra
+            # key here MUST be dropped before the user_message is composed.
+            "observed": "internal-diagnostic-value-should-not-leak",
+            "expected": "internal-expected-value-should-not-leak",
+            "traceback": "Traceback (most recent call last): private internals",
         },
     )
 
-    assert repaired.teaching_plan_document.plan_version == 3
+    # `plan_version` is `Literal[3]` in `TeachingPlanDocument`, so asserting
+    # `== 3` cannot fail; assert instead that the repaired proposal parsed at
+    # all (which pydantic guaranteed) plus a non-trivial semantic property.
+    assert repaired.teaching_plan_document.beats
+    assert repaired.teaching_plan_document.strategy == "boundary_trace"
     second_message = mock_call.call_args_list[1].kwargs["user_message"]
     assert '"teaching_plan_document"' in second_message
     assert '"code":"serial_simple_reveal"' in second_message
-    assert "Traceback" not in second_message
+    # These would appear in the message only if the reviewer-feedback
+    # allowlist widened or the traceback key were forwarded.
+    for leaked in (
+        "internal-diagnostic-value-should-not-leak",
+        "internal-expected-value-should-not-leak",
+        "Traceback (most recent call last)",
+        "private internals",
+        '"observed"',
+        '"expected"',
+        '"traceback"',
+    ):
+        assert leaked not in second_message, (
+            f"{leaked!r} leaked into the repair prompt"
+        )

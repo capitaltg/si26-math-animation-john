@@ -38,7 +38,7 @@ def test_parameterized_program_keeps_anchor_refs_not_fixture_coordinates():
 
 def test_program_rejects_generated_coordinates():
     raw = SceneProgramDocument.model_json_schema()
-    assert '"x"' not in str(raw)
+    assert "x" not in raw.get("properties", {})
     invalid = _program()
     invalid["x"] = 2.5
     with pytest.raises(ValidationError):
