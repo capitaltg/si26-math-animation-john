@@ -44,5 +44,11 @@ docs/superpowers/
 node_modules/
 .vite/
 
-# Impeccable design-hook cache (generated)
-.impeccable/hook.cache.json
+# Impeccable design-hook state (generated)
+.impeccable/
+
+# Skill files (local tooling, not project code)
+.claude/skills/
+.github/skills/
+.github/agents/impeccable-*.agent.md
+.github/hooks/impeccable.json
