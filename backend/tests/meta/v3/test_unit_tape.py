@@ -335,6 +335,100 @@ def test_revealing_a_deferred_part_twice_is_still_a_repeat():
     assert not check_repeated_reveal(doubled).passed
 
 
+def _role_changes(program, role):
+    return [
+        entry.action for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == role
+    ]
+
+
+def test_unit_rate_focuses_the_per_one_column_at_the_derive_beat():
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    focus_actions = _role_changes(program, "focus")
+    box_zero_focuses = [
+        action for action in focus_actions
+        if action.target.visual_ref == "trail_tape"
+        and action.target.part == "box"
+        and action.target.index == 0
+    ]
+    assert box_zero_focuses, "unit_rate should focus box[0] as the per-one column"
+
+
+def test_unit_rate_still_stages_the_target_label_reveal():
+    """`unit_rate` shares `unit_substitution`'s group reveal so the per-one
+    pairing is legible when the rate beat lands."""
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    label_reveals = [
+        action for action in _reveals(program)
+        if any(target.part == "target_label" for target in action.targets)
+    ]
+    assert len(label_reveals) == 1
+    target = label_reveals[0].targets[0]
+    assert (target.visual_ref, target.part, target.index) == ("trail_tape", "target_label", None)
+
+
+def test_unit_rate_plan_rejects_a_target_label_target():
+    """`require_unit_substitution_shape` now guards `unit_rate` too, since the
+    compiler stages the same reveal for both strategies."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    from pydantic import ValidationError
+
+    payload = _tape_plan(strategy="unit_rate").model_dump()
+    payload["beats"][1]["custom_actions"] = [
+        {"kind": "reveal",
+         "targets": [{"visual_ref": "trail_tape", "part": "target_label", "index": 0}]},
+    ]
+
+    with pytest.raises(ValidationError, match="target_label"):
+        TeachingPlanDocument.model_validate(payload)
+
+
+def test_unit_rate_quality_gate_requires_the_per_one_focus():
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    without_per_one = program.model_copy(update={
+        "timeline": [
+            entry for entry in program.timeline
+            if not (
+                entry.action.kind == "set_role"
+                and entry.action.role == "focus"
+                and entry.action.target.visual_ref == "trail_tape"
+                and entry.action.target.part == "box"
+                and entry.action.target.index == 0
+            )
+        ],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, without_per_one).passed
+
+
+def test_unit_rate_is_rejected_on_a_non_tape_visual():
+    """Only `unit_tape` supports `unit_rate` today; the registry gate refuses
+    the pairing on any other kind."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan(strategy="unit_rate").model_dump()
+    payload["primary_visual"] = {
+        "kind": "bar", "ref": "trail_tape",
+        "value": {"node": "literal", "value": 3},
+        "maximum": {"node": "literal", "value": 5},
+    }
+    payload["beats"][1]["custom_actions"] = []
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "segment", "index": 0},
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile(TeachingPlanDocument.model_validate(payload))
+
+    assert exc_info.value.failure.code == "incompatible_strategy"
+
+
 def _observation():
     from datetime import datetime, timezone
 

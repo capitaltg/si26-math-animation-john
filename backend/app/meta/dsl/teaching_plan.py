@@ -251,6 +251,7 @@ class TeachingPlanDocument(BaseModel):
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison", "unit_substitution",
+        "unit_rate",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
@@ -410,8 +411,11 @@ class TeachingPlanDocument(BaseModel):
         requires an index for a part target, so a plan reveal could only name one
         box's label and would leave the rest unrevealed while still looking like
         an affordance. Same reasoning as `require_pair_elimination_shape`.
+
+        `unit_rate` reuses the same target_label group reveal to name the "per
+        one" pairing in every box, so it inherits the same shape constraint.
         """
-        if self.strategy != "unit_substitution":
+        if self.strategy not in {"unit_substitution", "unit_rate"}:
             return self
         for beat in self.beats:
             targets = [
@@ -431,7 +435,7 @@ class TeachingPlanDocument(BaseModel):
             ]
             if any(target.part == "target_label" for target in targets):
                 raise ValueError(
-                    f"beat {beat.id!r} names target_label, which unit_substitution "
+                    f"beat {beat.id!r} names target_label, which {self.strategy} "
                     "stages on its own; remove the target or the custom action"
                 )
         return self

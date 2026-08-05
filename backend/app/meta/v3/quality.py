@@ -238,7 +238,7 @@ def check_unexplained_idle_time(program) -> QualityCheck:
 
 
 def check_strategy_affordance(plan, program) -> QualityCheck:
-    if plan.strategy == "unit_substitution":
+    if plan.strategy in {"unit_substitution", "unit_rate"}:
         # The lesson's whole move is the exchange, so the target unit's labels
         # have to reach the screen. The compiler stages this reveal; the check
         # exists because a strategy whose affordance is optional is decorative.
@@ -250,8 +250,25 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
         if not has_substitution:
             return _failed(
                 "static_process_visual", "timeline",
-                "unit-substitution instruction needs the target unit's labels revealed",
+                f"{plan.strategy} instruction needs the target unit's labels revealed",
             )
+        if plan.strategy == "unit_rate":
+            # `unit_rate` adds a per-one emphasis on box[0]; without it the
+            # lesson is indistinguishable from `unit_substitution`.
+            primary_ref = plan.primary_visual.ref
+            has_per_one_focus = any(
+                entry.action.kind == "set_role"
+                and entry.action.role == "focus"
+                and entry.action.target.visual_ref == primary_ref
+                and entry.action.target.part == "box"
+                and entry.action.target.index == 0
+                for entry in program.timeline
+            )
+            if not has_per_one_focus:
+                return _failed(
+                    "static_process_visual", "timeline",
+                    "unit_rate instruction needs box[0] focused as the per-one column",
+                )
         return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":
         return _passed("static_process_visual", "strategy")

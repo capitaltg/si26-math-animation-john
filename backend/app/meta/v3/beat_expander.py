@@ -96,6 +96,9 @@ class BeatExpander:
             for spec in self._visual_specs(plan)
         }
         unit_substitution_beat_id = self._unit_substitution_beat_id(plan)
+        self._unit_rate_beat_id_state = (
+            unit_substitution_beat_id if plan.strategy == "unit_rate" else None
+        )
         answer_declared = any(visual.ref == "evaluated_answer" for visual in visuals)
         answer_target = TargetRef(visual_ref="evaluated_answer")
         work_beat_id = self._work_beat_id(plan) if answer_declared else None
@@ -334,6 +337,19 @@ class BeatExpander:
             if actions:
                 return actions
 
+        if (
+            plan.strategy == "unit_rate"
+            and beat.id == getattr(self, "_unit_rate_beat_id_state", None)
+        ):
+            # `unit_rate` teaches "one source unit is per_unit target units" by
+            # emphasising the first box while the target labels arrive. Focus
+            # box[0] rather than the whole tape so the per-one column reads as
+            # the rate; a whole-tape focus would fall through to
+            # `_generic_role_change` and put every box on equal footing.
+            actions = self._unit_rate_actions(plan, current_roles)
+            if actions:
+                return actions
+
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
             # Iterate pairs, not indices. The middle item is never reached, so
             # the old `if index == middle: continue` guard goes with the loop it
@@ -426,6 +442,17 @@ class BeatExpander:
                 "focus", current_roles,
             ))
         return actions
+
+    def _unit_rate_actions(self, plan, current_roles):
+        """Focus box[0] -- the "per one" column that carries the rate.
+
+        Box[0] alone rather than every box: the rate is what one source unit
+        buys in target units, so the column that reads "1 source = per_unit
+        target" is where the beat lands. A whole-tape focus would make every
+        column equally salient and lose that reading.
+        """
+        target = TargetRef(visual_ref=plan.primary_visual.ref, part="box", index=0)
+        return self._role_change(target, "focus", current_roles)
 
     def _median_callout(self, plan, beat, relations):
         """Name the surviving middle value -- unless the plan already names it.
@@ -521,8 +548,11 @@ class BeatExpander:
         focus; a substitution belongs on the beat that derives, so `derive` is
         preferred here. `require_unit_substitution_shape` forbids the plan from
         staging this itself, so there is no author's version to defer to.
+
+        `unit_rate` shares the same staged reveal so the per-one pairing is
+        legible when the rate beat lands.
         """
-        if plan.strategy != "unit_substitution":
+        if plan.strategy not in {"unit_substitution", "unit_rate"}:
             return None
         for kinds in ({"derive"}, {"organize"}, {"focus"}):
             for beat in plan.beats:
