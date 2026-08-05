@@ -342,38 +342,66 @@ def _number_line_labels(measured, placed):
 
 
 def _build_coordinate_plane(measured, placed):
-    """Axes with integer ticks, plus one dot per plotted point.
+    """Axes projected through the world origin, plus dots and labels.
 
-    Point positions come from `measured.parts` (already scaled by layout) so
-    the dots inherit the lesson's uniform scale like every other part-derived
-    child. Tick and axis endpoints come from payload and are scaled explicitly,
-    matching how `_line_visual` handles the number line.
+    Axis endpoints and tick coordinates come from payload (unscaled) and are
+    multiplied by `placed.scale` explicitly, matching how `_line_visual`
+    handles the number line. Point dots come from `measured.parts`, which
+    layout has already scaled. Tick labels sit under the x-axis / left of the
+    y-axis; each point label sits above its dot. Labels are added to the root
+    group but NOT registered as children -- nothing in the compiler addresses
+    them, and inventing target keys for glyphs would let a plan target a
+    label the archetype does not expose (mirrors `_number_line_labels`).
     """
     payload = measured.payload
     scale, offset = placed.scale, placed.offset
-    half_w = payload["half_width"] * scale
-    half_h = payload["half_height"] * scale
     cx, cy = offset.x, offset.y
+    extent_x = payload["extent_x"] * scale
+    extent_y = payload["extent_y"] * scale
+    zero_u = payload["axis_zero_u"] * scale
+    zero_v = payload["axis_zero_v"] * scale
+    axis_y = cy + zero_v
+    axis_x = cx + zero_u
     x_axis = Line(
-        _array(Point(cx - half_w, cy)), _array(Point(cx + half_w, cy)),
+        _array(Point(cx - extent_x, axis_y)),
+        _array(Point(cx + extent_x, axis_y)),
     )
     y_axis = Line(
-        _array(Point(cx, cy - half_h)), _array(Point(cx, cy + half_h)),
+        _array(Point(axis_x, cy - extent_y)),
+        _array(Point(axis_x, cy + extent_y)),
     )
     tick_len = 0.08 * scale
+    tick_gap = payload["tick_label_gap"] * scale
     tick_mobjects = []
+    tick_labels = []
     for tick in payload["x_ticks"]:
         u = tick["u"] * scale + cx
         tick_mobjects.append(Line(
-            _array(Point(u, cy - tick_len)), _array(Point(u, cy + tick_len)),
+            _array(Point(u, axis_y - tick_len)),
+            _array(Point(u, axis_y + tick_len)),
         ))
+        label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
+        tick_labels.append(_text(tick["label"], "label", Point(u, label_y), scale))
     for tick in payload["y_ticks"]:
         v = tick["v"] * scale + cy
         tick_mobjects.append(Line(
-            _array(Point(cx - tick_len, v)), _array(Point(cx + tick_len, v)),
+            _array(Point(axis_x - tick_len, v)),
+            _array(Point(axis_x + tick_len, v)),
         ))
+        label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
+        tick_labels.append(_text(tick["label"], "label", Point(label_x, v), scale))
     children = _parts_as_dots(measured, offset, "point")
-    root = VGroup(x_axis, y_axis, *tick_mobjects, *children.values())
+    point_labels = []
+    point_offset = payload["point_label_offset"]
+    for point in payload["points"]:
+        u = point["x"] * scale + cx
+        v = point["y"] * scale + cy
+        label_y = v + (point_offset + point["label_height"] / 2) * scale
+        point_labels.append(_text(point["label"], "label", Point(u, label_y), scale))
+    root = VGroup(
+        x_axis, y_axis, *tick_mobjects, *tick_labels,
+        *children.values(), *point_labels,
+    )
     return root, children
 
 

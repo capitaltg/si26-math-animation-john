@@ -542,22 +542,30 @@ def _tape_label_bounds(box: Bounds, *, upper: bool) -> Bounds:
 COORDINATE_PLANE_HALF_WIDTH = 2.6
 COORDINATE_PLANE_HALF_HEIGHT = 2.2
 
-#: One tick per integer inside the declared span, up to this many. A denser
-#: grid would need labels the ticks cannot fit without collision (see
-#: `number_line`'s inter-label gate) and the archetype is foundational, not a
-#: ready-to-render scatter plot -- downstream tickets tighten this as needed.
+#: Hard ceiling on labeled ticks per axis, applied AFTER the collision-driven
+#: stride below. Ticks are dense enough by then that further limits are only
+#: a legibility bound, not a fit bound.
 COORDINATE_PLANE_MAX_TICKS_PER_AXIS = 10
+
+#: Vertical gap between a plotted point and the label above it.
+COORDINATE_POINT_LABEL_OFFSET = 0.12
+
+#: Perpendicular gap between an axis and its tick labels.
+COORDINATE_TICK_LABEL_GAP = 0.12
+
+#: Minimum whitespace between two adjacent tick labels on the same axis.
+COORDINATE_TICK_LABEL_INTER_GAP = 0.1
 
 
 def _measure_coordinate_plane(*, spec, values, measurer):
-    """Axes centred on the frame with plotted points as addressable parts.
+    """Axes projected through the world origin, with plotted points and labels.
 
-    The plane's numeric span is declared on the visual, and every point is
-    projected into a fixed scene-coord rectangle so downstream tickets can
-    reuse the kind without renegotiating axis extent. Refuses a point outside
-    the declared span rather than clipping silently -- an off-grid point
-    passing quietly would let a plan claim (2, 3) is on screen while the dot
-    was drawn against the axis wall.
+    Uniform unit scale (finding: distinct u/v scales distorted slopes and
+    distances). Zero is projected through each declared span and clamped to
+    the nearest edge when outside; the axes cross at the projected zero
+    rather than the visual centre so (0, 0) reads as the origin.
+
+    Refuses a point outside the declared span rather than clipping silently.
     """
     x_min, x_max = values["x_min"], values["x_max"]
     y_min, y_max = values["y_min"], values["y_max"]
@@ -565,13 +573,27 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         raise ValueError("coordinate_plane x_max must exceed x_min")
     if y_max <= y_min:
         raise ValueError("coordinate_plane y_max must exceed y_min")
-    half_w, half_h = COORDINATE_PLANE_HALF_WIDTH, COORDINATE_PLANE_HALF_HEIGHT
     span_x = float(x_max - x_min)
     span_y = float(y_max - y_min)
+    # One scale drawn from whichever axis is tighter, so a unit step in world
+    # coords covers the same scene distance on both axes.
+    unit_scale = min(
+        (2 * COORDINATE_PLANE_HALF_WIDTH) / span_x,
+        (2 * COORDINATE_PLANE_HALF_HEIGHT) / span_y,
+    )
+    extent_x = span_x * unit_scale / 2
+    extent_y = span_y * unit_scale / 2
+    x_center = (float(x_min) + float(x_max)) / 2
+    y_center = (float(y_min) + float(y_max)) / 2
+
     def project(px, py):
-        u = (float(px - x_min) / span_x) * (2 * half_w) - half_w
-        v = (float(py - y_min) / span_y) * (2 * half_h) - half_h
-        return u, v
+        return (float(px) - x_center) * unit_scale, (float(py) - y_center) * unit_scale
+
+    # World origin projected into scene coords, clamped to the nearest edge
+    # when the declared span excludes zero, so the axis line stays visible.
+    zero_u = max(-extent_x, min(extent_x, -x_center * unit_scale))
+    zero_v = max(-extent_y, min(extent_y, -y_center * unit_scale))
+
     parts: dict = {}
     point_payload = []
     for index, point in enumerate(values["points"]):
@@ -582,23 +604,51 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             )
         u, v = project(px, py)
         parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
-        point_payload.append({"x": u, "y": v, "label": _coordinate_label(px, py)})
-    # Ticks inside the span for the plane to read as a grid, not two bare lines.
-    x_ticks = _integer_ticks_in_span(x_min, x_max)
-    y_ticks = _integer_ticks_in_span(y_min, y_max)
+        label_text = _coordinate_label(px, py)
+        label_w, label_h = measurer.measure(label_text, "label")
+        point_payload.append({
+            "x": u, "y": v, "label": label_text,
+            "label_width": label_w, "label_height": label_h,
+        })
+
+    x_tick_payload = _coordinate_tick_payload(
+        _integer_ticks_in_span(x_min, x_max), unit_scale, measurer,
+    )
+    y_tick_payload = _coordinate_tick_payload(
+        _integer_ticks_in_span(y_min, y_max), unit_scale, measurer,
+    )
+    _require_coordinate_tick_labels_do_not_collide(
+        spec, x_tick_payload, unit_scale, axis="x",
+    )
+    _require_coordinate_tick_labels_do_not_collide(
+        spec, y_tick_payload, unit_scale, axis="y",
+    )
+
+    bounds = _coordinate_plane_bounds(
+        extent_x, extent_y, zero_u, zero_v,
+        point_payload, x_tick_payload, y_tick_payload,
+    )
     return _measured_visual(
         ref=spec.ref,
-        bounds=Bounds(-half_w, half_w, -half_h, half_h),
+        bounds=bounds,
         parts=parts,
         payload={
             "x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max,
-            "half_width": half_w, "half_height": half_h,
+            "extent_x": extent_x, "extent_y": extent_y,
+            "axis_zero_u": zero_u, "axis_zero_v": zero_v,
+            "unit_scale": unit_scale,
             "points": tuple(point_payload),
+            "point_label_offset": COORDINATE_POINT_LABEL_OFFSET,
+            "tick_label_gap": COORDINATE_TICK_LABEL_GAP,
             "x_ticks": tuple(
-                {"value": value, "u": project(value, y_min)[0]} for value in x_ticks
+                {"value": value, "u": (float(value) - x_center) * unit_scale,
+                 "label": text, "label_width": w, "label_height": h}
+                for value, text, w, h in x_tick_payload
             ),
             "y_ticks": tuple(
-                {"value": value, "v": project(x_min, value)[1]} for value in y_ticks
+                {"value": value, "v": (float(value) - y_center) * unit_scale,
+                 "label": text, "label_width": w, "label_height": h}
+                for value, text, w, h in y_tick_payload
             ),
         },
     )
@@ -609,11 +659,7 @@ def _coordinate_label(x, y) -> str:
 
 
 def _integer_ticks_in_span(low, high) -> list:
-    """Whole-number ticks inside [low, high], capped so the axis stays legible.
-
-    Skips the endpoints when they are already integers -- the axis line itself
-    already reaches them, so a tick on top adds ink without adding information.
-    """
+    """Whole-number ticks inside [low, high], capped for legibility."""
     lo, hi = int(ceil(float(low))), int(floor(float(high)))
     if hi < lo:
         return []
@@ -622,6 +668,85 @@ def _integer_ticks_in_span(low, high) -> list:
         step = -(-len(values) // COORDINATE_PLANE_MAX_TICKS_PER_AXIS)
         values = values[::step]
     return values
+
+
+def _coordinate_tick_payload(tick_values, unit_scale, measurer):
+    """Tick values with labels, thinned so adjacent labels do not overlap.
+
+    A stride-1 label set at unit_scale spacing overlaps whenever
+    max_label_width + INTER_GAP > unit_scale; enlarging the stride until it
+    fits is the same fit-or-drop dance `_measure_number_line` performs, kept
+    inside the visual because the inter-visual overlap gate cannot catch a
+    collision inside one visual.
+    """
+    if not tick_values:
+        return []
+    measured = [(value, format_number(value), *measurer.measure(format_number(value), "label"))
+                for value in tick_values]
+    stride = 1
+    while stride < len(measured):
+        thinned = measured[::stride]
+        max_w = max(row[2] for row in thinned)
+        if unit_scale * stride >= max_w + COORDINATE_TICK_LABEL_INTER_GAP:
+            break
+        stride += 1
+    return measured[::stride]
+
+
+def _require_coordinate_tick_labels_do_not_collide(spec, tick_payload, unit_scale, *, axis: str):
+    """The stride picker in `_coordinate_tick_payload` may run out of room.
+
+    If even stride=len still has adjacent widths that don't fit -- e.g. a very
+    wide label on a narrow plane -- surface the failure with the colliding
+    labels named, so retry can shorten the numeric span rather than the count.
+    """
+    for a, b in zip(tick_payload, tick_payload[1:]):
+        _va, ta, wa, _ha = a
+        _vb, tb, wb, _hb = b
+        world_gap = float(b[0] - a[0]) * unit_scale
+        actual_gap = world_gap - (wa + wb) / 2
+        if actual_gap >= COORDINATE_TICK_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"{axis}-axis tick labels separated by at least "
+                f"{COORDINATE_TICK_LABEL_INTER_GAP:g} units"
+            ),
+            observed=(
+                f"labels {ta!r} and {tb!r} overlap by "
+                f"{COORDINATE_TICK_LABEL_INTER_GAP - actual_gap:.2f} units"
+            ),
+            hint=(
+                f"narrow the {axis} span or shorten {ta!r}/{tb!r} -- adjacent "
+                "coordinate_plane tick labels overlap on their axis strip"
+            ),
+        ))
+
+
+def _coordinate_plane_bounds(
+    extent_x, extent_y, zero_u, zero_v,
+    point_payload, x_tick_payload, y_tick_payload,
+):
+    """Widen the raw axis rectangle so no label overhangs its neighbour."""
+    left, right = -extent_x, extent_x
+    bottom, top = -extent_y, extent_y
+    for point in point_payload:
+        label_center_x = point["x"]
+        label_center_y = (
+            point["y"] + COORDINATE_POINT_LABEL_OFFSET + point["label_height"] / 2
+        )
+        left = min(left, label_center_x - point["label_width"] / 2)
+        right = max(right, label_center_x + point["label_width"] / 2)
+        top = max(top, label_center_y + point["label_height"] / 2)
+    if x_tick_payload:
+        max_x_tick_h = max(row[3] for row in x_tick_payload)
+        bottom = min(bottom, zero_v - COORDINATE_TICK_LABEL_GAP - max_x_tick_h)
+    if y_tick_payload:
+        max_y_tick_w = max(row[2] for row in y_tick_payload)
+        left = min(left, zero_u - COORDINATE_TICK_LABEL_GAP - max_y_tick_w)
+    return Bounds(left, right, bottom, top)
 
 
 def _measure_ordered_values(*, spec, values, measurer):
