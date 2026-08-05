@@ -89,6 +89,22 @@ def test_program_forbids_renderer_controls(bad_key, bad_value):
         SceneProgramDocument.model_validate(invalid)
 
 
+@pytest.mark.parametrize("bad_text", [
+    "first line\nsecond line",
+    "top\rbottom",
+    "one\r\ntwo",
+])
+def test_program_rejects_multiline_callout_text(bad_text):
+    """A callout's rendered envelope is sized for a single line at
+    `FONT_SIZES["label"]` (see layout's `CALLOUT_ENVELOPE`). A newline
+    would render extra lines below the anchor that the layout has not
+    reserved room for, so the callout would overrun into the row below."""
+    invalid = _program()
+    invalid["relations"][0]["text"] = bad_text
+    with pytest.raises(ValidationError, match="single line"):
+        SceneProgramDocument.model_validate(invalid)
+
+
 def test_all_program_models_forbid_extra_fields():
     invalid = _program()
     invalid["visuals"][0]["extra"] = True

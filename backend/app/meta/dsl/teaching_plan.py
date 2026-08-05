@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.v3_common import (
     MAX_PLAN_BEATS, MAX_SIMPLE_STAGGER_SECONDS, MIN_PLAN_BEATS,
-    AnchorRef, GeneratedText, ProseText, StyleRole, TargetRef,
+    AnchorRef, CalloutText, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 from app.meta.v3.visual_registry import MAX_PART_CARDINALITY
 
@@ -193,7 +193,7 @@ class CalloutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["callout"] = "callout"
     target: AnchorRef
-    text: ProseText = Field(min_length=1, max_length=80)
+    text: CalloutText = Field(min_length=1, max_length=80)
 
 
 class DrawRequest(BaseModel):

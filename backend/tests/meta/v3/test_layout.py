@@ -304,6 +304,30 @@ def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_e
     assert _by_ref(with_relation) == _by_ref(without_relation)
 
 
+def test_multiline_callout_descent_exceeds_the_fixed_envelope():
+    """Renderer-backed rationale for the schema rejecting newlines: a
+    two-line label plus its arrow and buff renders more than
+    `CALLOUT_ENVELOPE` below the anchor, so the layout's fixed
+    single-line reservation would let a multi-line callout overrun into
+    the row below. Schema validation catches it earlier."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    anchor = np.array([0.0, 0.0, 0.0])
+    label = Text("first line\nsecond line", font_size=FONT_SIZES["label"])
+    label.next_to(anchor, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), anchor, buff=0.08)
+    rendered = VGroup(arrow, label)
+    descent = float(anchor[1] - rendered.get_bottom()[1])
+    assert descent > CALLOUT_ENVELOPE, (
+        f"two-line callout descent {descent:g} does not exceed the "
+        f"reserved envelope {CALLOUT_ENVELOPE:g}; the schema newline "
+        f"reject would then be over-cautious"
+    )
+
+
 def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale():
     """Renderer-backed regression: build the callout with Manim exactly the
     way `renderer._build_relation` does (`Text` at `FONT_SIZES["label"]`

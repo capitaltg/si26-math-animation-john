@@ -66,8 +66,26 @@ def validate_prose_text(value: str) -> str:
     return _validate_against(value, _SHARED_TEXT_RULES)
 
 
+def validate_single_line_callout_text(value: str) -> str:
+    """Callout labels ride a fixed-height rendered envelope (see layout's
+    `CALLOUT_ENVELOPE`) sized for a single line of `FONT_SIZES["label"]`
+    text. A newline in the label would render extra lines below the anchor
+    that the layout has not reserved room for, so the callout would overrun
+    into whatever sits below it. Reject at schema time rather than
+    discovering the overflow at render.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError("callout text must be a single line (no line breaks)")
+    return value
+
+
 GeneratedText = Annotated[str, AfterValidator(validate_generated_text)]
 ProseText = Annotated[str, AfterValidator(validate_prose_text)]
+CalloutText = Annotated[
+    str,
+    AfterValidator(validate_prose_text),
+    AfterValidator(validate_single_line_callout_text),
+]
 
 
 class TargetRef(BaseModel):
