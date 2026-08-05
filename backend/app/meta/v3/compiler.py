@@ -155,6 +155,12 @@ def validate_target_refs(plan):
                     )
 
 
+_MAX_REGROUP_CELLS = 30
+#: Room under the 40-action timeline cap for reveals, focus/derive role
+#: changes, the answer's own actions, and the conclusion, once the organize
+#: beat has emitted one `set_role` per cell.
+
+
 def validate_strategy_compatibility(plan):
     supported = _SUPPORTED_STRATEGIES[plan.primary_visual.kind]
     if plan.strategy not in supported:
@@ -172,6 +178,74 @@ def validate_strategy_compatibility(plan):
             "an odd number of ordered values", str(len(plan.primary_visual.values)),
             "use an odd-sized collection with one middle item",
         )
+    if plan.strategy == "regroup":
+        _validate_regroup_compatibility(plan)
+    if plan.strategy == "magnitude_comparison":
+        _validate_magnitude_comparison_compatibility(plan)
+
+
+def _validate_regroup_compatibility(plan):
+    spec = plan.primary_visual
+    if spec.kind == "grid":
+        rows = _literal_integer(spec.rows)
+        columns = _literal_integer(spec.columns)
+        if rows is None or columns is None:
+            _fail(
+                "regroup_requires_literal_dimensions", "primary_visual",
+                "literal rows and columns so the compiler can walk the grid",
+                f"grid rows={_describe_expression(spec.rows)}, "
+                f"columns={_describe_expression(spec.columns)}",
+                "set rows and columns to literal integers, or use a different strategy",
+            )
+        cells = rows * columns
+    else:  # object_set
+        count = _literal_integer(spec.count)
+        if count is None:
+            _fail(
+                "regroup_requires_literal_dimensions", "primary_visual",
+                "a literal count so the compiler can walk the object set",
+                f"object_set count={_describe_expression(spec.count)}",
+                "set count to a literal integer, or use a different strategy",
+            )
+        cells = count
+    if cells > _MAX_REGROUP_CELLS:
+        _fail(
+            "regroup_too_many_cells", "primary_visual",
+            f"a regroup layout of at most {_MAX_REGROUP_CELLS} cells",
+            f"{cells} cells", "shrink the primary visual so regroup fits under the "
+            "40-action timeline cap",
+        )
+
+
+def _validate_magnitude_comparison_compatibility(plan):
+    spec = plan.primary_visual
+    if spec.kind == "bar":
+        if _literal_integer(spec.value) is None:
+            _fail(
+                "magnitude_comparison_requires_literal_bar_value", "primary_visual.value",
+                "a literal whole-number bar value so the sweep addresses "
+                "specific segments",
+                _describe_expression(spec.value),
+                "set value to a literal integer, or use a different strategy",
+            )
+    else:  # number_line
+        for index, marker in enumerate(spec.markers):
+            if marker.node != "literal":
+                _fail(
+                    "magnitude_comparison_requires_literal_markers",
+                    f"primary_visual.markers[{index}]",
+                    "a literal marker position so the sweep sorts left to right",
+                    _describe_expression(marker),
+                    "set every marker to a literal number, or use a different strategy",
+                )
+
+
+def _describe_expression(expression):
+    if expression.node == "literal":
+        return str(expression.value)
+    if expression.node == "field_ref":
+        return f"field:{expression.field}"
+    return expression.node
 
 
 def validate_pair_elimination_answer(plan, answer_expression):

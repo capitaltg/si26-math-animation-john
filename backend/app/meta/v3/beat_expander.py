@@ -190,11 +190,11 @@ class BeatExpander:
             layout = _regroup_layout(plan.primary_visual)
             if layout is not None:
                 rows, _columns, _count = layout
-                return 2 * rows
+                return rows
         if plan.strategy == "magnitude_comparison" and beat.kind in {"focus", "derive"}:
-            count = _magnitude_count(plan.primary_visual)
-            if count is not None and count > 0:
-                return count
+            indices = _magnitude_indices(plan.primary_visual)
+            if indices:
+                return len(indices)
         return None
 
     def _standard_actions(
@@ -332,6 +332,15 @@ class BeatExpander:
         return self._generic_role_change(beat, "structure", current_roles)
 
     def _regroup_actions(self, plan, current_roles):
+        """Highlight each row's cells in one accented slot per row.
+
+        Only a highlight is emitted, not a paired release: two actions per
+        cell puts a 4x5 grid at 40 organize-beat actions on its own, which
+        overruns the 40-entry timeline cap in `compiler.compile_teaching_plan`
+        as soon as anything else needs a slot. Rows accumulate to `constraint`
+        cumulatively, which reads as "here are the R groups, assembled" -- the
+        following focus/derive beats can transition them onwards from there.
+        """
         layout = _regroup_layout(plan.primary_visual)
         if layout is None:
             return []
@@ -340,31 +349,35 @@ class BeatExpander:
         ref = plan.primary_visual.ref
         actions = []
         for row in range(rows):
-            row_indices = [
-                row * columns + col
-                for col in range(columns)
-                if row * columns + col < count
-            ]
-            for index in row_indices:
+            for col in range(columns):
+                index = row * columns + col
+                if index >= count:
+                    break
                 actions.extend(self._role_change(
                     TargetRef(visual_ref=ref, part=part, index=index),
                     "constraint", current_roles,
                 ))
-            for index in row_indices:
-                actions.extend(self._role_change(
-                    TargetRef(visual_ref=ref, part=part, index=index),
-                    "structure", current_roles,
-                ))
         return actions
 
     def _magnitude_comparison_actions(self, plan, current_roles):
-        count = _magnitude_count(plan.primary_visual)
-        if count is None or count == 0:
+        """Focus the magnitude-carrying parts left-to-right.
+
+        `_magnitude_indices` returns the walk order: `bar` walks `value` many
+        segments (the actual magnitude, not the bar's capacity); `number_line`
+        walks its markers sorted by resolved value, so a plan that declares
+        markers out of numeric order still sweeps left to right.
+
+        `validate_strategy_compatibility` refuses `magnitude_comparison` when
+        the driving field is not a literal, so this returns None at most from
+        a wholly-unsupported kind, not from a plan that would have compiled.
+        """
+        indices = _magnitude_indices(plan.primary_visual)
+        if not indices:
             return []
         part = _MAGNITUDE_PART[plan.primary_visual.kind]
         ref = plan.primary_visual.ref
         actions = []
-        for index in range(count):
+        for index in indices:
             actions.extend(self._role_change(
                 TargetRef(visual_ref=ref, part=part, index=index),
                 "focus", current_roles,
@@ -565,10 +578,45 @@ def _regroup_layout(spec):
     return None
 
 
-def _magnitude_count(spec):
-    """Number of parts the magnitude sweep walks, or None if unknown."""
+def _magnitude_indices(spec):
+    """The walk order the magnitude sweep applies to `spec`'s parts.
+
+    - `bar`: indices `0..value-1`. Walking `0..maximum-1` would teach the bar's
+      capacity, not its actual magnitude. `value` is required to be a
+      whole-number literal by `validate_strategy_compatibility`; a fractional or
+      dynamic value cannot address specific segments at compile time.
+    - `number_line`: marker indices sorted by resolved literal position. A plan
+      may declare markers in any order, but a left-to-right sweep only reads
+      correctly against the number line's own left-to-right axis.
+
+    Returns an empty tuple when the walk is unbuildable (validation should have
+    refused these earlier; the empty fallback avoids raising during expansion).
+    """
     if spec.kind == "bar":
-        return _literal_int(spec.maximum)
+        value = _literal_int(spec.value)
+        if value is None or value < 0:
+            return ()
+        return tuple(range(value))
     if spec.kind == "number_line":
-        return len(spec.markers)
-    return None
+        markers = list(enumerate(spec.markers))
+        keyed = []
+        for original_index, marker in markers:
+            position = _literal_number(marker)
+            if position is None:
+                return ()
+            keyed.append((position, original_index))
+        keyed.sort()
+        return tuple(original_index for _position, original_index in keyed)
+    return ()
+
+
+def _literal_number(expression):
+    """A literal expression's value as a float, or None if not a literal.
+
+    Bar/grid dimensions need whole numbers (see `_literal_int`), but a
+    number-line marker's position is any numeric literal -- 2.5 sits between
+    2 and 3 on the line and must sort accordingly.
+    """
+    if getattr(expression, "node", None) != "literal":
+        return None
+    return float(expression.value)

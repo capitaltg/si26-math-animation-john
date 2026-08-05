@@ -274,3 +274,38 @@ class TeachingPlanDocument(BaseModel):
                         "custom action"
                     )
         return self
+
+    @model_validator(mode="after")
+    def reject_custom_actions_on_strategy_owned_beats(self):
+        """Some beats the compiler stages end-to-end; a hand-written action on
+        them either duplicates work or slips role changes past the strategy
+        expander's slot arithmetic. `_slot_count` sizes the beat by the
+        expander's own action count, so an extra author-written role change
+        can land two `focus` targets at one `at_seconds` and fail
+        `check_salience` well after generation.
+
+        Two beats fall in this bucket today:
+        - `regroup`'s `organize` beat, which the compiler walks row by row.
+        - `magnitude_comparison`'s `focus` or `derive` beat -- whichever plays
+          first, the beat the sweep animates. Later focus/derive beats on the
+          same plan remain author-writable.
+        """
+        if self.strategy == "regroup":
+            for beat in self.beats:
+                if beat.kind == "organize" and beat.custom_actions:
+                    raise ValueError(
+                        f"beat {beat.id!r} is regroup's organize beat, which the compiler "
+                        "stages entirely on its own; move its custom actions to another beat"
+                    )
+        if self.strategy == "magnitude_comparison":
+            sweep_beat = next(
+                (beat for beat in self.beats if beat.kind in {"focus", "derive"}),
+                None,
+            )
+            if sweep_beat is not None and sweep_beat.custom_actions:
+                raise ValueError(
+                    f"beat {sweep_beat.id!r} is magnitude_comparison's sweep beat, which "
+                    "the compiler stages entirely on its own; move its custom actions to "
+                    "another beat"
+                )
+        return self

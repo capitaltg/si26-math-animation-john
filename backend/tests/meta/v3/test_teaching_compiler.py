@@ -1381,7 +1381,7 @@ def _grid_regroup_plan(rows, columns):
     })
 
 
-def test_regroup_grid_cycles_each_row_through_a_constraint_accent(compile_context):
+def test_regroup_grid_walks_every_cell_row_by_row_into_a_constraint_accent(compile_context):
     plan = _grid_regroup_plan(rows=2, columns=3)
     answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
 
@@ -1393,17 +1393,8 @@ def test_regroup_grid_cycles_each_row_through_a_constraint_accent(compile_contex
     assert role_actions, "regroup must emit set_role actions on the primary visual"
     assert all(action.target.visual_ref == "array" for action in role_actions)
     assert all(action.target.part == "cell" for action in role_actions)
-    assert {action.role for action in role_actions} == {"constraint", "structure"}
-    assert [action.target.index for action in role_actions] == [
-        0, 1, 2, 0, 1, 2,  # row 0: highlight then release
-        3, 4, 5, 3, 4, 5,  # row 1: highlight then release
-    ]
-    assert [action.role for action in role_actions] == [
-        "constraint", "constraint", "constraint",
-        "structure", "structure", "structure",
-        "constraint", "constraint", "constraint",
-        "structure", "structure", "structure",
-    ]
+    assert all(action.role == "constraint" for action in role_actions)
+    assert [action.target.index for action in role_actions] == [0, 1, 2, 3, 4, 5]
 
 
 def test_regroup_grid_recolours_each_row_at_a_single_instant(compile_context):
@@ -1418,15 +1409,55 @@ def test_regroup_grid_recolours_each_row_at_a_single_instant(compile_context):
     starts = {}
     for entry in program.timeline:
         if entry.beat_id == "regroup" and entry.action.kind == "set_role":
-            starts.setdefault(entry.at_seconds, []).append(
-                (entry.action.role, entry.action.target.index),
-            )
+            starts.setdefault(entry.at_seconds, []).append(entry.action.target.index)
 
-    assert len(starts) == 4, "two rows × (highlight, release) = 4 slots"
-    for slot_actions in starts.values():
-        roles = {role for role, _index in slot_actions}
-        assert len(roles) == 1, f"slot mixes roles {roles}"
-        assert len(slot_actions) == 3, "each row's three cells share one slot"
+    assert len(starts) == 2, "one slot per row for a 2-row grid"
+    for slot_indices in starts.values():
+        assert len(slot_indices) == 3, "each row's three cells share one slot"
+
+
+def test_regroup_grid_stays_under_the_forty_action_timeline_cap(compile_context):
+    """A 4x5 regroup grid used to emit 40 organize actions alone (two per
+    cell) and overrun the 40-entry timeline cap in `compile_teaching_plan`
+    once anything else needed a slot.
+    """
+    plan = _grid_regroup_plan(rows=4, columns=5)
+    answer = MultiplyNode(operands=[LiteralNode(value=4), LiteralNode(value=5)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    organize_actions = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    assert len(organize_actions) == 20, "one action per cell, no release phase"
+    assert len(program.timeline) <= 40
+
+
+def test_regroup_rejects_a_grid_larger_than_the_cap(compile_context):
+    plan_raw = _grid_regroup_plan(rows=6, columns=6).model_dump()
+    plan = TeachingPlanDocument.model_validate(plan_raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=6), LiteralNode(value=6)])
+
+    with pytest.raises(V3ValidationError, match="regroup_too_many_cells"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+
+def test_regroup_rejects_a_grid_with_non_literal_dimensions(compile_context):
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["primary_visual"]["rows"] = {"node": "field_ref", "field": "row_count"}
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = FieldRefNode(field="row_count")
+
+    with pytest.raises(V3ValidationError, match="regroup_requires_literal_dimensions"):
+        compile_teaching_plan(plan, answer, frozenset({"row_count"}), compile_context)
+
+
+def test_regroup_rejects_custom_actions_on_its_organize_beat():
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "emphasize", "target": {"visual_ref": "array"}},
+    ]
+
+    with pytest.raises(ValueError, match="regroup's organize beat"):
+        TeachingPlanDocument.model_validate(raw)
 
 
 def test_regroup_object_set_walks_five_per_row_and_stops_at_count(compile_context):
@@ -1459,10 +1490,10 @@ def test_regroup_object_set_walks_five_per_row_and_stops_at_count(compile_contex
         entry.action.target.index for entry in program.timeline
         if entry.beat_id == "regroup" and entry.action.kind == "set_role"
     ]
-    # Row 0 (indices 0..4), then row 1 (only index 5). Each row highlighted
-    # then released, so every index appears twice and the second row is a
-    # single item -- 5 in row 0's cluster and 1 in row 1's.
-    assert indices == [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 5]
+    # Row 0 has five cells (indices 0..4) and row 1 has the remaining one
+    # (index 5). The walk stops at `count`, so the partial second row emits
+    # a single cell rather than a padded index that no mobject would receive.
+    assert indices == [0, 1, 2, 3, 4, 5]
 
 
 def _bar_magnitude_plan(value, maximum):
@@ -1488,7 +1519,11 @@ def _bar_magnitude_plan(value, maximum):
     })
 
 
-def test_magnitude_comparison_bar_sweeps_focus_across_every_segment(compile_context):
+def test_magnitude_comparison_bar_sweeps_focus_across_the_value_not_the_maximum(compile_context):
+    """A bar with value=3, maximum=5 must animate 3 segments, not 5. Sweeping
+    to the maximum teaches capacity; sweeping to the value teaches the actual
+    magnitude the lesson names.
+    """
     plan = _bar_magnitude_plan(value=3, maximum=5)
     answer = LiteralNode(value=3)
 
@@ -1499,8 +1534,8 @@ def test_magnitude_comparison_bar_sweeps_focus_across_every_segment(compile_cont
         if entry.beat_id == "sweep" and entry.action.kind == "set_role"
         and entry.action.role == "focus"
     ]
-    assert [action.target.part for action in focus_actions] == ["segment"] * 5
-    assert [action.target.index for action in focus_actions] == [0, 1, 2, 3, 4]
+    assert [action.target.part for action in focus_actions] == ["segment"] * 3
+    assert [action.target.index for action in focus_actions] == [0, 1, 2]
 
 
 def test_magnitude_comparison_bar_focuses_one_segment_per_instant(compile_context):
@@ -1517,22 +1552,37 @@ def test_magnitude_comparison_bar_focuses_one_segment_per_instant(compile_contex
         if entry.beat_id == "sweep" and entry.action.kind == "set_role"
         and entry.action.role == "focus"
     ]
-    assert len(set(starts)) == len(starts) == 5
+    assert len(set(starts)) == len(starts) == 3
 
 
-def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_context):
-    plan = TeachingPlanDocument.model_validate({
+def test_magnitude_comparison_rejects_a_non_literal_bar_value(compile_context):
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["primary_visual"]["value"] = {"node": "field_ref", "field": "usage"}
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="magnitude_comparison_requires_literal_bar_value"):
+        compile_teaching_plan(plan, LiteralNode(value=3), frozenset({"usage"}), compile_context)
+
+
+def test_magnitude_comparison_rejects_custom_actions_on_its_sweep_beat():
+    raw = _bar_magnitude_plan(value=3, maximum=5).model_dump()
+    raw["beats"][1]["custom_actions"] = [
+        {"kind": "emphasize", "target": {"visual_ref": "usage"}},
+    ]
+
+    with pytest.raises(ValueError, match="magnitude_comparison's sweep beat"):
+        TeachingPlanDocument.model_validate(raw)
+
+
+def _number_line_magnitude_plan(marker_values):
+    return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Compare numeric magnitudes on a line.",
         "primary_visual": {
             "kind": "number_line", "ref": "line",
             "minimum": {"node": "literal", "value": 0},
             "maximum": {"node": "literal", "value": 10},
-            "markers": [
-                {"node": "literal", "value": 2},
-                {"node": "literal", "value": 5},
-                {"node": "literal", "value": 8},
-            ],
+            "markers": [{"node": "literal", "value": value} for value in marker_values],
         },
         "strategy": "magnitude_comparison",
         "answer_unit": "",
@@ -1546,9 +1596,11 @@ def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_c
         ],
         "variation_seed": "number-line-magnitude",
     })
-    answer = LiteralNode(value=8)
 
-    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_context):
+    plan = _number_line_magnitude_plan([2, 5, 8])
+    program = compile_teaching_plan(plan, LiteralNode(value=8), frozenset(), compile_context)
 
     focus_actions = [
         entry.action for entry in program.timeline
@@ -1557,6 +1609,22 @@ def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_c
     ]
     assert [action.target.part for action in focus_actions] == ["marker"] * 3
     assert [action.target.index for action in focus_actions] == [0, 1, 2]
+
+
+def test_magnitude_comparison_number_line_sweeps_markers_left_to_right(compile_context):
+    """Markers declared out of numeric order (8, 2, 5) must still animate in
+    left-to-right axis order (2, 5, 8 -- indices 1, 2, 0), or the sweep reads
+    as a jumble against the number line's own axis.
+    """
+    plan = _number_line_magnitude_plan([8, 2, 5])
+    program = compile_teaching_plan(plan, LiteralNode(value=8), frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.index for action in focus_actions] == [1, 2, 0]
 
 
 def test_regroup_and_magnitude_comparison_plans_pass_every_quality_gate(compile_context):
