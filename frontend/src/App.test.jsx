@@ -649,9 +649,9 @@ it('adds a newly approved template as an option without re-requesting visualizat
   fireEvent.click(await screen.findByLabelText(/teaches this correctly/))
   fireEvent.click(screen.getByRole('button', { name: /Looks right/ }))
 
-  // The new template shows up as a pickable option for c1 with no further
-  // "Get visualizations" click.
-  await screen.findByRole('radio', { name: /leftover pair/ })
+  // The new template shows up as a pickable option for c1, and is selected,
+  // with no further "Get visualizations" click.
+  await waitFor(() => expect(screen.getByRole('radio', { name: /leftover pair/ }).checked).toBe(true))
 
   // c2's manual pick was untouched by the c1-scoped refresh.
   expect(screen.getByRole('radio', { name: /ten frame/ }).checked).toBe(true)
