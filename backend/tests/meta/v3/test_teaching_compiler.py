@@ -1572,6 +1572,71 @@ def test_regroup_skips_organize_beats_that_do_not_name_the_primary(compile_conte
     assert walked == [0, 1, 2, 3, 4, 5], "the walk must still run on the beat that names the grid"
 
 
+def test_regroup_rejects_a_part_level_reveal_as_a_prior_whole_reveal(compile_context):
+    """A prior beat naming `array.cell[0]` reveals that cell but not the whole
+    grid; the walk beat's `_reveal_unrevealed` still emits a whole-grid reveal
+    and steals a row's slot. Only a whole-visual reveal satisfies the
+    reveal-before-organize requirement.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient_cell", "kind": "orient",
+         "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+         "intent": "point at the first cell (reveals only that cell)"},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    with pytest.raises(V3ValidationError,
+                       match="regroup_requires_primary_revealed_before_organize"):
+        compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+
+def test_regroup_accepts_a_prior_custom_whole_reveal(compile_context):
+    """A custom `reveal` naming the whole primary visual on an earlier beat
+    should satisfy the reveal-before-organize requirement -- the whole grid
+    is on screen before the walk runs, so no reveal action lands in the walk
+    beat.
+    """
+    raw = _grid_regroup_plan(rows=2, columns=3).model_dump()
+    raw["beats"] = [
+        {"id": "orient_cell", "kind": "orient",
+         "targets": [{"visual_ref": "array", "part": "cell", "index": 0}],
+         "intent": "point at the first cell first",
+         "custom_actions": [
+             {"kind": "reveal", "targets": [{"visual_ref": "array"}]},
+         ]},
+        {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+         "intent": "see the array as rows"},
+        {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+         "intent": "multiply rows by columns"},
+        {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+         "intent": "state the total"},
+    ]
+    plan = TeachingPlanDocument.model_validate(raw)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    walk_entries = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    assert not any(entry.action.kind == "reveal" for entry in walk_entries), (
+        "the walk beat must emit only role changes when the whole grid is already revealed"
+    )
+    starts = {}
+    for entry in walk_entries:
+        if entry.action.kind == "set_role":
+            starts.setdefault(entry.at_seconds, []).append(entry.action.target.index)
+    assert len(starts) == 2 and all(len(row) == 3 for row in starts.values()), (
+        "row-per-slot arithmetic must survive when the walk beat holds only role changes"
+    )
+
+
 def test_regroup_requires_the_grid_to_be_revealed_before_its_organize_beat(compile_context):
     """When organize is the first beat naming the primary visual, a reveal
     action lands in the same beat as the row walk. That reveal steals a slot

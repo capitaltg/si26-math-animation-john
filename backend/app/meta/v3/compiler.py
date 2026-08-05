@@ -232,21 +232,52 @@ def _require_owned_regroup_beat(plan):
         )
     # Same-beat reveal + role changes puts the reveal action in the first
     # scheduled slot, splitting a row across slots (see `_slot_count`). An
-    # earlier beat naming the primary visual makes it revealed by the time
-    # organize runs, so no `RevealAction` lands here at all.
+    # earlier beat must reveal the primary visual AS A WHOLE, so
+    # `_reveal_unrevealed` in the walk beat sees `(ref, None, None)` in
+    # `revealed` and emits no `RevealAction`. Part-level targets
+    # (`array.cell[0]`) only reveal that part -- the whole grid is still
+    # unrevealed at the walk beat and its `_reveal_unrevealed` still fires.
     for beat in plan.beats:
         if beat.id == beat_id:
             _fail(
                 "regroup_requires_primary_revealed_before_organize", "beats",
-                "an earlier beat that reveals the primary visual so the "
-                "organize beat emits only role changes",
-                f"organize beat {beat_id!r} is the first beat naming "
-                f"{plan.primary_visual.ref!r}",
-                "add an orient or reveal beat naming the primary visual before "
-                "the organize beat, or move the organize beat later in the plan",
+                "an earlier beat that reveals the primary visual (whole) so "
+                "the organize beat emits only role changes",
+                f"organize beat {beat_id!r} is the first beat that reveals "
+                f"{plan.primary_visual.ref!r} as a whole",
+                "add an orient or reveal beat whose target is the primary visual "
+                "at whole granularity (no part, no index) before the organize beat",
             )
-        if any(target.visual_ref == plan.primary_visual.ref for target in beat.targets):
+        if _reveals_primary_whole(beat, plan.primary_visual.ref):
             return
+
+
+def _reveals_primary_whole(beat, primary_ref):
+    """True when this beat causes `(primary_ref, None, None)` to be revealed.
+
+    Mirrors `beat_expander._is_revealed`: a whole-visual reveal covers every
+    part, but a part-level reveal never covers the whole. Both `beat.targets`
+    (which `_reveal_unrevealed` reveals) and a custom `RevealRequest` are
+    checked here.
+    """
+    if any(
+        target.visual_ref == primary_ref
+        and target.part is None
+        and target.index is None
+        for target in beat.targets
+    ):
+        return True
+    for action in beat.custom_actions:
+        if action.kind != "reveal":
+            continue
+        if any(
+            target.visual_ref == primary_ref
+            and target.part is None
+            and target.index is None
+            for target in action.targets
+        ):
+            return True
+    return False
 
 
 def _validate_magnitude_comparison_compatibility(plan):
