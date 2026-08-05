@@ -202,18 +202,23 @@ def _arrange(
 
 def _bottom_callout_y_intervals(primary, relations) -> list[tuple[float, float]]:
     """Vertical intervals a bottom-anchored callout on the primary occupies,
-    at scale = 1, relative to the primary's center Y.
+    relative to the primary's center Y, in the primary's unscaled
+    coordinates.
 
-    Working relative to primary center is scale-tolerant: side visuals also
-    share the primary's center Y and scale uniformly, so their intervals
-    scale in lockstep with the anchor offset. Only ENVELOPE stays fixed --
-    at any legal scale it becomes a larger fraction of the anchor offset, so
-    scale = 1 gives the loosest (largest-offset) callout box and therefore
-    the least overlap. If a side still overlaps the callout at scale = 1 it
-    overlaps at every smaller scale too.
+    Side visuals share the primary's center Y and scale uniformly with the
+    lesson, so their `(-h/2, h/2)` intervals live in the same unscaled
+    frame as the primary. The callout envelope does not scale, though --
+    `renderer._build_relation` fixes `FONT_SIZES["label"]` -- so the
+    envelope in unscaled terms is `CALLOUT_ENVELOPE / scale`, and at
+    smaller scales the callout spans a larger fraction of the unscaled
+    frame. To keep the check conservative at every legal scale, divide by
+    `MIN_TEXT_SCALE`: at that worst case the callout is largest relative
+    to the visuals, so an interval that clears the check here clears it at
+    every scale >= MIN_TEXT_SCALE.
     """
     if primary is None:
         return []
+    envelope = CALLOUT_ENVELOPE / MIN_TEXT_SCALE
     intervals = []
     for relation in relations:
         target = getattr(relation, "target", None)
@@ -228,7 +233,7 @@ def _bottom_callout_y_intervals(primary, relations) -> list[tuple[float, float]]
         except KeyError:
             continue
         top = anchor_point.y - primary.bounds.center.y
-        intervals.append((top - CALLOUT_ENVELOPE, top))
+        intervals.append((top - envelope, top))
     return intervals
 
 

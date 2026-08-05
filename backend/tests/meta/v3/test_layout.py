@@ -5,7 +5,9 @@ import pytest
 
 from app.meta.v3.errors import V3ValidationError
 from app.meta.v3.geometry import Bounds, MeasuredVisual, SemanticPart
-from app.meta.v3.layout import CALLOUT_ENVELOPE, SAFE_FRAME, place_vertical_lesson
+from app.meta.v3.layout import (
+    CALLOUT_ENVELOPE, MIN_TEXT_SCALE, SAFE_FRAME, place_vertical_lesson,
+)
 from app.meta.v3.rectangle_measurement import measure_rectangle
 from app.meta.v3.visual_registry import default_visual_registry
 
@@ -366,6 +368,47 @@ def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale()
     )
     assert rendered_bottom >= SAFE_FRAME.bottom - 1e-6, (
         f"rendered callout bottom {rendered_bottom:g} escapes safe frame"
+    )
+
+
+def test_bottom_callout_side_check_stays_conservative_at_smaller_scales():
+    """Callout envelope is fixed in world units while side visuals scale
+    with the lesson, so at a fitted scale below 1.0 the callout occupies a
+    larger fraction of the unscaled frame than at scale 1.0. Checking
+    overlap at scale 1.0 alone misses cases that overlap at the fitted
+    scale. Here the anchor sits 1.0 above the side's top (in unscaled
+    units): CALLOUT_ENVELOPE=0.9 does not reach the side at scale 1, but
+    at MIN_TEXT_SCALE=0.7 the effective envelope in unscaled coords is
+    ~1.286 and the callout drops into the side's band."""
+    primary = MeasuredVisual(
+        ref="tape",
+        bounds=Bounds(-2.0, 2.0, -2.0, 2.0),
+        parts={("box", 0): SemanticPart("box", 0, Bounds(-2.0, 2.0, 1.5, 1.5))},
+        paths={}, payload={},
+    )
+    modest_side = MeasuredVisual(
+        ref="side", bounds=Bounds(-1.0, 1.0, -0.5, 0.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
+    assert CALLOUT_ENVELOPE / MIN_TEXT_SCALE > 1.0 > CALLOUT_ENVELOPE, (
+        "fixture is only meaningful when the ordinary envelope clears the "
+        "1.0-unit gap and the scale-corrected envelope does not"
+    )
+
+    placed = place_vertical_lesson([primary, modest_side, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    # Without the /MIN_TEXT_SCALE correction the side would still sit
+    # beside the primary and overlap the primary vertically; with it, the
+    # side gets stacked.
+    assert not _vertical_overlap(by_ref["tape"].bounds, by_ref["side"].bounds), (
+        "side must not sit beside the primary when the callout would drop "
+        "into its band at the fitted scale"
     )
 
 

@@ -93,6 +93,11 @@ def test_program_forbids_renderer_controls(bad_key, bad_value):
     "first line\nsecond line",
     "top\rbottom",
     "one\r\ntwo",
+    "vert\vtab",
+    "form\ffeed",
+    "line sep",
+    "para sep",
+    "next\x85line",
 ])
 def test_program_rejects_multiline_callout_text(bad_text):
     """A callout's rendered envelope is sized for a single line at

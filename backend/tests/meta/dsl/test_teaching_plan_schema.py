@@ -101,6 +101,10 @@ def test_every_generated_text_field_rejects_renderer_controls(field_name, bad_te
     "first line\nsecond line",
     "top\rbottom",
     "one\r\ntwo",
+    "vert\vtab",
+    "form\ffeed",
+    "line sep",
+    "para sep",
 ])
 def test_plan_rejects_multiline_callout_request_text(bad_text):
     """A plan-authored callout label rides the same single-line rendered
