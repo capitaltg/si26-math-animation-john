@@ -64,9 +64,9 @@ def place_vertical_lesson(
     relations: Sequence[object] = (),
 ) -> list[PlacedVisual]:
     arrangement = _arrange(measured_visuals)
-    primary_bottom_pad = _primary_bottom_callout_pad(arrangement.primary, relations)
+    callout_interior = _primary_bottom_callout_interior(arrangement.primary, relations)
     scale = min(1.0, _fit_instructional_scale(
-        arrangement, INSTRUCTIONAL_FRAME, primary_bottom_pad,
+        arrangement, INSTRUCTIONAL_FRAME, callout_interior,
     ))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
@@ -76,6 +76,7 @@ def place_vertical_lesson(
             observed=f"{scale:g}",
             hint="reduce visual content so the lesson remains readable",
         ))
+    primary_bottom_pad = _callout_pad(callout_interior, scale)
     placed_by_ref = {
         item.measured.ref: item
         for item in _place_instructional(
@@ -85,19 +86,18 @@ def place_vertical_lesson(
     return [placed_by_ref[item.ref] for item in measured_visuals]
 
 
-def _primary_bottom_callout_pad(primary, relations):
-    """Extra clearance to reserve below the primary for bottom-anchored callouts.
+def _primary_bottom_callout_interior(primary, relations):
+    """Worst-case interior clearance beneath a bottom-anchored callout on
+    the primary, or None when no such callout applies.
 
-    The callout renders below its anchor at a fixed world-unit envelope,
-    regardless of the lesson's uniform scale (renderer._build_relation uses a
-    fixed `FONT_SIZES["label"]`). If the primary already has interior room
-    between the anchor and its outer bounds -- rectangle_measurement, for
-    example, extends its bounds down to enclose its length label -- the
-    envelope may fit inside that room; only the shortfall has to be reserved.
+    Distinct from an interior of zero, which is the case for a visual whose
+    part sits flush with its outer bottom (unit_tape's `box[0]`): those need
+    the full envelope reserved, while a primary with no bottom callout at all
+    needs nothing reserved and skips the callout math entirely.
     """
     if primary is None or not relations:
-        return 0.0
-    pad = 0.0
+        return None
+    interior = None
     for relation in relations:
         target = getattr(relation, "target", None)
         if target is None:
@@ -114,9 +114,26 @@ def _primary_bottom_callout_pad(primary, relations):
             # Leave anchor validity to `resolve_relation`, which will raise a
             # structured V3Failure with a matching hint.
             continue
-        interior = anchor_point.y - primary.bounds.bottom
-        pad = max(pad, CALLOUT_ENVELOPE - interior)
-    return max(0.0, pad)
+        room = anchor_point.y - primary.bounds.bottom
+        # Smallest interior wins: the callout with the least room dictates
+        # what has to be reserved.
+        interior = room if interior is None else min(interior, room)
+    return interior
+
+
+def _callout_pad(callout_interior, scale):
+    """Fixed world-unit clearance that must sit below the primary band.
+
+    The callout renders `CALLOUT_ENVELOPE` below its anchor at a fixed font
+    size, regardless of the lesson's uniform scale. Room already available
+    without an extra reservation is `(interior + GAP) * scale`: the interior
+    clearance within the primary's own bounds, plus the `GAP * scale` gap
+    `_place_instructional` already inserts between the primary band and
+    whatever sits below it. Only the shortfall has to be added.
+    """
+    if callout_interior is None:
+        return 0.0
+    return max(0.0, CALLOUT_ENVELOPE - (callout_interior + GAP) * scale)
 
 
 def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
@@ -174,17 +191,14 @@ def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
 
 
 def _fit_instructional_scale(
-    arrangement: _Arrangement, frame: Bounds, primary_bottom_pad: float = 0.0,
+    arrangement: _Arrangement, frame: Bounds, callout_interior: float | None = None,
 ) -> float:
     if arrangement.primary is None:
         return 1.0
     primary = arrangement.primary
-    # `primary_bottom_pad` is a fixed world-unit reservation for a bottom
-    # callout on the primary; it does not scale with the visuals, so subtract
-    # it from the available vertical frame before dividing by the (scaled)
-    # column height.
-    available_height = (frame.top - frame.bottom) - primary_bottom_pad
-    vertical_scale = _fit_extent(_column_height(arrangement, GAP), available_height)
+    vertical_scale = _fit_vertical_scale(
+        _column_height(arrangement, GAP), frame.top - frame.bottom, callout_interior,
+    )
     half_width = (frame.right - frame.left) / 2
     horizontal_scale = min(
         _fit_extent(_horizontal_extent(primary, arrangement.left), half_width),
@@ -213,6 +227,36 @@ def _column_height(arrangement: _Arrangement, gap: float) -> float:
 
 def _fit_extent(extent: float, available: float) -> float:
     return available / extent if extent else 1.0
+
+
+def _fit_vertical_scale(column_h: float, frame_h: float, callout_interior) -> float:
+    """The largest scale that fits the column and any callout envelope.
+
+    Without a bottom callout on the primary this is just `frame_h / column_h`.
+    With one, the callout adds a fixed world-unit demand (`CALLOUT_ENVELOPE`)
+    which is not scaled; `(interior + GAP) * scale` of that demand is met by
+    the room already available (the anchor's interior clearance plus the gap
+    inserted between the primary band and the below stack), so the joint
+    vertical constraint is `column_h * s + max(0, CALLOUT_ENVELOPE - (interior
+    + GAP) * s) <= frame_h`. Solved closed-form -- linear in `s` on each side
+    of the transition.
+    """
+    if not column_h:
+        return 1.0
+    unpadded_scale = frame_h / column_h
+    if callout_interior is None:
+        return unpadded_scale
+    room_per_scale = callout_interior + GAP
+    if room_per_scale * unpadded_scale >= CALLOUT_ENVELOPE:
+        # The already-present room absorbs the envelope at the ordinary scale;
+        # no pad, no scale penalty.
+        return unpadded_scale
+    denominator = column_h - room_per_scale
+    if denominator <= 0:
+        # The primary's own interior plus the gap outweigh the whole column;
+        # nothing left for the pad to bind against.
+        return 1.0
+    return (frame_h - CALLOUT_ENVELOPE) / denominator
 
 
 def _horizontal_extent(primary: MeasuredVisual, supporting: Sequence[MeasuredVisual]) -> float:

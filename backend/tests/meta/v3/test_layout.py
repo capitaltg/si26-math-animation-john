@@ -286,6 +286,35 @@ def test_bottom_anchored_callout_on_a_part_with_room_below_it_reserves_nothing_e
     assert _by_ref(with_relation) == _by_ref(without_relation)
 
 
+def test_bottom_callout_pad_credits_the_gap_already_below_the_primary():
+    """Reserving the full CALLOUT_ENVELOPE ignores the GAP the layout already
+    inserts between the primary band and whatever sits below it. On a
+    near-limit column that difference decides whether the lesson fits: a 9.2
+    unit column against a 7.2 unit frame lands at scale 0.72 when the gap is
+    credited, and 0.6848 (below MIN_TEXT_SCALE) when it is not."""
+    primary = _tape_like_primary(height=4.0, width=4.0)
+    support = MeasuredVisual(
+        ref="support", bounds=Bounds(-3.0, 3.0, -1.5, 1.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-2.0, 2.0, -0.65, 0.65),
+        parts={}, paths={}, payload={},
+    )
+    relations = [_callout("tape", part="box", index=0, anchor="bottom")]
+
+    placed = place_vertical_lesson([primary, support, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    # Column: 4.0 + 0.45 + 3.0 + 0.45 + 1.3 = 9.2. Scale = (7.2 - 0.9) /
+    # (9.2 - 0.45) = 6.3/8.75 = 0.72.
+    assert by_ref["tape"].scale == pytest.approx(0.72, abs=1e-3)
+    primary_bottom = by_ref["tape"].bounds.bottom
+    answer_top = by_ref["evaluated_answer"].bounds.top
+    # The scaled gap plus the reservation must together hold the envelope.
+    assert primary_bottom - answer_top >= CALLOUT_ENVELOPE - 1e-9
+
+
 def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_nothing():
     """The reservation is scoped to the primary because that is the visual
     the answer is stacked directly below. A callout targeting a supporting
