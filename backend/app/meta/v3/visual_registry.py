@@ -184,26 +184,44 @@ def _measure_number_line(*, spec, values, measurer):
     minimum, maximum = values["minimum"], values["maximum"]
     if maximum <= minimum:
         raise ValueError("number_line maximum must exceed minimum")
-    left, right = -2.75, 2.75
+    line_left, line_right = -2.75, 2.75
     markers = values["markers"]
     parts = {}
     labels = []
+    label_widths = []
+    marker_xs = []
     for index, marker in enumerate(markers):
         if not minimum <= marker <= maximum:
             raise ValueError(f"marker {marker} outside [{minimum}, {maximum}]")
-        x = left + (right - left) * float((marker - minimum) / (maximum - minimum))
+        x = line_left + (line_right - line_left) * float((marker - minimum) / (maximum - minimum))
         parts[("marker", index)] = SemanticPart("marker", index, Bounds(x, x, 0, 0))
-        labels.append(format_number(marker))
-    # Reserve the strip the labels occupy, so layout does not place the next
-    # visual on top of them. Horizontal bounds stay at +/-2.75: `_line_visual`
-    # draws the line across the full bounds, so padding them lengthens the line.
+        label = format_number(marker)
+        labels.append(label)
+        width, _ = measurer.measure(label, "label")
+        label_widths.append(width)
+        marker_xs.append(x)
     label_height = max(
         (measurer.measure(text, "label")[1] for text in labels), default=0.0,
     )
     bottom = -0.2 - MARKER_LABEL_GAP - label_height
+    # A wide endpoint label overhangs the line's own extent -- if the bounds
+    # stopped at +/-2.75, layout would tuck the next visual against the label
+    # and the two would overlap. Widen the bounds so each label's half-width
+    # is reserved; keep the line's own endpoints in payload so `_line_visual`
+    # still draws from marker to marker, not across the padded strip.
+    left_extent = min(
+        (x - width / 2 for x, width in zip(marker_xs, label_widths)),
+        default=line_left,
+    )
+    right_extent = max(
+        (x + width / 2 for x, width in zip(marker_xs, label_widths)),
+        default=line_right,
+    )
+    bounds_left = min(line_left, left_extent)
+    bounds_right = max(line_right, right_extent)
     return _measured_visual(
         ref=spec.ref,
-        bounds=Bounds(left, right, bottom, 0.2),
+        bounds=Bounds(bounds_left, bounds_right, bottom, 0.2),
         parts=parts,
         payload={
             "minimum": minimum, "maximum": maximum, "markers": tuple(markers),
@@ -214,6 +232,11 @@ def _measure_number_line(*, spec, values, measurer):
             # they reserve a label strip below, so `_line_visual` reads this
             # instead of `bounds.center.y` to stay level with its markers.
             "line_center_y": 0.0,
+            # The line's own horizontal endpoints. Bounds now include the label
+            # strip's overhang, so `_line_visual` can't derive endpoints from
+            # them without stretching the line under the labels.
+            "line_left": line_left,
+            "line_right": line_right,
         },
     )
 

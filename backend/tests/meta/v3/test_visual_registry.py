@@ -235,9 +235,31 @@ def test_a_number_line_labels_each_marker_and_reserves_room_below_the_line():
     # The label strip sits below the line's own -0.2 extent.
     assert measured.bounds.bottom < -0.2
     assert measured.payload["label_center_y"] < -0.2
-    # Horizontal bounds are untouched: `renderer._line_visual` draws the line
-    # from bounds.left to bounds.right, so widening them stretches the line.
-    assert (measured.bounds.left, measured.bounds.right) == (-2.75, 2.75)
+    # The line's own endpoints stay at +/-2.75 -- `_line_visual` reads these
+    # from payload, so bounds can widen to reserve room for endpoint labels
+    # without stretching the line under them.
+    assert (measured.payload["line_left"], measured.payload["line_right"]) == (-2.75, 2.75)
+
+
+def test_a_number_line_reserves_bounds_for_a_wide_endpoint_label():
+    """A "3000" label centered on the rightmost marker overhangs +2.75.
+
+    Before, horizontal bounds stopped at the line's own extent, so layout
+    tucked the next visual against the label and the two overlapped. Bounds
+    must widen by the label's half-width; the line endpoints live in payload
+    now so widening the strip doesn't stretch the line.
+    """
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="number_line", ref="line"),
+        {"minimum": Fraction(0), "maximum": Fraction(3000),
+         "markers": [Fraction(0), Fraction(3000)]},
+        LiteralTextMeasurer(),
+    )
+
+    label_half_width = LiteralTextMeasurer().measure("3000", "label")[0] / 2
+    assert measured.bounds.right == pytest.approx(2.75 + label_half_width)
+    assert measured.bounds.left == pytest.approx(-2.75 - LiteralTextMeasurer().measure("0", "label")[0] / 2)
+    assert (measured.payload["line_left"], measured.payload["line_right"]) == (-2.75, 2.75)
 
 
 def test_a_number_line_marker_label_is_a_decimal_not_a_ratio():
