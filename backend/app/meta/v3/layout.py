@@ -63,7 +63,7 @@ def place_vertical_lesson(
     measured_visuals: Sequence[MeasuredVisual],
     relations: Sequence[object] = (),
 ) -> list[PlacedVisual]:
-    arrangement = _arrange(measured_visuals)
+    arrangement = _arrange(measured_visuals, relations)
     callout_room = _bottom_callout_room_per_scale(arrangement, relations)
     scale = min(1.0, _fit_instructional_scale(
         arrangement, INSTRUCTIONAL_FRAME, callout_room,
@@ -148,7 +148,9 @@ def _callout_pad(callout_room_per_scale, scale):
     return max(0.0, CALLOUT_ENVELOPE - callout_room_per_scale * scale)
 
 
-def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
+def _arrange(
+    instructional: Sequence[MeasuredVisual], relations: Sequence[object] = (),
+) -> _Arrangement:
     """Send each supporting visual beside the primary, or to a row of its own.
 
     A visual placed beside the primary has to fit in half the frame minus the
@@ -160,6 +162,12 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
 
     The split is decided on unscaled measurements so it does not depend on the
     scale being solved for.
+
+    A side visual taller than the primary would drop the band's bottom edge
+    below the primary's, and a bottom-anchored callout on the primary
+    renders into exactly that band. Force those visuals into a stacked row
+    instead, so the callout has no side visual to collide with. Without a
+    bottom callout on the primary this rule does not apply.
 
     The answer is exempt from the split: it takes the last row whenever there is
     anything else to arrange, and becomes the primary itself when it is alone.
@@ -174,13 +182,35 @@ def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
         return _Arrangement(answer, [], [], [], [])
     primary, *supporting = rest
     budget = _side_budget(primary, INSTRUCTIONAL_FRAME)
-    beside = [item for item in supporting if _width(item) <= budget]
-    stacked = [item for item in supporting if _width(item) > budget]
+    exclude_taller_from_beside = _has_bottom_callout_on_primary(primary, relations)
+    primary_height = _height(primary)
+    beside, stacked = [], []
+    for item in supporting:
+        if _width(item) > budget:
+            stacked.append(item)
+        elif exclude_taller_from_beside and _height(item) > primary_height:
+            stacked.append(item)
+        else:
+            beside.append(item)
     left, right = _balanced_pair(beside, _stack_width)
     above, below = _balanced_pair(stacked, lambda items: _stack_height(items, GAP))
     if answer is not None:
         below = [*below, answer]
     return _Arrangement(primary, left, right, above, below)
+
+
+def _has_bottom_callout_on_primary(primary, relations) -> bool:
+    if primary is None:
+        return False
+    for relation in relations:
+        target = getattr(relation, "target", None)
+        if target is None:
+            continue
+        if getattr(target, "visual_ref", None) != primary.ref:
+            continue
+        if getattr(target, "anchor", None) == "bottom":
+            return True
+    return False
 
 
 def _side_budget(primary: MeasuredVisual, frame: Bounds) -> float:

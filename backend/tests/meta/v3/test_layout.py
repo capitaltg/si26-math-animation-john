@@ -329,16 +329,74 @@ def test_rendered_callout_stays_clear_of_the_answer_at_the_layout_fitted_scale()
     )
 
 
-def test_bottom_callout_on_a_primary_beside_a_taller_side_visual_forfeits_band_credit():
-    """A taller side visual drops band_bottom below `primary.bounds.bottom`,
-    but that padding is occupied by the side over the side's x-range;
-    counting it as empty callout room lets the rendered gate catch a
-    `callout_collision`. Verifying disjointness would need the callout's
-    Manim-measured width against the side's *scaled* placed range (a fixed
-    per-char estimate understates wide glyphs like "WWWWWW" by ~2x, and
-    side ranges scale while the callout does not), so the layout forfeits
-    the credit rather than risking a false positive. The lesson rejects at
-    compile time rather than dead-ending at the render probe."""
+def test_bottom_callout_forces_a_taller_side_visual_out_of_the_beside_slot():
+    """Rendered side-collision regression: a 1.0-high primary beside a
+    3.0-high side visual placed adjacent to the primary would give a
+    fixed-envelope callout on the primary a side visual to render into.
+    `_arrange` sees the bottom-anchored callout and puts every side visual
+    taller than the primary into a stacked row instead, so no side visual
+    shares the callout's vertical band."""
+    import numpy as np
+    from manim import Arrow, Text, VGroup
+
+    from app.meta.v3.manim_measurer import FONT_SIZES
+
+    primary = _tape_like_primary(height=1.0, width=4.0)
+    tall_side = MeasuredVisual(
+        ref="tall", bounds=Bounds(-1.0, 1.0, -1.5, 1.5),
+        parts={}, paths={}, payload={},
+    )
+    answer = MeasuredVisual(
+        ref="evaluated_answer", bounds=Bounds(-1.0, 1.0, -0.275, 0.275),
+        parts={}, paths={}, payload={},
+    )
+    callout_text = "1 km = 1000 m"
+    relations = [_callout(
+        "tape", part="box", index=0, anchor="bottom", text=callout_text,
+    )]
+
+    placed = place_vertical_lesson([primary, tall_side, answer], relations)
+
+    by_ref = {item.measured.ref: item for item in placed}
+    tape, side = by_ref["tape"], by_ref["tall"]
+    # Side must not sit alongside the primary -- its y-band would overlap
+    # the callout's y-band otherwise.
+    assert not _vertical_overlap(tape.bounds, side.bounds), (
+        "a taller side visual must be stacked above or below the primary "
+        "when the primary has a bottom-anchored callout"
+    )
+    # And, rendered end-to-end, the actual callout mobject shares no pixels
+    # with the side visual either.
+    anchor = tape.anchor(part="box", index=0, name="bottom")
+    target = np.array([anchor.x, anchor.y, 0.0])
+    label = Text(callout_text, font_size=FONT_SIZES["label"])
+    label.next_to(target, direction=np.array([0, -1, 0]))
+    arrow = Arrow(label.get_top(), target, buff=0.08)
+    rendered = VGroup(arrow, label)
+    rendered_bounds = Bounds(
+        left=float(rendered.get_left()[0]), right=float(rendered.get_right()[0]),
+        bottom=float(rendered.get_bottom()[1]), top=float(rendered.get_top()[1]),
+    )
+    assert not (
+        _horizontal_overlap(rendered_bounds, side.bounds)
+        and _vertical_overlap(rendered_bounds, side.bounds)
+    ), "rendered callout bounds overlap the side visual"
+
+
+def _horizontal_overlap(first, second):
+    return max(first.left, second.left) < min(first.right, second.right)
+
+
+def _vertical_overlap(first, second):
+    return max(first.bottom, second.bottom) < min(first.top, second.top)
+
+
+def test_bottom_callout_on_a_primary_with_a_much_taller_side_visual_still_rejects():
+    """When the taller side moved out of the beside slot cannot fit in a
+    stacked row either, the lesson rejects at compile time. A 8.5-high
+    side stacked above a 1.0-high primary with a 0.55-high answer builds
+    a 10.95-unit column against the 7.2-unit frame -- there is no scale
+    that fits."""
     primary = _tape_like_primary(height=1.0, width=4.0)
     tall_side = MeasuredVisual(
         ref="tall", bounds=Bounds(-1.0, 1.0, -4.25, 4.25),
@@ -350,9 +408,6 @@ def test_bottom_callout_on_a_primary_beside_a_taller_side_visual_forfeits_band_c
     )
     relations = [_callout("tape", part="box", index=0, anchor="bottom", text="!")]
 
-    # Column: band_h(8.5) + GAP(0.45) + answer_h(0.55) = 9.5. Without band
-    # padding credited, the callout constraint drops the scale to
-    # (7.2 - 0.9) / (9.5 - 0.45) = 0.6961 -- below MIN_TEXT_SCALE = 0.7.
     with pytest.raises(V3ValidationError) as excinfo:
         place_vertical_lesson([primary, tall_side, answer], relations)
     assert excinfo.value.failure.code == "below_minimum_text_scale"
