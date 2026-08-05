@@ -666,15 +666,20 @@ def test_style_recipe_is_deterministic(median_plan, answer, compile_context):
 def test_style_recipe_varies_when_the_variation_seed_changes(
     median_plan, answer, compile_context,
 ):
-    """Determinism is only interesting if the hash is actually consumed. Sweep
-    a small set of seeds and assert the resulting recipes are not all
-    identical -- if the compiler stopped feeding `variation_seed` through
-    `resolve_style_recipe` at all, this test fails while
-    `test_style_recipe_is_deterministic` still passes.
+    """Determinism is only interesting if the hash is actually consumed.
+    `resolve_style_recipe` derives BOTH palette (from `digest[0] % 3`) and
+    motion (from `digest[1] % 2`) off the same sha256 of the joined key, so
+    a compiler that stopped feeding `variation_seed` through would freeze
+    palette AND motion at once. Assert each field takes more than one value
+    across a seed sweep -- an OR would let a bug that pins the palette but
+    varies motion (or vice versa) go undetected.
     """
     known_fields = frozenset({f"v{i}" for i in range(1, 8)})
     recipes = []
-    for seed in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
+    for seed in (
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta",
+        "eta", "theta", "iota", "kappa", "lambda", "mu",
+    ):
         raw = median_plan.model_dump()
         raw["variation_seed"] = seed
         plan = TeachingPlanDocument.model_validate(raw)
@@ -684,10 +689,12 @@ def test_style_recipe_varies_when_the_variation_seed_changes(
 
     palettes = {recipe.palette for recipe in recipes}
     motions = {recipe.motion_variant for recipe in recipes}
-    # Palettes come from a 3-value set, motion from a 2-value set, keyed by
-    # sha256 bytes -- across six distinct seeds at least one of these fields
-    # must resolve to more than one value if the seed is actually consumed.
-    assert len(palettes) > 1 or len(motions) > 1
+    assert len(palettes) > 1, (
+        f"palette should vary with variation_seed; got only {palettes!r}"
+    )
+    assert len(motions) > 1, (
+        f"motion_variant should vary with variation_seed; got only {motions!r}"
+    )
 
 
 def test_bounded_custom_draw_transform_and_move_actions_are_preserved(
