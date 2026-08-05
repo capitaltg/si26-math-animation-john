@@ -43,12 +43,19 @@ class QualityReport:
     def require_passed(self):
         failed = next((check for check in self.checks if not check.passed), None)
         if failed is not None:
+            # The retry loop only forwards `code`, `path`, and `hint` to the
+            # model (`_STABLE_REPAIR_FEEDBACK_FIELDS` in
+            # `app/meta/draft_generation.py`), so the per-check diagnosis has to
+            # travel through `hint` or the model never hears what is wrong and
+            # proposes the same repair unchanged. Every `_failed(...)` site
+            # already phrases `detail` as an actionable diagnosis; the previous
+            # generic hint just clobbered it.
             raise V3ValidationError(V3Failure(
                 code=failed.code,
                 path=failed.path,
                 expected="quality check to pass",
                 observed=failed.detail,
-                hint="revise the teaching plan and regenerate the candidate",
+                hint=failed.detail,
             ))
 
 
