@@ -122,6 +122,18 @@ def check_answer_timing(plan, program) -> QualityCheck:
     if answer is None:
         # `pair_elimination` states its answer with one of its own values.
         return _passed("premature_answer_emphasis", "visuals")
+    # The ref is reserved for the compiler-supplied `answer_expression` visual
+    # (see `beat_expander._program_visual`). Nothing in the plan schema stops a
+    # plan from declaring its own visual under that name -- and a
+    # non-`answer_expression` shape reaches `check_answer_work_shown`'s
+    # `answer.expression` access as an `AttributeError`, not a quality failure.
+    # Fail loudly here instead.
+    if answer.kind != "answer_expression":
+        return _failed(
+            "premature_answer_emphasis", "visuals.evaluated_answer.kind",
+            "the ref `evaluated_answer` is reserved for the compiler-supplied answer visual; "
+            f"a plan-declared {answer.kind!r} visual must use a different name",
+        )
     if getattr(answer, "initial_role", "neutral") != "neutral":
         return _failed(
             "premature_answer_emphasis", "visuals.evaluated_answer.initial_role",
@@ -151,10 +163,9 @@ def check_answer_timing(plan, program) -> QualityCheck:
     # one beat in which the resolved value may appear. Kept as an independent
     # second layer: if the plan schema's beat-order rule is ever relaxed, this
     # check still fails the candidate rather than silently reporting success.
-    # It is also the only gate on the reserved-ref shape: nothing in the schema
-    # stops a plan from declaring its own visual named `evaluated_answer` and
-    # revealing it whenever it likes, so a reachability-annotation pass that
-    # retires this branch as dead would silently reopen that hole.
+    # Together with the kind gate above, this function is the sole gate against
+    # a plan hijacking the `evaluated_answer` ref -- a reachability-annotation
+    # pass that retires either branch as dead would silently reopen the hole.
     conclusion_id = plan.beats[-1].id if plan.beats[-1].kind == "conclude" else None
     seen = []
     for index, entry in enumerate(program.timeline):
@@ -454,7 +465,10 @@ def check_answer_work_shown(program) -> QualityCheck:
     nothing -- the kilometers lesson's original failing.
     """
     answer = next((visual for visual in program.visuals if visual.ref == "evaluated_answer"), None)
-    if answer is None or not has_operation(answer.expression):
+    # A plan-declared non-`answer_expression` under this ref has no `.expression`
+    # attribute; `check_answer_timing` has already reported it, so treat the shape
+    # as unreachable rather than crashing on the attribute access.
+    if answer is None or answer.kind != "answer_expression" or not has_operation(answer.expression):
         return _passed("answer_work_not_shown", "timeline")
     if not any(
         entry.action.kind == "show_answer_stage" and entry.action.stage == "work"

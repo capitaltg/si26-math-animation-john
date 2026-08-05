@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.meta.dsl.expression import FieldRefNode, MultiplyNode
-from app.meta.dsl.scene_program import CalloutRelation, LabelProgramVisual
+from app.meta.dsl.scene_program import (
+    CalloutRelation, LabelProgramVisual, OrderedValuesProgramVisual,
+)
 from app.meta.dsl.teaching_plan import (
     OrderedValuesVisual,
     TeachingBeat,
@@ -589,6 +591,36 @@ def test_a_multi_action_conclusion_without_an_answer_card_still_clears_the_hold_
 
     assert report.passed is True
     assert [check.code for check in report.checks if not check.passed] == []
+
+
+def test_a_plan_hijacking_the_evaluated_answer_ref_is_rejected():
+    """The `evaluated_answer` ref is reserved for the compiler-supplied
+    `answer_expression` visual. A plan can still name one of its own visuals
+    `evaluated_answer` -- nothing in the schema stops that -- so
+    `check_answer_timing` rejects any non-`answer_expression` shape before
+    `check_answer_work_shown` reaches for `answer.expression` and raises
+    `AttributeError`.
+    """
+    candidate = _perimeter_candidate()
+    hijack = OrderedValuesProgramVisual(
+        ref="evaluated_answer",
+        values=[FieldRefNode(field="length")],
+    )
+    visuals = [
+        hijack if visual.ref == "evaluated_answer" else visual
+        for visual in candidate.program.visuals
+    ]
+    program = candidate.program.model_copy(update={"visuals": visuals})
+
+    report = validate_static_quality(candidate.plan, program)
+
+    assert not report.passed
+    assert any(
+        check.code == "premature_answer_emphasis"
+        and not check.passed
+        and check.path == "visuals.evaluated_answer.kind"
+        for check in report.checks
+    )
 
 
 def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid_program):

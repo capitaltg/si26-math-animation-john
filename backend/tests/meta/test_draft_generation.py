@@ -124,6 +124,12 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     # this change came straight out of the old wording).
     assert "the system supplies the answer statement and stages it for you" in prompt
     assert "resolves to the value only at conclude" in prompt
+    # `TeachingPlanDocument.require_focus_and_conclusion_order` already rejects
+    # a mid-scene `conclude`, but a two-`conclude` plan currently raises a bare
+    # `pydantic.ValidationError` that `generation_pipeline` does not catch --
+    # steer the model away from it up front.
+    assert "emit exactly one conclude beat" in prompt
+    assert "it must be the last beat" in prompt
     assert "never author a label or callout standing in for the answer" in prompt
     assert "simple collections reveal together" in prompt
     assert "perimeter explanations use boundary_trace" in prompt
