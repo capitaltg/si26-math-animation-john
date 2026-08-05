@@ -84,7 +84,14 @@ def _median_teaching_plan():
     })
 
 
-def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid", status=TEMPLATE_VERSION_ENABLED):
+def _seed_draft_and_version(
+    session,
+    *,
+    template_name="decimal_comparison_grid",
+    status=TEMPLATE_VERSION_ENABLED,
+    fingerprint_key="k1",
+    owner=None,
+):
     now = _now()
     # Built from real DSL document models (not hand-rolled dicts) so the fixture
     # can't silently drift from the actual schemas.
@@ -110,7 +117,7 @@ def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid",
 
     job = GenerationJob(
         id=f"job-{uuid4().hex}",
-        fingerprint_key="k1",
+        fingerprint_key=fingerprint_key,
         fingerprint_version=1,
         fingerprint_json="{}",
         trigger_observation_ids="[]",
@@ -124,7 +131,7 @@ def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid",
     draft = TemplateDraft(
         id=f"draft-{uuid4().hex}",
         job_id=job.id,
-        fingerprint_key="k1",
+        fingerprint_key=fingerprint_key,
         fingerprint_version=1,
         fingerprint_json="{}",
         revision=1,
@@ -144,11 +151,12 @@ def _seed_draft_and_version(session, *, template_name="decimal_comparison_grid",
     session.flush()
     version = TemplateVersion(
         id=f"tv-{uuid4().hex}",
-        fingerprint_key="k1",
+        fingerprint_key=fingerprint_key,
         template_name=template_name,
         draft_id=draft.id,
         artifact_hash="sha256:versionx",
         status=status,
+        owner_session_id=owner,
         created_at=now,
         updated_at=now,
     )
@@ -340,3 +348,134 @@ def test_published_v3_template_resolves_layout_for_each_params_set(session):
     # must shift these anchors; item[0] has the largest digit-width delta.
     assert first.anchor("values", "item", 3, "bottom") != second.anchor("values", "item", 3, "bottom")
     assert first.anchor("values", "item", 0, "bottom") != second.anchor("values", "item", 0, "bottom")
+
+
+# ------------------------------------------------ ownership-scoped snapshots
+
+
+def test_snapshot_hides_another_sessions_private_version(session):
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="theirs", fingerprint_key="k-theirs", owner="session-b"
+    )
+
+    assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset()
+
+
+def test_snapshot_shows_a_session_its_own_private_version(session):
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="mine", fingerprint_key="k-mine", owner="session-a"
+    )
+
+    assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset(
+        {"mine"}
+    )
+
+
+def test_snapshot_shows_shared_versions_to_every_session(session):
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="everyones", fingerprint_key="k-shared", owner=None
+    )
+
+    assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset(
+        {"everyones"}
+    )
+    assert load_enabled_snapshot(session).names() == frozenset({"everyones"})
+
+
+def test_an_owned_version_wins_over_the_shared_one_for_its_fingerprint(session):
+    """One fingerprint must offer one template, not two.
+
+    A teacher who deliberately approved their own template for a problem shape
+    should be offered theirs, not theirs *and* the shared default.
+    """
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="shared_grid", fingerprint_key="k1", owner=None
+    )
+    _seed_draft_and_version(
+        session, template_name="own_grid", fingerprint_key="k1", owner="session-a"
+    )
+
+    assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset(
+        {"own_grid"}
+    )
+    assert load_enabled_snapshot(session, owner_session_id="session-b").names() == frozenset(
+        {"shared_grid"}
+    )
+
+
+def test_an_owned_version_does_not_hide_shared_ones_for_other_fingerprints(session):
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="shared_other", fingerprint_key="k-other", owner=None
+    )
+    _seed_draft_and_version(
+        session, template_name="own_grid", fingerprint_key="k1", owner="session-a"
+    )
+
+    assert load_enabled_snapshot(session, owner_session_id="session-a").names() == frozenset(
+        {"shared_other", "own_grid"}
+    )
+
+
+def test_a_name_collision_resolves_to_the_callers_own_version(session):
+    """Defence in depth for data the name checks did not prevent.
+
+    approve_draft_service now refuses a private approval that takes a shared
+    name, so this state should not arise. If it ever does -- rows written before
+    that check existed -- the snapshot must not let query order decide which
+    template a name resolves to. The caller's own wins, matching the fingerprint
+    precedence rule.
+    """
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-shared", owner=None
+    )
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-own", owner="session-a"
+    )
+
+    snapshot = load_enabled_snapshot(session, owner_session_id="session-a")
+
+    assert snapshot.names() == frozenset({"same_name"})
+    own_version_id = (
+        session.query(TemplateVersion)
+        .filter_by(template_name="same_name", owner_session_id="session-a")
+        .one()
+        .id
+    )
+    assert snapshot.entry("same_name").version_id == own_version_id
+
+
+def test_a_name_collision_resolves_the_same_way_whichever_row_comes_first(session):
+    """The mirror of the test above, seeded in the opposite order.
+
+    Without both, the assertion can pass on query order alone and prove nothing.
+    """
+    from app.meta.dynamic_templates import load_enabled_snapshot
+
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-own", owner="session-a"
+    )
+    _seed_draft_and_version(
+        session, template_name="same_name", fingerprint_key="k-shared", owner=None
+    )
+
+    snapshot = load_enabled_snapshot(session, owner_session_id="session-a")
+
+    own_version_id = (
+        session.query(TemplateVersion)
+        .filter_by(template_name="same_name", owner_session_id="session-a")
+        .one()
+        .id
+    )
+    assert snapshot.entry("same_name").version_id == own_version_id

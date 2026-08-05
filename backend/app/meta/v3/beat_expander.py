@@ -49,12 +49,20 @@ _SECONDS_PER_PAIR = 1.3
 #: step instead of failing to compile.
 _MAX_ELIMINATION_SECONDS = 6.0
 
+#: Which semantic part each strategy's expander walks. Kept next to the strategy
+#: tables here rather than derived from `_PART_CARDINALITY` in `compiler.py`,
+#: which `beat_expander` cannot import (compiler already depends on this module).
+_REGROUP_PART = {"grid": "cell", "object_set": "item"}
+_MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
         self.answer_expression = answer_expression
 
     def expand(self, plan):
+        self._sweep_beat_id = magnitude_sweep_beat_id(plan)
+        self._regroup_beat_id = regroup_beat_id(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -158,18 +166,52 @@ class BeatExpander:
             minimum_seconds = min(_SECONDS_PER_PAIR * pair_count, _MAX_ELIMINATION_SECONDS)
         return minimum_seconds, weight
 
-    @staticmethod
-    def _slot_count(plan, beat, actions):
-        """One slot per pair, so both partners recolour at the same instant.
+    def _slot_count(self, plan, beat, actions):
+        """Choose a slot count that groups related role changes into one instant.
 
         `timeline.schedule_beats` otherwise derives slots from the action count
-        and plays six recolours in sequence, which reads as a left-to-right wave
-        rather than as pairing. Derived from `len(actions)` rather than from the
-        value count so a suppressed no-op cannot leave an empty slot.
+        and plays every recolour in sequence, which reads as a left-to-right
+        wave rather than as the strategy's own grouping.
+
+        Derived from `len(actions)` rather than from a value count so a
+        suppressed no-op cannot leave an empty slot AND so a beat that also
+        emits a `RevealAction` (an unrevealed target on the strategy's own
+        beat) cannot push two role changes into one slot -- which would fail
+        `check_salience` for `magnitude_comparison`'s focus role.
+
+        - pair_elimination organize: paired items share a slot, one slot per
+          pair. The organize beat never reveals the values (revealed by the
+          prior beat by construction), so the pair-per-slot arithmetic is
+          stable.
+        - regroup organize: one slot per row, so a whole row recolours
+          together -- but only when the actions ARE the strategy's own role
+          changes. A beat that also emits a `RevealAction` is scheduled by
+          the default rule so the reveal does not steal a row's slot.
+        - magnitude_comparison sweep beat: one slot per action. Any batching
+          would risk co-starting two `focus` role changes and failing
+          `check_salience`.
         """
-        if plan.strategy != "pair_elimination" or beat.kind != "organize" or not actions:
+        if not actions:
             return None
-        return -(-len(actions) // 2)
+        if plan.strategy == "pair_elimination" and beat.kind == "organize":
+            return -(-len(actions) // 2)
+        if (
+            plan.strategy == "regroup"
+            and beat.id == getattr(self, "_regroup_beat_id", None)
+        ):
+            layout = _regroup_layout(plan.primary_visual)
+            if layout is None:
+                return None
+            _rows, _columns, count = layout
+            if count == len(actions):
+                return layout[0]
+            return None
+        if (
+            plan.strategy == "magnitude_comparison"
+            and beat.id == getattr(self, "_sweep_beat_id", None)
+        ):
+            return len(actions)
+        return None
 
     def _standard_actions(
         self, plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
@@ -242,6 +284,37 @@ class BeatExpander:
         if beat.kind in {"orient", "reveal"}:
             return []  # `_reveal_unrevealed` has already staged the reveal
 
+        if (
+            plan.strategy == "regroup"
+            and beat.id == getattr(self, "_regroup_beat_id", None)
+        ):
+            # Recolour each row of the primary visual to the `constraint`
+            # accent, so the collection reads as R groups of C rather than
+            # one undifferentiated set. Without this branch, the beat falls
+            # through to `_generic_role_change` and the animation is
+            # indistinguishable from `group_reveal`.
+            # One beat owns the walk (see `regroup_beat_id`); later organize
+            # beats behave normally, and an organize beat whose targets
+            # do not include the primary visual never restyles it.
+            actions = self._regroup_actions(plan, current_roles)
+            if actions:
+                return actions
+
+        if (
+            plan.strategy == "magnitude_comparison"
+            and beat.id == getattr(self, "_sweep_beat_id", None)
+        ):
+            # Focus the primary visual's magnitude-carrying parts one at a
+            # time, so the observed extent sweeps left to right and the
+            # animation teaches the magnitude rather than asserting it.
+            # Only one beat owns the sweep -- the first focus/derive beat that
+            # names the primary visual -- and every later focus/derive beat
+            # falls through to `_generic_role_change`, so two derive beats do
+            # not double-stage one sweep.
+            actions = self._magnitude_comparison_actions(plan, current_roles)
+            if actions:
+                return actions
+
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
             # Iterate pairs, not indices. The middle item is never reached, so
             # the old `if index == middle: continue` guard goes with the loop it
@@ -281,6 +354,59 @@ class BeatExpander:
             ]
 
         return self._generic_role_change(beat, "structure", current_roles)
+
+    def _regroup_actions(self, plan, current_roles):
+        """Highlight each row's cells in one accented slot per row.
+
+        Only a highlight is emitted, not a paired release: two actions per
+        cell puts a 4x5 grid at 40 organize-beat actions on its own, which
+        overruns the 40-entry timeline cap in `compiler.compile_teaching_plan`
+        as soon as anything else needs a slot. Rows accumulate to `constraint`
+        cumulatively, which reads as "here are the R groups, assembled" -- the
+        following focus/derive beats can transition them onwards from there.
+        """
+        layout = _regroup_layout(plan.primary_visual)
+        if layout is None:
+            return []
+        rows, columns, count = layout
+        part = _REGROUP_PART[plan.primary_visual.kind]
+        ref = plan.primary_visual.ref
+        actions = []
+        for row in range(rows):
+            for col in range(columns):
+                index = row * columns + col
+                if index >= count:
+                    break
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=ref, part=part, index=index),
+                    "constraint", current_roles,
+                ))
+        return actions
+
+    def _magnitude_comparison_actions(self, plan, current_roles):
+        """Focus the magnitude-carrying parts left-to-right.
+
+        `_magnitude_indices` returns the walk order: `bar` walks `value` many
+        segments (the actual magnitude, not the bar's capacity); `number_line`
+        walks its markers sorted by resolved value, so a plan that declares
+        markers out of numeric order still sweeps left to right.
+
+        `validate_strategy_compatibility` refuses `magnitude_comparison` when
+        the driving field is not a literal, so this returns None at most from
+        a wholly-unsupported kind, not from a plan that would have compiled.
+        """
+        indices = _magnitude_indices(plan.primary_visual)
+        if not indices:
+            return []
+        part = _MAGNITUDE_PART[plan.primary_visual.kind]
+        ref = plan.primary_visual.ref
+        actions = []
+        for index in indices:
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=ref, part=part, index=index),
+                "focus", current_roles,
+            ))
+        return actions
 
     def _median_callout(self, plan, beat, relations):
         """Name the surviving middle value -- unless the plan already names it.
@@ -434,3 +560,136 @@ class BeatExpander:
 
 def expand_beats(plan, answer_expression):
     return BeatExpander(answer_expression=answer_expression).expand(plan)
+
+
+def regroup_beat_id(plan):
+    """The single beat regroup stages its row cycle on, or None.
+
+    The first organize beat that names the primary visual owns the walk;
+    later organize beats fall through. Same discipline as
+    `magnitude_sweep_beat_id`: pinning to one beat prevents a plan with two
+    organize beats from double-staging the walk, and filtering by
+    `beat.targets` keeps an organize beat that names only a supporting
+    visual from restyling the primary.
+    """
+    if plan.strategy != "regroup":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind != "organize":
+            continue
+        if any(target.visual_ref == primary_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def magnitude_sweep_beat_id(plan):
+    """The single beat magnitude_comparison stages its sweep on, or None.
+
+    The first focus/derive beat that names the primary visual owns the sweep;
+    later focus/derive beats behave normally. Selecting one specific beat
+    matters twice over:
+
+    - The expander otherwise emits the sweep on EVERY focus/derive beat, so
+      two derive beats double-stage the same segment-by-segment recolour.
+    - `_slot_count` sizes the beat by the sweep's own action count; a beat
+      that instead targets a supporting caption but happens to be a focus
+      beat would inherit that sizing, and the caption's actions would land in
+      the wrong slots.
+
+    Picking by `beat.targets` filters those cases explicitly rather than
+    relying on the plan author to write the beats in the right order.
+    """
+    if plan.strategy != "magnitude_comparison":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == primary_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def _literal_int(expression):
+    """Extract a whole-number literal, or return None if the expression is not one.
+
+    The plan schema allows a visual's driving fields to be any `ExpressionNode`,
+    so a regroup or magnitude_comparison plan may hand-write an addition or a
+    field reference. Nothing here evaluates such expressions; the expander only
+    walks parts whose count it can read at compile time.
+    """
+    if getattr(expression, "node", None) != "literal":
+        return None
+    value = expression.value
+    if not float(value).is_integer():
+        return None
+    return int(value)
+
+
+def _regroup_layout(spec):
+    """Return (rows, columns, count) for the regroup walk, or None if unknown.
+
+    Grid rows and columns are read from the plan; object_set inherits the
+    5-per-row wrap the renderer uses in `_measure_object_set`. The two shapes
+    are kept close to their measurement so a walk here and a mobject there
+    address the same cells.
+    """
+    if spec.kind == "grid":
+        rows = _literal_int(spec.rows)
+        columns = _literal_int(spec.columns)
+        if rows is None or columns is None or rows <= 0 or columns <= 0:
+            return None
+        return rows, columns, rows * columns
+    if spec.kind == "object_set":
+        count = _literal_int(spec.count)
+        if count is None or count <= 0:
+            return None
+        columns = min(5, count)
+        rows = -(-count // columns)
+        return rows, columns, count
+    return None
+
+
+def _magnitude_indices(spec):
+    """The walk order the magnitude sweep applies to `spec`'s parts.
+
+    - `bar`: indices `0..value-1`. Walking `0..maximum-1` would teach the bar's
+      capacity, not its actual magnitude. `value` is required to be a
+      whole-number literal by `validate_strategy_compatibility`; a fractional or
+      dynamic value cannot address specific segments at compile time.
+    - `number_line`: marker indices sorted by resolved literal position. A plan
+      may declare markers in any order, but a left-to-right sweep only reads
+      correctly against the number line's own left-to-right axis.
+
+    Returns an empty tuple when the walk is unbuildable (validation should have
+    refused these earlier; the empty fallback avoids raising during expansion).
+    """
+    if spec.kind == "bar":
+        value = _literal_int(spec.value)
+        if value is None or value < 0:
+            return ()
+        return tuple(range(value))
+    if spec.kind == "number_line":
+        markers = list(enumerate(spec.markers))
+        keyed = []
+        for original_index, marker in markers:
+            position = _literal_number(marker)
+            if position is None:
+                return ()
+            keyed.append((position, original_index))
+        keyed.sort()
+        return tuple(original_index for _position, original_index in keyed)
+    return ()
+
+
+def _literal_number(expression):
+    """A literal expression's value as a float, or None if not a literal.
+
+    Bar/grid dimensions need whole numbers (see `_literal_int`), but a
+    number-line marker's position is any numeric literal -- 2.5 sits between
+    2 and 3 on the line and must sort accordingly.
+    """
+    if getattr(expression, "node", None) != "literal":
+        return None
+    return float(expression.value)

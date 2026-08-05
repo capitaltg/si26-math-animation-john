@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import MetaReviewPanel from './MetaReviewPanel'
 import SchemaForm from './SchemaForm'
+import TemplateWorkshop from './TemplateWorkshop'
 import {
   IconAlert,
   IconBlocks,
@@ -615,6 +616,11 @@ function MainApp() {
     ? storyboard.filter((scene) => scene.status === 'approved')
     : []
   const showDock = !dockHidden && (rendering || !!results)
+  // Problems whose only offered visualization is the generic text card: the
+  // exact set the meta-template loop can build something new for.
+  const unsupportedCandidateIds = (options || [])
+    .filter(isUnsupportedShape)
+    .map((item) => item.candidate_id)
 
   return (
     <div className="shell">
@@ -776,6 +782,18 @@ function MainApp() {
           </section>
         )}
 
+        {/* Sits above the current stage's band and stays there as the teacher
+            moves on: a build takes minutes and must not hold up the deck, so
+            this is gated on having a deck rather than on the current stage.
+            Nothing here resets the flow on approval — the band says to ask for
+            visualizations again, and "Back to candidates" already exists. */}
+        {candidates && candidates.length > 0 && (
+          <TemplateWorkshop
+            candidates={candidates}
+            unsupportedCandidateIds={unsupportedCandidateIds}
+          />
+        )}
+
         {options && !storyboard && !results && (
           <section className="band">
             <div className="band__head">
@@ -795,10 +813,9 @@ function MainApp() {
                     <div className="notice notice--teach">
                       <IconSeedling />
                       <p className="notice__body">
-                        No built-in visualization fits this problem yet, so it falls
-                        back to a plain text card. Choosing it teaches the system: after
-                        enough similar problems, it may propose a brand-new visualization
-                        template for this kind of problem.
+                        No built-in visualization fits this problem yet, so it falls back
+                        to a plain text card. You can have one built from this problem —
+                        see &quot;Teaching a new visual&quot; above.
                       </p>
                     </div>
                   )}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { IconAlert, IconCard, IconCheck, IconChecked, IconWorking } from './Icons'
 
 const TEMPLATE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/
 
@@ -35,22 +36,30 @@ function fixtureKindLabel(fixture) {
   return 'Negative example — should be rejected (guard case)'
 }
 
-function fixtureKindColor(fixture) {
-  if (fixture.expected_outcome === 'reject') return '#9a6700'
-  if (fixture.kind === 'positive') return '#1a7f37'
-  return '#0969da'
-}
-
 function fixtureStatusLabel(fixture) {
   if (fixture.structural_check_passed === null) return 'Not checked yet'
   if (fixture.structural_check_passed) return 'Structural check passed'
   return `Structural check failed: ${fixture.structural_check_detail}`
 }
 
-function fixtureStatusColor(fixture) {
-  if (fixture.structural_check_passed === null) return '#666'
-  if (fixture.structural_check_passed) return '#1a7f37'
-  return '#c00'
+// State carried in the stamp vocabulary rather than in a colour literal, so
+// this panel reports a check the same way every other surface does.
+function fixtureStatusState(fixture) {
+  if (fixture.structural_check_passed === null) return 'todo'
+  return fixture.structural_check_passed ? 'done' : 'failed'
+}
+
+function StatusStamp({ state, children }) {
+  return (
+    <p className="stamp" data-state={state}>
+      <span className="stamp__mark">
+        {state === 'done' ? <IconCheck size={16} />
+          : state === 'failed' ? <IconAlert size={16} />
+          : <IconWorking size={16} />}
+      </span>
+      {children}
+    </p>
+  )
 }
 
 // The reviewer never sees a raw quality-check code, path, or detail string --
@@ -108,6 +117,8 @@ export default function MetaReviewPanel() {
   const [fixtureTexts, setFixtureTexts] = useState({})
   const [fixtureErrors, setFixtureErrors] = useState({})
   const [loading, setLoading] = useState(false)
+  const [versions, setVersions] = useState(null)
+  const [libraryError, setLibraryError] = useState(null)
   const [reviewerToken, setReviewerToken] = useState(
     () => sessionStorage.getItem('metaReviewerToken') || '',
   )
@@ -229,9 +240,45 @@ export default function MetaReviewPanel() {
     }
   }
 
+  // The library keeps its own error state: a failure to list live versions must
+  // not look like a failure to load the drafts, and vice versa.
+  async function loadVersions() {
+    setLibraryError(null)
+    try {
+      const resp = await fetch('/meta/versions', { headers: authHeaders() })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not load the template library'))
+      setVersions(data)
+    } catch (err) {
+      setLibraryError(err.message)
+    }
+  }
+
   useEffect(() => {
     loadDrafts()
+    loadVersions()
   }, [])
+
+  // Clearing the owner is what turns a teacher's private template into
+  // everyone's. The server re-checks the full evidence bar, so a refusal here is
+  // an expected outcome and is reported rather than swallowed.
+  async function promoteVersion(versionId) {
+    setLibraryError(null)
+    setLoading(true)
+    try {
+      const resp = await fetch(`/meta/versions/${versionId}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      })
+      const data = await responseJson(resp)
+      if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not share this template'))
+      await loadVersions()
+    } catch (err) {
+      setLibraryError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function openDraft(id) {
     setLoading(true)
@@ -349,6 +396,8 @@ export default function MetaReviewPanel() {
       if (!resp.ok) throw new Error(messageFor(resp, data, 'Could not approve draft'))
       returnToList()
       await loadDrafts()
+      // A new enabled version just appeared, so the library below is stale.
+      await loadVersions()
     } catch (err) {
       setError(err.message)
     } finally {
@@ -386,264 +435,450 @@ export default function MetaReviewPanel() {
   )
 
   return (
-    <main style={{ maxWidth: 900, margin: '2rem auto', fontFamily: 'sans-serif' }}>
-      <h1>Meta-template review (dev only)</h1>
-      <div>
-        <label htmlFor="reviewer-token">Reviewer token</label>
-        <input
-          id="reviewer-token"
-          type="password"
-          value={reviewerToken}
-          onChange={handleTokenChange}
-        />
-        <button type="button" onClick={loadDrafts} disabled={loading}>
-          Load drafts
-        </button>
-      </div>
-      {error && <p style={{ color: 'crimson' }}>{error}</p>}
-      {loading && <p>Working…</p>}
+    <div className="shell">
+      <header className="masthead">
+        <div className="masthead__inner">
+          <h1>Meta-template review (dev only)</h1>
+          <p className="masthead__sub">
+            Review the drafts no single teacher owns, and share a teacher&apos;s own
+            template with everyone.
+          </p>
+        </div>
+      </header>
 
-      {!selected && (
-        <section>
-          <h2>Pending drafts</h2>
-          {drafts && drafts.length === 0 && <p>No drafts pending review.</p>}
-          {drafts && drafts.map((draft) => (
-            <div
-              key={draft.id}
-              style={{ border: '1px solid #ddd', padding: '0.5rem', margin: '0.5rem 0' }}
-            >
-              <strong>{draft.fingerprint_key}</strong> — revision {draft.revision} — {draft.status}
-              <button onClick={() => openDraft(draft.id)} disabled={loading} style={{ marginLeft: '1rem' }}>
-                Review
-              </button>
-            </div>
-          ))}
+      <main className="page">
+        <section className="band">
+          <div className="band__head">
+            <h2>Reviewer token</h2>
+            <p className="band__note">Kept in this tab&apos;s session storage only.</p>
+          </div>
+          <div className="reload-strip">
+            <label className="field admin__token" htmlFor="reviewer-token">
+              <span className="field__label">Reviewer token</span>
+              <input
+                id="reviewer-token"
+                type="password"
+                value={reviewerToken}
+                onChange={handleTokenChange}
+              />
+            </label>
+            <button type="button" className="btn" onClick={loadDrafts} disabled={loading}>
+              Load drafts
+            </button>
+            {loading && <span className="dirty-flag">Working…</span>}
+          </div>
         </section>
-      )}
 
-      {selected && (
-        <section>
-          <button onClick={returnToList}>Back to list</button>
-          <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
-          <p>{selected.classifier_bullet}</p>
+        {error && (
+          <div className="notice notice--danger" role="alert">
+            <IconAlert />
+            <p className="notice__body">{error}</p>
+          </div>
+        )}
 
-          <section>
-            <h3>Teaching plan</h3>
-            <p>{selected.teaching_plan.learning_objective}</p>
-            <ol>
-              {selected.teaching_plan.beats.map((beat) => (
-                <li key={beat.id}>{formatBeat(beat)}</li>
+        {!selected && (
+          <>
+            <section className="band">
+              <div className="band__head">
+                <h2>Pending drafts</h2>
+                <p className="band__note">
+                  A threshold-triggered draft belongs to no session, so a human decides it.
+                </p>
+              </div>
+              {drafts && drafts.length === 0 && (
+                <div className="notice notice--empty">
+                  <IconCard />
+                  <p className="notice__body">No drafts pending review.</p>
+                </div>
+              )}
+              {drafts && drafts.map((draft) => (
+                <div className="admin__row" key={draft.id}>
+                  <div>
+                    <p className="admin__row-title">{draft.fingerprint_key}</p>
+                    <p className="admin__row-note">
+                      revision {draft.revision} · {draft.status}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => openDraft(draft.id)}
+                    disabled={loading}
+                  >
+                    Review
+                  </button>
+                </div>
               ))}
-            </ol>
-            <p>Total compiled duration: <strong>{formatSeconds(totalDurationSeconds)}</strong></p>
-            {passingQualityLabels.length > 0 && (
-              <ul>
-                {passingQualityLabels.map((label) => (
-                  <li key={label} style={{ color: '#1a7f37' }}>{label} passed</li>
+            </section>
+
+            <section className="band">
+              <div className="band__head">
+                <h2>Live template library</h2>
+                <p className="band__note">
+                  A version owned by a session is enabled for that teacher alone.
+                </p>
+              </div>
+
+              {libraryError && (
+                <div className="notice notice--danger" role="alert">
+                  <IconAlert />
+                  <p className="notice__body">{libraryError}</p>
+                </div>
+              )}
+
+              {versions && versions.length === 0 && (
+                <div className="notice notice--empty">
+                  <IconCard />
+                  <p className="notice__body">No templates are live yet.</p>
+                </div>
+              )}
+
+              {versions && versions.map((version) => (
+                <div className="admin__row" key={version.id}>
+                  <div>
+                    <p className="admin__row-title">{version.template_name}</p>
+                    <p className="admin__row-note">
+                      {version.fingerprint_key}
+                      {version.owner_session_id
+                        ? ` · private to session ${version.owner_session_id}`
+                        : ''}
+                    </p>
+                  </div>
+                  {version.owner_session_id ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => promoteVersion(version.id)}
+                      disabled={loading}
+                    >
+                      Share with everyone
+                    </button>
+                  ) : (
+                    <span className="stamp" data-state="done">
+                      <span className="stamp__mark"><IconChecked size={16} /></span>
+                      Shared with everyone
+                    </span>
+                  )}
+                </div>
+              ))}
+            </section>
+          </>
+        )}
+
+        {selected && (
+          <>
+            <section className="band">
+              <div className="band__head">
+                <h2>{selected.fingerprint_key} (revision {selected.revision})</h2>
+                <p className="band__note">
+                  Total compiled duration <strong>{formatSeconds(totalDurationSeconds)}</strong>
+                </p>
+              </div>
+              <p className="admin__bullet">{selected.classifier_bullet}</p>
+
+              <h3 className="admin__subhead">Teaching plan</h3>
+              <p className="admin__objective">{selected.teaching_plan.learning_objective}</p>
+              <ol className="workshop__beats">
+                {selected.teaching_plan.beats.map((beat) => (
+                  <li key={beat.id}>{formatBeat(beat)}</li>
+                ))}
+              </ol>
+              {passingQualityLabels.length > 0 && (
+                <ul className="stamps">
+                  {passingQualityLabels.map((label) => (
+                    <li className="stamp" key={label} data-state="done">
+                      <span className="stamp__mark"><IconCheck size={16} /></span>
+                      {label} passed
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {previewSrc && (
+                <div className="inset admin__preview">
+                  <img src={previewSrc} alt="preview" />
+                </div>
+              )}
+              <div className="actions">
+                <button type="button" className="btn btn--quiet" onClick={returnToList}>
+                  Back to list
+                </button>
+              </div>
+            </section>
+
+            {!validationPassed && (
+              <div className="notice notice--danger" role="alert">
+                <IconAlert />
+                <div>
+                  <p className="notice__body">
+                    {selected.validation_report
+                      ? "This draft failed automatic validation and can't be approved yet."
+                      : "Your fixture edit cleared this draft's validation evidence, so it can't be approved."}
+                  </p>
+                  {selected.validation_report ? (
+                    <>
+                      {selected.validation_report.compile_error && (
+                        <p className="notice__body">
+                          Compile error: {selected.validation_report.compile_error}
+                        </p>
+                      )}
+                      {selected.validation_report.preview_error && (
+                        <p className="notice__body">
+                          Preview error: {selected.validation_report.preview_error}
+                        </p>
+                      )}
+                      {missingPredicateIndexes.length > 0 && (
+                        <p className="notice__body">
+                          {missingPredicateIndexes.length} of {predicateCount} guard predicates
+                          (#{missingPredicateIndexes.join(', #')}) have no guard case proving they
+                          correctly reject bad input.
+                        </p>
+                      )}
+                      <p className="notice__body">
+                        Guard cases are system-generated and not editable here — use
+                        &quot;Reject and request refinement&quot; below so the worker can
+                        regenerate with fixes.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="notice__body">
+                        Nothing failed — the checks and the preview just need to run again
+                        against your corrected fixture. Re-validating keeps your edit;
+                        rejecting below discards it.
+                      </p>
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={revalidateDraft}
+                          disabled={loading}
+                        >
+                          Re-validate this draft
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <section className="band">
+              <div className="band__head">
+                <h2>Fixtures to verify ({qualifyingFixtureCount} / {requiredFixtureCount})</h2>
+                <p className="band__note">
+                  Predicate coverage {coverageCount} / {predicateCount}
+                </p>
+              </div>
+              <p className="admin__lead">
+                Each one below is a real example pulled from course content. Confirm or
+                correct its answer and save — once it passes its check, it counts toward
+                the {requiredFixtureCount} required before this template can publish.
+              </p>
+              <ul className="admin__list">
+                {positiveFixtures.map((fixture, index) => (
+                  <li className="admin__fixture" key={fixture.id}>
+                    <div className="admin__fixture-head">
+                      <p className="admin__row-title">Fixture {index + 1}</p>
+                      {isQualifyingFixture(fixture) && (
+                        <span className="stamp" data-state="done">
+                          <span className="stamp__mark"><IconCheck size={16} /></span>
+                          Verified
+                        </span>
+                      )}
+                    </div>
+                    {fixture.source_excerpt ? (
+                      <p className="scene__source">{fixture.source_excerpt}</p>
+                    ) : (
+                      <div className="notice notice--danger" role="alert">
+                        <IconAlert />
+                        <p className="notice__body">
+                          No source excerpt on this fixture — it isn&apos;t tied to a real
+                          observation, so it can never count toward the requirement no
+                          matter what&apos;s entered below.
+                        </p>
+                      </div>
+                    )}
+                    <StatusStamp state={fixtureStatusState(fixture)}>
+                      {fixtureStatusLabel(fixture)}
+                    </StatusStamp>
+                    <div className="field">
+                      <label
+                        className="field__label"
+                        htmlFor={`fixture-${fixture.id}-params`}
+                      >
+                        Fixture {fixture.id} params
+                      </label>
+                      <span className="admin__hint" id={`fixture-${fixture.id}-params-hint`}>
+                        Inputs fed into the template
+                      </span>
+                      <textarea
+                        id={`fixture-${fixture.id}-params`}
+                        aria-describedby={`fixture-${fixture.id}-params-hint`}
+                        className="workshop__feedback"
+                        value={fixtureTexts[fixture.id]?.params ?? JSON.stringify(fixture.params)}
+                        onChange={(e) => setFixtureTexts((current) => ({
+                          ...current,
+                          [fixture.id]: {
+                            params: e.target.value,
+                            expectedResult: current[fixture.id]?.expectedResult
+                              ?? JSON.stringify(fixture.expected_result || { answer: '' }),
+                          },
+                        }))}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="field">
+                      <label
+                        className="field__label"
+                        htmlFor={`fixture-${fixture.id}-expected-result`}
+                      >
+                        Fixture {fixture.id} expected result
+                      </label>
+                      <span
+                        className="admin__hint"
+                        id={`fixture-${fixture.id}-result-hint`}
+                      >
+                        Answer the template should produce for these inputs
+                      </span>
+                      <textarea
+                        id={`fixture-${fixture.id}-expected-result`}
+                        aria-describedby={`fixture-${fixture.id}-result-hint`}
+                        className="workshop__feedback"
+                        value={fixtureTexts[fixture.id]?.expectedResult
+                          ?? JSON.stringify(fixture.expected_result || { answer: '' })}
+                        onChange={(e) => setFixtureTexts((current) => ({
+                          ...current,
+                          [fixture.id]: {
+                            params: current[fixture.id]?.params ?? JSON.stringify(fixture.params),
+                            expectedResult: e.target.value,
+                          },
+                        }))}
+                        rows={3}
+                      />
+                    </div>
+                    <div className="actions">
+                      <button type="button" className="btn" onClick={() => saveFixture(fixture)}>
+                        Save fixture
+                      </button>
+                    </div>
+                    {fixtureErrors[fixture.id] && (
+                      <div className="errors">
+                        <p className="errors__lead">{fixtureErrors[fixture.id]}</p>
+                      </div>
+                    )}
+                  </li>
                 ))}
               </ul>
-            )}
-          </section>
+            </section>
 
-          {previewSrc && (
-            <img
-              src={previewSrc}
-              alt="preview"
-              style={{ maxWidth: '100%', border: '1px solid #eee' }}
-            />
-          )}
-          {!validationPassed && (
-            <div style={{ border: '1px solid #c00', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0', background: '#fff5f5' }}>
-              <strong style={{ color: '#c00' }}>
-                {selected.validation_report
-                  ? "This draft failed automatic validation and can't be approved yet."
-                  : "Your fixture edit cleared this draft's validation evidence, so it can't be approved."}
-              </strong>
-              {selected.validation_report ? (
-                <>
-                  {selected.validation_report.compile_error && (
-                    <p>Compile error: {selected.validation_report.compile_error}</p>
-                  )}
-                  {selected.validation_report.preview_error && (
-                    <p>Preview error: {selected.validation_report.preview_error}</p>
-                  )}
-                  {missingPredicateIndexes.length > 0 && (
-                    <p>
-                      {missingPredicateIndexes.length} of {predicateCount} guard predicates
-                      (#{missingPredicateIndexes.join(', #')}) have no guard case proving they
-                      correctly reject bad input.
-                    </p>
-                  )}
-                  <p>
-                    Guard cases are system-generated and not editable here — use
-                    "Reject and request refinement" below so the worker can regenerate
-                    with fixes.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p>
-                    Nothing failed — the checks and the preview just need to run again
-                    against your corrected fixture. Re-validating keeps your edit;
-                    rejecting below discards it.
-                  </p>
-                  <button type="button" onClick={revalidateDraft} disabled={loading}>
-                    Re-validate this draft
-                  </button>
-                </>
+            <section className="band">
+              <div className="band__head">
+                <h2>Guard cases</h2>
+                <p className="band__note">System-generated and read-only.</p>
+              </div>
+              <p className="admin__lead">
+                These prove the template correctly rejects invalid input or handles edge
+                values. They&apos;re system-generated and read-only — no answer to confirm,
+                no action needed here.
+              </p>
+              {guardFixtures.length === 0 && (
+                <div className="notice notice--empty">
+                  <IconCard />
+                  <p className="notice__body">None for this draft.</p>
+                </div>
               )}
-            </div>
-          )}
-          <h3>Fixtures to verify ({qualifyingFixtureCount} / {requiredFixtureCount})</h3>
-          <p style={{ color: '#444' }}>
-            Each one below is a real example pulled from course content. Confirm or
-            correct its answer and save — once it passes its check, it counts toward
-            the {requiredFixtureCount} required before this template can publish.
-          </p>
-          <ul style={{ listStyle: 'none', padding: 0 }}>
-            {positiveFixtures.map((fixture, index) => (
-              <li
-                key={fixture.id}
-                style={{ border: '1px solid #ddd', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <strong>Fixture {index + 1}</strong>
-                  {isQualifyingFixture(fixture) && <span style={{ color: '#1a7f37' }}>✓ Verified</span>}
-                </div>
-                {fixture.source_excerpt ? (
-                  <blockquote style={{ color: '#666', margin: '0.5rem 0' }}>
-                    “{fixture.source_excerpt}”
-                  </blockquote>
-                ) : (
-                  <p style={{ color: '#c00' }}>
-                    ⚠ No source excerpt on this fixture — it isn't tied to a real
-                    observation, so it can never count toward the requirement no
-                    matter what's entered below.
-                  </p>
-                )}
-                <div style={{ color: fixtureStatusColor(fixture) }}>{fixtureStatusLabel(fixture)}</div>
-                <div>
-                  <label htmlFor={`fixture-${fixture.id}-params`}>Fixture {fixture.id} params</label>
-                  <div style={{ fontSize: '0.85em', color: '#666' }}>Inputs fed into the template</div>
-                  <textarea
-                    id={`fixture-${fixture.id}-params`}
-                    value={fixtureTexts[fixture.id]?.params ?? JSON.stringify(fixture.params)}
-                    onChange={(e) => setFixtureTexts((current) => ({
-                      ...current,
-                      [fixture.id]: {
-                        params: e.target.value,
-                        expectedResult: current[fixture.id]?.expectedResult
-                          ?? JSON.stringify(fixture.expected_result || { answer: '' }),
-                      },
-                    }))}
-                    rows={3}
-                  />
-                </div>
-                <div>
-                  <label htmlFor={`fixture-${fixture.id}-expected-result`}>
-                    Fixture {fixture.id} expected result
-                  </label>
-                  <div style={{ fontSize: '0.85em', color: '#666' }}>
-                    Answer the template should produce for these inputs
-                  </div>
-                  <textarea
-                    id={`fixture-${fixture.id}-expected-result`}
-                    value={fixtureTexts[fixture.id]?.expectedResult
-                      ?? JSON.stringify(fixture.expected_result || { answer: '' })}
-                    onChange={(e) => setFixtureTexts((current) => ({
-                      ...current,
-                      [fixture.id]: {
-                        params: current[fixture.id]?.params ?? JSON.stringify(fixture.params),
-                        expectedResult: e.target.value,
-                      },
-                    }))}
-                    rows={3}
-                  />
-                </div>
-                <button onClick={() => saveFixture(fixture)}>Save fixture</button>
-                {fixtureErrors[fixture.id] && <p style={{ color: 'crimson' }}>{fixtureErrors[fixture.id]}</p>}
-              </li>
-            ))}
-          </ul>
+              <ul className="admin__list">
+                {guardFixtures.map((fixture) => (
+                  <li className="admin__fixture" key={fixture.id}>
+                    <span className="chip">{fixtureKindLabel(fixture)}</span>
+                    <StatusStamp state={fixtureStatusState(fixture)}>
+                      {fixtureStatusLabel(fixture)}
+                    </StatusStamp>
+                    {fixture.source_excerpt && (
+                      <p className="scene__source">{fixture.source_excerpt}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
 
-          <h3>Guard cases</h3>
-          <p style={{ color: '#444' }}>
-            These prove the template correctly rejects invalid input or handles edge
-            values. They're system-generated and read-only — no answer to confirm,
-            no action needed here.
-          </p>
-          {guardFixtures.length === 0 && <p style={{ color: '#666' }}>None for this draft.</p>}
-          <ul style={{ listStyle: 'none', padding: 0 }}>
-            {guardFixtures.map((fixture) => (
-              <li
-                key={fixture.id}
-                style={{ border: '1px solid #eee', borderRadius: 4, padding: '0.75rem', margin: '0.75rem 0' }}
-              >
-                <span
-                  style={{
-                    color: '#fff',
-                    background: fixtureKindColor(fixture),
-                    borderRadius: 12,
-                    padding: '0.1rem 0.6rem',
-                    fontSize: '0.8em',
-                  }}
+            <section className="band">
+              <div className="band__head">
+                <h2>Approve</h2>
+                <p className="band__note">
+                  Verified fixtures: {qualifyingFixtureCount} / {requiredFixtureCount} required.
+                  {' '}
+                  Predicate coverage (guard cases confirmed to correctly reject bad input):
+                  {' '}
+                  {coverageCount} / {predicateCount}.
+                </p>
+              </div>
+
+              <label className="field" htmlFor="template-name">
+                <span className="field__label">Template name</span>
+                <input
+                  id="template-name"
+                  type="text"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                />
+              </label>
+
+              <label className="combine" htmlFor="math-semantics-confirmed">
+                <input
+                  id="math-semantics-confirmed"
+                  type="checkbox"
+                  checked={mathSemanticsConfirmed}
+                  onChange={(e) => setMathSemanticsConfirmed(e.target.checked)}
+                />
+                I confirm the mathematical semantics and preview are correct
+              </label>
+
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn btn--ok"
+                  onClick={submitApprove}
+                  disabled={loading || !canApprove}
                 >
-                  {fixtureKindLabel(fixture)}
-                </span>
-                <div style={{ color: fixtureStatusColor(fixture) }}>{fixtureStatusLabel(fixture)}</div>
-                {fixture.source_excerpt && (
-                  <blockquote style={{ color: '#666', margin: '0.5rem 0' }}>
-                    “{fixture.source_excerpt}”
-                  </blockquote>
-                )}
-              </li>
-            ))}
-          </ul>
-          <h3>Approve</h3>
-          <p>
-            Verified fixtures: {qualifyingFixtureCount} / {requiredFixtureCount} required.
-            {' '}
-            Predicate coverage (guard cases confirmed to correctly reject bad input): {coverageCount} / {predicateCount}.
-          </p>
-          <div>
-            <label htmlFor="template-name">Template name</label>
-            <input
-              id="template-name"
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
-            />
-          </div>
-          <div>
-            <input
-              id="math-semantics-confirmed"
-              type="checkbox"
-              checked={mathSemanticsConfirmed}
-              onChange={(e) => setMathSemanticsConfirmed(e.target.checked)}
-            />
-            <label htmlFor="math-semantics-confirmed">
-              I confirm the mathematical semantics and preview are correct
-            </label>
-          </div>
-          <div>
-            <button onClick={submitApprove} disabled={loading || !canApprove}>
-              Approve and publish
-            </button>
-          </div>
-          <h3>Reject with feedback</h3>
-          <textarea
-            aria-label="Feedback"
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            rows={3}
-            style={{ width: '100%' }}
-          />
-          <div>
-            <button onClick={submitReject} disabled={loading || !feedback.trim()}>
-              Reject and request refinement
-            </button>
-          </div>
-        </section>
-      )}
-    </main>
+                  <IconCheck size={16} />
+                  Approve and publish
+                </button>
+              </div>
+            </section>
+
+            <section className="band">
+              <div className="band__head">
+                <h2>Reject with feedback</h2>
+                <p className="band__note">
+                  The worker regenerates from what you write here.
+                </p>
+              </div>
+              <label className="field" htmlFor="reviewer-feedback">
+                <span className="field__label">Feedback</span>
+                <textarea
+                  id="reviewer-feedback"
+                  className="workshop__feedback"
+                  aria-label="Feedback"
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value)}
+                  rows={3}
+                />
+              </label>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={submitReject}
+                  disabled={loading || !feedback.trim()}
+                >
+                  Reject and request refinement
+                </button>
+              </div>
+            </section>
+          </>
+        )}
+      </main>
+    </div>
   )
 }

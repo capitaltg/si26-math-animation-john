@@ -1182,3 +1182,280 @@ h3 {
   white-space: nowrap;
   border: 0;
 }
+
+
+/* ---------- Template workshop ----------
+   The band a teacher watches a new visual being built in, then judges it in.
+   It reuses the stamp column for progress (discrete stages, never a
+   percentage -- there is no progress stream inside the generation loop) and the
+   dark inset for the preview, so nothing new is invented here except the
+   layout of the judgement itself. */
+
+.workshop__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+  gap: 1.4rem;
+  margin-top: 1.1rem;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .workshop__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.workshop__objective {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-2xl);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0 0 0.9rem;
+  max-width: 32ch;
+}
+
+.workshop__caption {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 0 0 0.3rem;
+}
+
+.workshop__beats {
+  margin: 0 0 0.9rem;
+  padding-left: 1.4rem;
+  display: grid;
+  gap: 0.3rem;
+  font-size: var(--t-sm);
+  color: var(--ink);
+  max-width: 62ch;
+}
+
+.workshop__duration {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.workshop__wait {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0.9rem 0 0;
+  max-width: 62ch;
+}
+
+/* Not styled as a failure: nothing has gone wrong, the queue simply has no
+   worker draining it yet. Fallback brown is the system's "honest, not broken"
+   voice. */
+.workshop__stalled {
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--fallback);
+  margin: 0.5rem 0 0;
+}
+
+.workshop__name {
+  margin-top: 1.25rem;
+}
+
+/* Grouping inside a band is a tinted block with a hairline rule -- never a
+   second card. */
+.workshop__history {
+  margin: 0 0 1.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.workshop__history-lead {
+  font-size: var(--t-xs);
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 0 0 0.6rem;
+}
+
+.workshop__attempts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.workshop__attempt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 9rem);
+  gap: 0.9rem;
+  align-items: start;
+  background-color: var(--board-quiet);
+  border-radius: var(--r-md);
+  padding: 0.9rem 1.1rem;
+}
+
+@media (max-width: 760px) {
+  .workshop__attempt {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.workshop__attempt-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-base);
+  color: var(--ink);
+  margin: 0 0 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.workshop__attempt-note {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: 62ch;
+}
+
+.inset--thumb {
+  padding: 0.3rem;
+}
+
+.workshop__reject {
+  margin-top: 1.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.workshop__feedback {
+  font-family: var(--font-ui);
+  font-size: var(--t-base);
+  padding: 0.45rem 0.6rem;
+  border: 2px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  width: 100%;
+  max-width: 44rem;
+  resize: vertical;
+}
+
+.workshop__feedback:focus-visible {
+  border-color: var(--action);
+}
+
+.workshop__cost {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0.5rem 0 0.9rem;
+  max-width: 62ch;
+}
+
+.workshop__current {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-lg);
+  color: var(--ink);
+  margin: 0 0 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Admin review panel ----------
+   Dev-only, behind a bearer token, but on the same system as everything else:
+   rows are tinted blocks inside a band rather than a second card level, and
+   state is carried by the stamp vocabulary rather than by inline colour. */
+
+.admin__token {
+  margin: 0;
+  flex: 1 1 14rem;
+}
+
+.admin__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.admin__row-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-base);
+  color: var(--ink);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin__row-note {
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  margin: 0.2rem 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.admin__subhead {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-xl);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 1.25rem 0 0.5rem;
+}
+
+.admin__bullet {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: 74ch;
+}
+
+.admin__objective {
+  font-size: var(--t-lg);
+  color: var(--ink);
+  margin: 0 0 0.6rem;
+  max-width: 62ch;
+}
+
+.admin__lead {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin: 0 0 0.9rem;
+  max-width: 74ch;
+}
+
+.admin__hint {
+  display: block;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  margin-bottom: 0.2rem;
+}
+
+.admin__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.admin__fixture {
+  background-color: var(--board-quiet);
+  border-radius: var(--r-md);
+  padding: 0.9rem 1.1rem;
+}
+
+.admin__fixture-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+
+.admin__preview {
+  margin-top: 1.25rem;
+  max-width: 34rem;
+}

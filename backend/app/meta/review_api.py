@@ -27,6 +27,14 @@ from app.meta.approval import (
     TemplateNameConflictError,
     approve_draft_service,
 )
+from app.meta.promotion import (
+    PromotionEvidenceError,
+    PromotionNameConflictError,
+    VersionNotFoundError,
+    VersionNotPromotableError,
+    enabled_versions,
+    promote_version,
+)
 from app.meta.review_actions import (
     DraftNotRefinableError,
     DraftRefinementFailedError,
@@ -381,6 +389,53 @@ def reject_draft(draft_id: str, request: RejectRequest):
     if new_draft is None:
         return RejectResponse(new_draft=None, needs_manual_authoring=True)
     return RejectResponse(new_draft=_draft_summary(new_draft), needs_manual_authoring=False)
+
+
+class TemplateVersionOut(BaseModel):
+    id: str
+    template_name: str
+    fingerprint_key: str
+    owner_session_id: str | None
+    created_at: datetime
+
+
+@router.get(
+    "/versions",
+    response_model=list[TemplateVersionOut],
+    dependencies=[Depends(require_reviewer_token)],
+)
+def list_versions():
+    """The live template library, showing which versions are private to a session."""
+    return [TemplateVersionOut(**row) for row in enabled_versions()]
+
+
+@router.post(
+    "/versions/{version_id}/promote",
+    response_model=TemplateVersionOut,
+    dependencies=[Depends(require_reviewer_token)],
+)
+def promote(version_id: str):
+    """Share one teacher's template with everyone.
+
+    Re-checks the full fixture floor: a session-scoped approval is allowed a
+    relaxed one, and that allowance must not travel with the template.
+    """
+    try:
+        version = promote_version(version_id)
+    except VersionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PromotionEvidenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (VersionNotPromotableError, PromotionNameConflictError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return TemplateVersionOut(
+        id=version.id,
+        template_name=version.template_name,
+        fingerprint_key=version.fingerprint_key,
+        owner_session_id=version.owner_session_id,
+        created_at=version.created_at,
+    )
 
 
 @router.post(

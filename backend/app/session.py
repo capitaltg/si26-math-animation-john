@@ -1,6 +1,7 @@
 import shutil
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +15,27 @@ DEFAULT_MAX_THUMBNAILS = 1000
 
 
 @dataclass
+class TemplateRequest:
+    """One teacher's request to build a template for one candidate.
+
+    ``fingerprint_key`` stays None until the background task has tagged the
+    problem successfully, which is what separates "filed" from "queued". If that
+    task cannot get as far as a queued job it writes a teacher-readable sentence
+    into ``error``; without it a request whose background work died would report
+    progress forever, since there would be no job row to derive a stage from.
+    """
+
+    candidate_id: str
+    requested_at: datetime
+    fingerprint_key: str | None = None
+    error: str | None = None
+    #: True when the request was declined because this session can already reach
+    #: a template for the shape. Nothing went wrong, so it must not be reported
+    #: as a failure.
+    already_available: bool = False
+
+
+@dataclass
 class Session:
     session_id: str
     candidates: dict[str, Candidate]
@@ -23,6 +45,7 @@ class Session:
     scene_order: list[str] = field(default_factory=list)
     scene_requested_template: dict[str, TemplateRef] = field(default_factory=dict)
     scene_chain_members: dict[str, list[str]] = field(default_factory=dict)
+    template_requests: dict[str, TemplateRequest] = field(default_factory=dict)
 
 
 class SessionStore:

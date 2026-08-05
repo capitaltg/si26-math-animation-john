@@ -35,7 +35,11 @@ def _kilometers_plan():
         "supporting_visuals": [
             {"kind": "label", "ref": "conversion_label", "text": "1 km = 1000 m"},
         ],
-        "strategy": "magnitude_comparison",
+        # `magnitude_comparison` on a bar now requires a literal bar value so
+        # the compile-time sweep can address specific segments (issue #66).
+        # This lesson's bar takes a field-driven value, so it uses `group_reveal`
+        # instead -- the strategy is not what the test asserts on.
+        "strategy": "group_reveal",
         "answer_unit": "meters",
         "beats": [
             {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "km_bar"}],
