@@ -128,6 +128,11 @@ def _candidate(proposal):
             "compiler_version": 3,
             "renderer_version": 3,
             "negative_predicate_coverage": [0],
+            # See test_drafts.py: `build_validation_report` always includes
+            # `known_fields` and `artifact_hash`; approval precondition 4
+            # cross-checks the latter against the draft's stored hash.
+            "known_fields": ["length", "width"],
+            "artifact_hash": "sha256:candidate",
         },
         quality_report={"passed": True, "checks": [], "artifact_hash": "sha256:candidate"},
         preview_artifact_hash="sha256:preview",
@@ -177,11 +182,21 @@ def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monke
     from fastapi.testclient import TestClient
 
     _seed_job_and_observation()
+    # Seed leak-prone text into every V3Failure field. If run_generation_job
+    # (or the routes serving job/draft state) ever forwarded any part of the
+    # failure onto the reviewer surface, one of these substrings would appear
+    # in the response bodies below. Modelled on test_draft_generation.py's
+    # reviewer-feedback pattern.
+    _LEAK_MARKERS = (
+        'File "/app/meta/generation_pipeline.py"',
+        "Traceback (most recent call last)",
+        "secret internals",
+    )
     failure = V3Failure(
         code="serial_simple_reveal",
-        path="timeline",
-        expected="together",
-        observed="stagger",
+        path='timeline (File "/app/meta/generation_pipeline.py", line 42)',
+        expected="together (secret internals)",
+        observed="stagger\nTraceback (most recent call last):\n  raise V3ValidationError(...)",
         hint="reveal values together",
     )
     from app.meta.generation_pipeline import CandidateGenerationExhausted
@@ -231,7 +246,15 @@ def test_run_generation_job_marks_retry_exhaustion_manual_with_public_code(monke
     for payload in (job_response.json(), draft_response.json()):
         reviewer_visible = json.dumps(payload)
         assert "meta-template generation exhausted automatic validation retries" not in reviewer_visible
-        assert "traceback" not in reviewer_visible.lower()
+        # The failure above deliberately embeds substrings that ONLY reach the
+        # reviewer surface if some part of `V3Failure` leaks. Vacuous
+        # `"traceback"`-not-in checks would pass even when nothing was seeded;
+        # this fails the day any of `V3Failure.path/expected/observed` is
+        # forwarded onto the wire.
+        for marker in _LEAK_MARKERS:
+            assert marker not in reviewer_visible, (
+                f"{marker!r} leaked into the reviewer-visible payload"
+            )
 
 
 def _running_job_and_observations():

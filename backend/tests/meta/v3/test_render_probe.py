@@ -227,9 +227,18 @@ def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
     assert "state_order_invalid" not in _failure_codes(valid_manifest)
 
 
+# Every key `check_manifest_contract` types as required must, when absent,
+# fail the contract check. Enumerated here rather than sampled -- silently
+# widening the manifest without extending this list would leave the new field
+# unguarded.
 @pytest.mark.parametrize("field", [
-    "relations", "state_events", "path_events", "final_answer_visible",
-    "final_answer_text", "declared_answer_text", "answer_anchor",
+    "frame_size", "total_duration_seconds", "conclusion_hold_seconds",
+    "final_beat_observed", "simple_reveal_mode", "frames", "safe_frame",
+    "visual_bounds", "anchors", "relations", "declared_relations",
+    "path_events", "declared_path_events", "dimension_labels",
+    "declared_dimension_labels", "state_events", "declared_state_events",
+    "final_answer_visible", "final_answer_text", "declared_answer_text",
+    "answer_anchor", "derivation_visible",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
     del valid_manifest[field]
@@ -238,6 +247,22 @@ def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_m
 
     assert report.passed is False
     assert "render_probe_contract_invalid" in [check.code for check in report.checks if not check.passed]
+
+
+def test_manifest_contract_sweep_covers_every_required_field(valid_manifest):
+    """Guard the guard: sweep every key of `valid_manifest` and confirm that
+    deleting it causes `render_probe_contract_invalid`. If a new required key
+    is added but the parametrized sweep above doesn't include it, the new
+    field goes unguarded silently -- this test surfaces that drift.
+    """
+    for field in list(valid_manifest.keys()):
+        candidate = dict(valid_manifest)
+        del candidate[field]
+        report = validate_rendered_quality(candidate)
+        codes = [check.code for check in report.checks if not check.passed]
+        assert "render_probe_contract_invalid" in codes, (
+            f"deleting `{field}` did not trip the contract check"
+        )
 
 
 def test_rendered_quality_rejects_declared_state_not_observed_by_renderer(valid_manifest):
@@ -258,7 +283,12 @@ def test_rendered_report_surfaces_only_structured_failure(valid_manifest):
     with pytest.raises(V3ValidationError, match="final_answer_not_persistent") as exc_info:
         report.require_passed()
 
-    assert "traceback" not in str(exc_info.value).lower()
+    failed = next(check for check in report.checks if not check.passed)
+    # `V3ValidationError.__str__` is a fixed template built from compile-time
+    # strings (`code`, `path`, `observed=detail`); pin that exact shape rather
+    # than a `"traceback" not in ...` check whose keyword never appears there
+    # regardless.
+    assert str(exc_info.value) == f"{failed.code} at {failed.path}: {failed.detail}"
 
 
 def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
@@ -293,6 +323,60 @@ def test_preview_route_stores_only_a_passing_probed_final_frame(tmp_path):
 
     assert artifact_exists(tmp_path, artifact_hash)
     assert manifest["final_answer_visible"] is True
+
+
+def test_preview_route_persists_no_artifact_when_the_probe_fails(tmp_path, monkeypatch):
+    """The positive test above proves a passing probe stores an artifact; this
+    proves the negative: `render_preview_and_probe` calls `require_passed`
+    BEFORE `store_artifact` (see `preview_render.py`), so a failing manifest
+    must raise and must not leave a persisted artifact behind.
+    """
+    from app.meta import preview_render
+    from app.meta.v3.quality import QualityCheck, QualityReport
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle perimeter by tracing its boundary.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "boundary_trace",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "trace_boundary", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "trace every edge of the boundary"},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the perimeter"},
+        ],
+        "variation_seed": "preview-probe-negative",
+    })
+    program = compile_teaching_plan(
+        plan, MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+    def _force_failure(_manifest):
+        return QualityReport(passed=False, checks=[QualityCheck(
+            code="final_answer_not_persistent", passed=False,
+            path="final_answer_visible",
+            detail="the resolved answer must remain visible in the final frame",
+        )])
+
+    monkeypatch.setattr(preview_render, "validate_rendered_quality", _force_failure)
+
+    with pytest.raises(V3ValidationError, match="final_answer_not_persistent"):
+        preview_render.render_preview_and_probe(
+            program, frozenset({"length", "width"}), {"length": 8, "width": 3}, tmp_path,
+        )
+    # `store_artifact` is called AFTER `require_passed`; nothing under the
+    # artifact root should have been written.
+    assert not list(tmp_path.iterdir()), (
+        "a failing probe must not persist a preview artifact"
+    )
 
 
 def _legacy_shaped_program():
@@ -462,7 +546,7 @@ def test_a_unit_tape_lesson_renders_through_the_probe():
     `render_probe_failed`. A real render is the only proof the payload keys and
     the renderer agree.
     """
-    from test_unit_tape import _compile, _tape_plan
+    from .test_unit_tape import _compile, _tape_plan
 
     program = _compile(_tape_plan())
 

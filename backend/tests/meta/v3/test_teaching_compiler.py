@@ -163,7 +163,10 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
         if action.kind == "show_relation" and action.relation_ref == "median_callout"
     )
     assert focus_index < conclusion_index
-    assert 6 <= program.total_duration_seconds <= 12
+    # Total-duration bounds are enforced by `SceneProgramDocument`
+    # (Field(ge=MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS)), so a valid return
+    # already satisfies them; the scheduler raises `timeline_over_budget`
+    # before that when it cannot fit.
 
 
 def test_pair_elimination_rejects_an_answer_that_is_not_the_middle_value(
@@ -374,7 +377,6 @@ def test_each_pair_step_is_long_enough_to_read(median_plan, answer, compile_cont
         if entry.action.kind == "set_role" and entry.action.role == "neutral"
     ]
     assert all(entry.duration_seconds >= 1.3 for entry in dimmed)
-    assert program.total_duration_seconds <= 12
 
 
 def test_a_fifteen_value_elimination_still_fits_the_scene_budget(answer, compile_context):
@@ -404,7 +406,10 @@ def test_a_fifteen_value_elimination_still_fits_the_scene_budget(answer, compile
         TeachingPlanDocument.model_validate(raw), FieldRefNode(field="v8"),
         frozenset({f"v{i}" for i in range(1, 16)}), compile_context,
     )
-    assert 6 <= program.total_duration_seconds <= 12
+    # Successful return means SceneProgramDocument's bounds
+    # (ge=MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS) already accepted the total;
+    # what this test asserts specifically is that 15 values still compile.
+    assert program.timeline, "15-value plan must produce a timeline"
 
 
 def test_pair_elimination_declares_no_answer_card(median_plan, answer, compile_context):
@@ -656,6 +661,40 @@ def test_style_recipe_is_deterministic(median_plan, answer, compile_context):
     second = compile_teaching_plan(median_plan, answer, known_fields, compile_context)
 
     assert first.style_recipe == second.style_recipe
+
+
+def test_style_recipe_varies_when_the_variation_seed_changes(
+    median_plan, answer, compile_context,
+):
+    """Determinism is only interesting if the hash is actually consumed.
+    `resolve_style_recipe` derives BOTH palette (from `digest[0] % 3`) and
+    motion (from `digest[1] % 2`) off the same sha256 of the joined key, so
+    a compiler that stopped feeding `variation_seed` through would freeze
+    palette AND motion at once. Assert each field takes more than one value
+    across a seed sweep -- an OR would let a bug that pins the palette but
+    varies motion (or vice versa) go undetected.
+    """
+    known_fields = frozenset({f"v{i}" for i in range(1, 8)})
+    recipes = []
+    for seed in (
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta",
+        "eta", "theta", "iota", "kappa", "lambda", "mu",
+    ):
+        raw = median_plan.model_dump()
+        raw["variation_seed"] = seed
+        plan = TeachingPlanDocument.model_validate(raw)
+        recipes.append(
+            compile_teaching_plan(plan, answer, known_fields, compile_context).style_recipe,
+        )
+
+    palettes = {recipe.palette for recipe in recipes}
+    motions = {recipe.motion_variant for recipe in recipes}
+    assert len(palettes) > 1, (
+        f"palette should vary with variation_seed; got only {palettes!r}"
+    )
+    assert len(motions) > 1, (
+        f"motion_variant should vary with variation_seed; got only {motions!r}"
+    )
 
 
 def test_bounded_custom_draw_transform_and_move_actions_are_preserved(

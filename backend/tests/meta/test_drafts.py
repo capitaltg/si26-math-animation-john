@@ -106,6 +106,13 @@ def validated_candidate():
             "compiler_version": 3,
             "renderer_version": 3,
             "negative_predicate_coverage": [0],
+            # `build_validation_report` in validation_pipeline.py always emits
+            # `known_fields` and `artifact_hash`; approval precondition 4
+            # cross-checks `artifact_hash` against the draft, so a fixture
+            # omitting this key cannot detect a recurrence of the defect fixed
+            # in #50.
+            "known_fields": ["length", "width"],
+            "artifact_hash": "sha256:candidate",
         },
         quality_report={"passed": True, "checks": [], "artifact_hash": "sha256:candidate"},
         preview_artifact_hash="sha256:preview",

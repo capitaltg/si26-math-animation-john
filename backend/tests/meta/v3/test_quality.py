@@ -99,33 +99,6 @@ def _perimeter_candidate():
 
 def apply_literal_test_mutation(candidate, mutation):
     program = candidate.program
-    if mutation == "split_group_reveal":
-        timeline = [
-            entry.model_copy(update={"action": entry.action.model_copy(update={"mode": "stagger"})})
-            if entry.action.kind == "reveal" and entry.action.targets[0].visual_ref == "values" else entry
-            for entry in program.timeline
-        ]
-        return Candidate(candidate.plan, program.model_copy(update={"timeline": timeline}))
-    if mutation == "initial_answer_focus":
-        # Mutated on the perimeter lesson: the median's answer is one of its own
-        # values, so its program declares no `evaluated_answer` card to give a
-        # premature role to.
-        plan = _perimeter_plan()
-        perimeter = _compile(
-            plan,
-            MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
-            {"length", "width"},
-        )
-        visuals = [
-            visual.model_copy(update={"initial_role": "focus"}) if visual.ref == "evaluated_answer" else visual
-            for visual in perimeter.visuals
-        ]
-        return Candidate(plan, perimeter.model_copy(update={"visuals": visuals}))
-    if mutation == "row_anchor_for_item":
-        relation = program.relations[0]
-        row_target = relation.target.model_copy(update={"part": None, "index": None, "anchor": "center"})
-        relations = [relation.model_copy(update={"target": row_target}), *program.relations[1:]]
-        return Candidate(candidate.plan, program.model_copy(update={"relations": relations}))
     if mutation == "remove_perimeter_trace":
         plan = _perimeter_plan()
         perimeter = _compile(
@@ -142,14 +115,6 @@ def apply_literal_test_mutation(candidate, mutation):
             for entry in program.timeline
         ]
         return Candidate(candidate.plan, program.model_copy(update={"timeline": timeline}))
-    if mutation == "insert_unexplained_wait":
-        timeline = [
-            entry.model_copy(update={"at_seconds": entry.at_seconds + 1.0}) if entry.at_seconds >= 2.9 else entry
-            for entry in program.timeline
-        ]
-        return Candidate(candidate.plan, program.model_copy(update={
-            "timeline": timeline, "total_duration_seconds": program.total_duration_seconds + 1.0,
-        }))
     if mutation == "detach_dimension_label":
         # A dimension relation is identified by its typed target part
         # (`length_edge`/`width_edge` -- the same parts
@@ -179,8 +144,6 @@ def apply_literal_test_mutation(candidate, mutation):
     if mutation == "overlap_callout":
         duplicate = program.relations[0].model_copy(update={"ref": "second_callout"})
         return Candidate(candidate.plan, program.model_copy(update={"relations": [*program.relations, duplicate]}))
-    if mutation == "extend_to_13_seconds":
-        return Candidate(candidate.plan, program.model_copy(update={"total_duration_seconds": 13.0}))
     if mutation == "repeat_reveal":
         # Two beats naming the same visual compiled to two `reveal` actions on
         # it, so the rendered scene faded the same mobject in twice. Duplicate
@@ -201,16 +164,35 @@ def apply_literal_test_mutation(candidate, mutation):
     raise AssertionError(f"unknown mutation {mutation}")
 
 
+# Retired mutations. Each of these is either a pure invariant enforced by
+# pydantic upstream (so the check is a defensive assertion, not a live gate),
+# or fabricates a program shape the compiler cannot emit:
+#
+# - `initial_answer_focus`: AnswerProgramVisual.initial_role is
+#   Literal["neutral"]; the `visuals.evaluated_answer.initial_role` branch of
+#   `check_answer_timing` is a pure invariant.
+# - `extend_to_13_seconds`: SceneProgramDocument.total_duration_seconds has
+#   le=MAX_SCENE_SECONDS=12; the `timeline_over_budget` branch of
+#   `check_duration` is a pure invariant. The scheduler's independent
+#   `timeline_over_budget` gate is exercised through `schedule_beats`
+#   directly (see test_teaching_compiler.py).
+# - `split_group_reveal`: reachable via a real short_stagger plan
+#   (covered by `test_a_short_stagger_plan_on_ordered_values_fails_the_reveal_together_gate`
+#   below).
+# - `row_anchor_for_item`: reachable via a real whole-collection callout
+#   (covered by `test_a_whole_collection_callout_still_fails_semantic_anchor_specificity`
+#   below).
+# - `insert_unexplained_wait`: the compiler emits a contiguous timeline
+#   (`app/meta/v3/timeline.py:43-69` advances a single cursor per beat), so
+#   an idle gap only appears when a beat compiles to zero actions -- which
+#   `check_every_beat_acts` already fails with `beat_without_action`
+#   (covered by `test_a_beat_that_produces_no_action_is_named_rather_than_reported_as_idle_time`).
+#   `check_unexplained_idle_time` is a defensive assertion for that shape.
 @pytest.mark.parametrize("mutation,expected_code", [
-    ("split_group_reveal", "serial_simple_reveal"),
-    ("initial_answer_focus", "premature_answer_emphasis"),
-    ("row_anchor_for_item", "collection_anchor_for_item"),
     ("remove_perimeter_trace", "static_process_visual"),
     ("short_final_hold", "conclusion_hold_too_short"),
-    ("insert_unexplained_wait", "unexplained_idle_time"),
     ("detach_dimension_label", "dimension_anchor_mismatch"),
     ("overlap_callout", "callout_collision"),
-    ("extend_to_13_seconds", "timeline_over_budget"),
     ("repeat_reveal", "repeated_reveal"),
     ("declare_unused_visual", "unused_visual"),
 ])
@@ -221,6 +203,52 @@ def test_quality_mutations_fail(valid_program, mutation, expected_code):
 
     assert report.passed is False
     assert expected_code in [check.code for check in report.checks if not check.passed]
+
+
+def test_a_short_stagger_plan_on_ordered_values_fails_the_reveal_together_gate():
+    """`check_grouped_simple_reveals` refuses any ordered_values reveal whose
+    mode is not `together`. The compiler emits `stagger` mode when
+    `plan.strategy == "short_stagger"` (`beat_expander.py:289`), which
+    `visual_registry.py` accepts for ordered_values -- so this shape is
+    reachable compiler output, and the failing input is a real
+    `SceneProgramDocument` from `compile_teaching_plan`, not a `model_copy`
+    of one.
+    """
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values", "ref": "values",
+            "values": [_field(f"v{index}") for index in range(1, 8)],
+        },
+        "strategy": "short_stagger",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "reveal the ordered values one after another"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "quality-short-stagger",
+    })
+    program = _compile(plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)})
+    stagger_reveal = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.visual_ref == "values" for target in entry.action.targets)
+    )
+    assert stagger_reveal.action.mode == "stagger", (
+        "the compiler must really emit a stagger reveal for a short_stagger plan"
+    )
+
+    report = validate_static_quality(plan, program)
+
+    assert report.passed is False
+    failed_codes = [check.code for check in report.checks if not check.passed]
+    assert "serial_simple_reveal" in failed_codes
 
 
 def _mid_scene_conclude_plan_data():
@@ -643,27 +671,59 @@ def test_valid_compiled_candidate_passes_and_exposes_reviewer_safe_payload(valid
     report = validate_static_quality(valid_program.plan, valid_program.program)
 
     assert report.passed is True
-    assert report.model_payload() == {
-        "passed": True,
-        "checks": [
-            {"code": check.code, "passed": True, "path": check.path, "detail": check.detail}
-            for check in report.checks
-        ],
-    }
+    payload = report.model_payload()
+    # Payload is a reviewer-safe surface: only the two documented top-level
+    # keys, one per-check entry per check the report actually ran, and
+    # nothing from the candidate itself (plans/programs/fixture values).
+    assert set(payload.keys()) == {"passed", "checks"}
+    assert payload["passed"] is True
+    # Every check `validate_static_quality` runs must round-trip through the
+    # payload -- returning `{"checks": []}` would pass a set-of-keys assertion
+    # but is precisely the shape a broken `model_payload` would emit.
+    assert len(payload["checks"]) == len(report.checks) > 0
+    payload_codes = [entry["code"] for entry in payload["checks"]]
+    report_codes = [check.code for check in report.checks]
+    assert payload_codes == report_codes
+    # A representative sample of gate codes `validate_static_quality`
+    # composes over. If any of these are ever removed from the report, this
+    # test must be updated deliberately rather than silently continuing to
+    # pass with an empty payload.
+    for expected_code in (
+        "serial_simple_reveal",
+        "premature_answer_emphasis",
+        "conclusion_hold_too_short",
+        "beat_without_action",
+        "unexplained_idle_time",
+    ):
+        assert expected_code in payload_codes
+    for entry in payload["checks"]:
+        assert set(entry.keys()) == {"code", "passed", "path", "detail"}
+        assert isinstance(entry["code"], str) and entry["code"]
+        assert entry["passed"] is True
+        assert isinstance(entry["path"], str)
+        assert isinstance(entry["detail"], str)
+    serialized = str(payload)
+    # No fixture values (`v1`..`v7`) or plan/program object addresses should
+    # reach the reviewer surface.
+    for field in (f"v{i}" for i in range(1, 8)):
+        assert field not in serialized
 
 
 def test_report_raises_first_structured_failure_without_candidate_contents(valid_program):
     report = validate_static_quality(
         valid_program.plan,
-        apply_literal_test_mutation(valid_program, "split_group_reveal").program,
+        apply_literal_test_mutation(valid_program, "overlap_callout").program,
     )
 
-    with pytest.raises(V3ValidationError, match="serial_simple_reveal") as exc_info:
+    with pytest.raises(V3ValidationError, match="callout_collision") as exc_info:
         report.require_passed()
 
     failed = next(check for check in report.checks if not check.passed)
     assert failed.detail in exc_info.value.failure.hint
-    assert "v4" not in str(exc_info.value)
+    # `V3ValidationError.__str__` composes only compile-time strings
+    # (`code`, `path`, `observed=detail`), so pin the exact shape rather than
+    # asserting a candidate value like `"v4"` cannot leak into it.
+    assert str(exc_info.value) == f"{failed.code} at {failed.path}: {failed.detail}"
 
 
 @pytest.mark.parametrize(
