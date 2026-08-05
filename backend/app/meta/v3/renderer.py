@@ -35,6 +35,11 @@ class RenderedScene:
     visuals: dict[str, object]
     targets: dict[tuple[str, str | None, int | None], object]
     relations: dict[str, object]
+    #: Alias/base keys that share a Line (e.g. `("edge", 0)` and
+    #: `("length_edge", 0)`) start at the same role but drift once a `set_role`
+    #: fires: only the addressed key is updated even though the Line's colour
+    #: changed. No production reader consults this today (only `test_renderer`),
+    #: so the divergence is inert -- fold both keys before adding one.
     roles: dict[tuple[str, str | None, int | None], str]
     #: Answer visual ref -> stage name -> mobject. Deliberately NOT in
     #: `targets`: a plan may address the answer, never one of its stages.

@@ -151,6 +151,10 @@ def check_answer_timing(plan, program) -> QualityCheck:
     # one beat in which the resolved value may appear. Kept as an independent
     # second layer: if the plan schema's beat-order rule is ever relaxed, this
     # check still fails the candidate rather than silently reporting success.
+    # It is also the only gate on the reserved-ref shape: nothing in the schema
+    # stops a plan from declaring its own visual named `evaluated_answer` and
+    # revealing it whenever it likes, so a reachability-annotation pass that
+    # retires this branch as dead would silently reopen that hole.
     conclusion_id = plan.beats[-1].id if plan.beats[-1].kind == "conclude" else None
     seen = []
     for index, entry in enumerate(program.timeline):
