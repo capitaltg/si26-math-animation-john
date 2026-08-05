@@ -59,19 +59,13 @@ def test_removed_strategy_is_rejected_at_schema_validation():
 # Strategies that `_SUPPORTED_STRATEGIES` offers and `expand_beats` does not
 # branch on. Shrinking this set is the work; each entry is a known gap.
 #
-#   group_reveal          -- the default path. Needs no branch, never will.
-#   regroup               -- degrades to an undifferentiated group reveal.
-#   magnitude_comparison  -- degrades to an undifferentiated group reveal.
+# `group_reveal` is the default path and never needed a branch; it appears in
+# the source text only as a comment describing what the other branches contrast
+# with, which is enough to clear the source-text mention check below.
 #
-# The two degrading entries produce no failure and no warning, only a wrong
-# animation. See the design's "Schema-complete, behavior-thin" tier:
+# See the design's "Schema-complete, behavior-thin" tier:
 # docs/superpowers/specs/2026-08-03-v3-capability-consistency-design.md
-# Tracking issue: capitaltg/si26-math-animation-john#66
-_STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR = {
-    "group_reveal",
-    "magnitude_comparison",
-    "regroup",
-}
+_STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR = set()
 
 
 def test_every_supported_strategy_has_expander_behavior():
