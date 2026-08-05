@@ -64,10 +64,9 @@ def place_vertical_lesson(
     relations: Sequence[object] = (),
 ) -> list[PlacedVisual]:
     arrangement = _arrange(measured_visuals)
-    callout_interior = _primary_bottom_callout_interior(arrangement.primary, relations)
-    has_below_gap = bool(arrangement.below)
+    callout_room = _bottom_callout_room_per_scale(arrangement, relations)
     scale = min(1.0, _fit_instructional_scale(
-        arrangement, INSTRUCTIONAL_FRAME, callout_interior, has_below_gap,
+        arrangement, INSTRUCTIONAL_FRAME, callout_room,
     ))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
@@ -77,7 +76,7 @@ def place_vertical_lesson(
             observed=f"{scale:g}",
             hint="reduce visual content so the lesson remains readable",
         ))
-    primary_bottom_pad = _callout_pad(callout_interior, scale, has_below_gap)
+    primary_bottom_pad = _callout_pad(callout_room, scale)
     placed_by_ref = {
         item.measured.ref: item
         for item in _place_instructional(
@@ -122,22 +121,42 @@ def _primary_bottom_callout_interior(primary, relations):
     return interior
 
 
-def _callout_pad(callout_interior, scale, has_below_gap):
-    """Fixed world-unit clearance that must sit below the primary band.
+def _bottom_callout_room_per_scale(arrangement, relations):
+    """Room, per unit of `scale`, between a bottom-anchored callout's anchor
+    on the primary and whatever the callout tip must stay above.
 
-    The callout renders `CALLOUT_ENVELOPE` below its anchor at a fixed font
-    size, regardless of the lesson's uniform scale. Room already available
-    is `interior * scale` (the interior clearance within the primary's own
-    bounds) plus, only when there is something in the below stack for
-    `_place_instructional` to push, the `GAP * scale` gap it inserts between
-    the primary band and that stack. Only the shortfall has to be added.
-    An answerless lesson with no below stack inserts no gap, so counting one
-    would place the callout tip outside the safe frame.
+    Three summands, all in unscaled units:
+    - `interior`: room within the primary's own bounds below the anchor
+      (rectangle_measurement's length label pushes bounds.bottom below
+      length_edge[0].bottom by ~0.68).
+    - `band_padding`: half the amount a taller side visual makes the band
+      exceed the primary. Side visuals share the primary's center Y, so a
+      side visual 8.5 tall beside a 1.0 primary drops band_bottom another
+      3.75 below primary.bounds.bottom.
+    - `GAP` if `arrangement.below` is nonempty: the gap
+      `_place_instructional` inserts between the primary band and the below
+      stack. Answerless layouts insert no such gap.
+
+    Returns None when no bottom-anchored callout targets the primary, so the
+    layout skips the callout math entirely.
     """
-    if callout_interior is None:
+    interior = _primary_bottom_callout_interior(arrangement.primary, relations)
+    if interior is None:
+        return None
+    band_padding = max(0.0, (_band_height(arrangement) - _height(arrangement.primary)) / 2)
+    below_gap = GAP if arrangement.below else 0.0
+    return interior + band_padding + below_gap
+
+
+def _callout_pad(callout_room_per_scale, scale):
+    """Fixed world-unit clearance to add below the primary band for a
+    bottom-anchored callout. Only the shortfall against the envelope,
+    after crediting the room already available at the solved `scale`,
+    has to be reserved.
+    """
+    if callout_room_per_scale is None:
         return 0.0
-    room_per_scale = callout_interior + (GAP if has_below_gap else 0.0)
-    return max(0.0, CALLOUT_ENVELOPE - room_per_scale * scale)
+    return max(0.0, CALLOUT_ENVELOPE - callout_room_per_scale * scale)
 
 
 def _arrange(instructional: Sequence[MeasuredVisual]) -> _Arrangement:
@@ -196,14 +215,14 @@ def _stack_height(items: Sequence[MeasuredVisual], gap: float) -> float:
 
 def _fit_instructional_scale(
     arrangement: _Arrangement, frame: Bounds,
-    callout_interior: float | None = None, has_below_gap: bool = False,
+    callout_room_per_scale: float | None = None,
 ) -> float:
     if arrangement.primary is None:
         return 1.0
     primary = arrangement.primary
     vertical_scale = _fit_vertical_scale(
         _column_height(arrangement, GAP), frame.top - frame.bottom,
-        callout_interior, has_below_gap,
+        callout_room_per_scale,
     )
     half_width = (frame.right - frame.left) / 2
     horizontal_scale = min(
@@ -236,17 +255,15 @@ def _fit_extent(extent: float, available: float) -> float:
 
 
 def _fit_vertical_scale(
-    column_h: float, frame_h: float, callout_interior, has_below_gap: bool,
+    column_h: float, frame_h: float, callout_room_per_scale,
 ) -> float:
     """The largest scale that fits the column and any callout envelope.
 
     Without a bottom callout on the primary this is just `frame_h / column_h`.
     With one, the callout adds a fixed world-unit demand (`CALLOUT_ENVELOPE`)
-    which is not scaled. `interior * scale` of that demand is met by the
-    anchor's interior clearance within the primary, and `GAP * scale` more
-    is met by the gap `_place_instructional` inserts between the primary
-    band and the below stack -- but only when a below stack exists. Answerless
-    layouts insert no such gap, so `has_below_gap` gates that credit.
+    which is not scaled. `callout_room_per_scale * s` of that demand is met
+    by clearance already present at that scale (see
+    `_bottom_callout_room_per_scale` for the summands).
 
     The joint vertical constraint is
     `column_h * s + max(0, CALLOUT_ENVELOPE - room_per_scale * s) <= frame_h`,
@@ -255,17 +272,16 @@ def _fit_vertical_scale(
     if not column_h:
         return 1.0
     unpadded_scale = frame_h / column_h
-    if callout_interior is None:
+    if callout_room_per_scale is None:
         return unpadded_scale
-    room_per_scale = callout_interior + (GAP if has_below_gap else 0.0)
-    if room_per_scale * unpadded_scale >= CALLOUT_ENVELOPE:
-        # The already-present room absorbs the envelope at the ordinary scale;
+    if callout_room_per_scale * unpadded_scale >= CALLOUT_ENVELOPE:
+        # Already-present room absorbs the envelope at the ordinary scale;
         # no pad, no scale penalty.
         return unpadded_scale
-    denominator = column_h - room_per_scale
+    denominator = column_h - callout_room_per_scale
     if denominator <= 0:
-        # The primary's own interior plus the gap outweigh the whole column;
-        # nothing left for the pad to bind against.
+        # Room-per-scale outweighs the whole column; nothing left for the pad
+        # to bind against.
         return 1.0
     return (frame_h - CALLOUT_ENVELOPE) / denominator
 
