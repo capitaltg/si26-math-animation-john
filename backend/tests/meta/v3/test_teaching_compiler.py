@@ -1343,3 +1343,239 @@ def test_pair_elimination_still_declares_no_answer_visual(
     assert not [visual for visual in program.visuals if visual.ref == "evaluated_answer"]
     assert not [entry for entry in program.timeline if entry.action.kind == "show_answer_stage"]
     assert program.answer_anchor is not None
+
+
+# ---------------------------------------------------------------------------
+# regroup and magnitude_comparison
+# ---------------------------------------------------------------------------
+#
+# Before these branches existed, a `regroup` grid or a `magnitude_comparison`
+# bar/number_line validated, compiled, and rendered as a whole-visual reveal
+# with no strategy-specific animation. The expander now walks the primary
+# visual's semantic parts and emits observable role changes that read as the
+# strategy names them. See issue #66.
+
+
+def _grid_regroup_plan(rows, columns):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See a rectangle as rows of equal groups.",
+        "primary_visual": {
+            "kind": "grid", "ref": "array",
+            "rows": {"node": "literal", "value": rows},
+            "columns": {"node": "literal", "value": columns},
+        },
+        "strategy": "regroup",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "array"}],
+             "intent": "show the array"},
+            {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "array"}],
+             "intent": "see the array as rows"},
+            {"id": "count", "kind": "derive", "targets": [{"visual_ref": "array"}],
+             "intent": "multiply rows by columns"},
+            {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "array"}],
+             "intent": "state the total"},
+        ],
+        "variation_seed": "grid-regroup",
+    })
+
+
+def test_regroup_grid_cycles_each_row_through_a_constraint_accent(compile_context):
+    plan = _grid_regroup_plan(rows=2, columns=3)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    organize = [entry for entry in program.timeline if entry.beat_id == "regroup"]
+    role_actions = [entry.action for entry in organize if entry.action.kind == "set_role"]
+
+    assert role_actions, "regroup must emit set_role actions on the primary visual"
+    assert all(action.target.visual_ref == "array" for action in role_actions)
+    assert all(action.target.part == "cell" for action in role_actions)
+    assert {action.role for action in role_actions} == {"constraint", "structure"}
+    assert [action.target.index for action in role_actions] == [
+        0, 1, 2, 0, 1, 2,  # row 0: highlight then release
+        3, 4, 5, 3, 4, 5,  # row 1: highlight then release
+    ]
+    assert [action.role for action in role_actions] == [
+        "constraint", "constraint", "constraint",
+        "structure", "structure", "structure",
+        "constraint", "constraint", "constraint",
+        "structure", "structure", "structure",
+    ]
+
+
+def test_regroup_grid_recolours_each_row_at_a_single_instant(compile_context):
+    """Row-simultaneous recolour is the point: three cells that fade at the
+    same time read as ONE group, three that fade sequentially read as a wave.
+    """
+    plan = _grid_regroup_plan(rows=2, columns=3)
+    answer = MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    starts = {}
+    for entry in program.timeline:
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role":
+            starts.setdefault(entry.at_seconds, []).append(
+                (entry.action.role, entry.action.target.index),
+            )
+
+    assert len(starts) == 4, "two rows × (highlight, release) = 4 slots"
+    for slot_actions in starts.values():
+        roles = {role for role, _index in slot_actions}
+        assert len(roles) == 1, f"slot mixes roles {roles}"
+        assert len(slot_actions) == 3, "each row's three cells share one slot"
+
+
+def test_regroup_object_set_walks_five_per_row_and_stops_at_count(compile_context):
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "See a group of objects as rows of five.",
+        "primary_visual": {
+            "kind": "object_set", "ref": "objects",
+            "count": {"node": "literal", "value": 6},
+        },
+        "strategy": "regroup",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "objects"}],
+             "intent": "show the objects"},
+            {"id": "regroup", "kind": "organize", "targets": [{"visual_ref": "objects"}],
+             "intent": "see them as rows of five"},
+            {"id": "count", "kind": "derive", "targets": [{"visual_ref": "objects"}],
+             "intent": "count by rows"},
+            {"id": "state_total", "kind": "conclude", "targets": [{"visual_ref": "objects"}],
+             "intent": "state the total"},
+        ],
+        "variation_seed": "objects-regroup",
+    })
+    answer = LiteralNode(value=6)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    indices = [
+        entry.action.target.index for entry in program.timeline
+        if entry.beat_id == "regroup" and entry.action.kind == "set_role"
+    ]
+    # Row 0 (indices 0..4), then row 1 (only index 5). Each row highlighted
+    # then released, so every index appears twice and the second row is a
+    # single item -- 5 in row 0's cluster and 1 in row 1's.
+    assert indices == [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 5]
+
+
+def _bar_magnitude_plan(value, maximum):
+    return TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Read a bar's magnitude against its maximum.",
+        "primary_visual": {
+            "kind": "bar", "ref": "usage",
+            "value": {"node": "literal", "value": value},
+            "maximum": {"node": "literal", "value": maximum},
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "usage"}],
+             "intent": "show the bar"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "usage"}],
+             "intent": "sweep the bar's magnitude"},
+            {"id": "state_value", "kind": "conclude", "targets": [{"visual_ref": "usage"}],
+             "intent": "state the value"},
+        ],
+        "variation_seed": "bar-magnitude",
+    })
+
+
+def test_magnitude_comparison_bar_sweeps_focus_across_every_segment(compile_context):
+    plan = _bar_magnitude_plan(value=3, maximum=5)
+    answer = LiteralNode(value=3)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.part for action in focus_actions] == ["segment"] * 5
+    assert [action.target.index for action in focus_actions] == [0, 1, 2, 3, 4]
+
+
+def test_magnitude_comparison_bar_focuses_one_segment_per_instant(compile_context):
+    """`check_salience` rejects two focus role changes at the same at_seconds.
+    A per-part slot count is what keeps the sweep passing that gate.
+    """
+    plan = _bar_magnitude_plan(value=3, maximum=5)
+    answer = LiteralNode(value=3)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    starts = [
+        entry.at_seconds for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert len(set(starts)) == len(starts) == 5
+
+
+def test_magnitude_comparison_number_line_focuses_each_declared_marker(compile_context):
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Compare numeric magnitudes on a line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 10},
+            "markers": [
+                {"node": "literal", "value": 2},
+                {"node": "literal", "value": 5},
+                {"node": "literal", "value": 8},
+            ],
+        },
+        "strategy": "magnitude_comparison",
+        "answer_unit": "",
+        "beats": [
+            {"id": "orient", "kind": "orient", "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line"},
+            {"id": "sweep", "kind": "derive", "targets": [{"visual_ref": "line"}],
+             "intent": "compare each marker's magnitude"},
+            {"id": "state_answer", "kind": "conclude", "targets": [{"visual_ref": "line"}],
+             "intent": "state the largest"},
+        ],
+        "variation_seed": "number-line-magnitude",
+    })
+    answer = LiteralNode(value=8)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    focus_actions = [
+        entry.action for entry in program.timeline
+        if entry.beat_id == "sweep" and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+    ]
+    assert [action.target.part for action in focus_actions] == ["marker"] * 3
+    assert [action.target.index for action in focus_actions] == [0, 1, 2]
+
+
+def test_regroup_and_magnitude_comparison_plans_pass_every_quality_gate(compile_context):
+    """A pedagogically thin degrade would still validate; a working expander
+    must clear the same static-quality gates the older strategies clear.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    grid_plan = _grid_regroup_plan(rows=2, columns=3)
+    grid_program = compile_teaching_plan(
+        grid_plan, MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=3)]),
+        frozenset(), compile_context,
+    )
+    grid_report = validate_static_quality(grid_plan, grid_program)
+    assert grid_report.passed, [check for check in grid_report.checks if not check.passed]
+
+    bar_plan = _bar_magnitude_plan(value=3, maximum=5)
+    bar_program = compile_teaching_plan(
+        bar_plan, LiteralNode(value=3), frozenset(), compile_context,
+    )
+    bar_report = validate_static_quality(bar_plan, bar_program)
+    assert bar_report.passed, [check for check in bar_report.checks if not check.passed]

@@ -49,6 +49,12 @@ _SECONDS_PER_PAIR = 1.3
 #: step instead of failing to compile.
 _MAX_ELIMINATION_SECONDS = 6.0
 
+#: Which semantic part each strategy's expander walks. Kept next to the strategy
+#: tables here rather than derived from `_PART_CARDINALITY` in `compiler.py`,
+#: which `beat_expander` cannot import (compiler already depends on this module).
+_REGROUP_PART = {"grid": "cell", "object_set": "item"}
+_MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
@@ -160,16 +166,36 @@ class BeatExpander:
 
     @staticmethod
     def _slot_count(plan, beat, actions):
-        """One slot per pair, so both partners recolour at the same instant.
+        """Choose a slot count that groups related role changes into one instant.
 
         `timeline.schedule_beats` otherwise derives slots from the action count
-        and plays six recolours in sequence, which reads as a left-to-right wave
-        rather than as pairing. Derived from `len(actions)` rather than from the
-        value count so a suppressed no-op cannot leave an empty slot.
+        and plays every recolour in sequence, which reads as a left-to-right
+        wave rather than as the strategy's own grouping.
+
+        Derived from `len(actions)` rather than from a value count so a
+        suppressed no-op cannot leave an empty slot.
+
+        - pair_elimination organize: one slot per pair (two partners per slot).
+        - regroup organize: one slot per row, alternating highlight and release
+          (2R slots), so a whole row recolours together.
+        - magnitude_comparison focus/derive: one slot per part, so the focus
+          sweeps left to right and `check_salience` never sees two focus role
+          changes at one instant.
         """
-        if plan.strategy != "pair_elimination" or beat.kind != "organize" or not actions:
+        if not actions:
             return None
-        return -(-len(actions) // 2)
+        if plan.strategy == "pair_elimination" and beat.kind == "organize":
+            return -(-len(actions) // 2)
+        if plan.strategy == "regroup" and beat.kind == "organize":
+            layout = _regroup_layout(plan.primary_visual)
+            if layout is not None:
+                rows, _columns, _count = layout
+                return 2 * rows
+        if plan.strategy == "magnitude_comparison" and beat.kind in {"focus", "derive"}:
+            count = _magnitude_count(plan.primary_visual)
+            if count is not None and count > 0:
+                return count
+        return None
 
     def _standard_actions(
         self, plan, beat, relations, current_roles, revealed, boundary_trace_beat_id,
@@ -242,6 +268,29 @@ class BeatExpander:
         if beat.kind in {"orient", "reveal"}:
             return []  # `_reveal_unrevealed` has already staged the reveal
 
+        if beat.kind == "organize" and plan.strategy == "regroup":
+            # Cycle each row of the primary visual through the `constraint`
+            # accent and back to `structure`, so the collection reads as R
+            # groups of C rather than one undifferentiated set. Without this
+            # branch the beat falls through to `_generic_role_change`, which
+            # asserts `structure` on the whole visual -- a no-op, since every
+            # regroup-eligible visual is born `structure` -- and the animation
+            # is indistinguishable from `group_reveal`.
+            actions = self._regroup_actions(plan, current_roles)
+            if actions:
+                return actions
+
+        if beat.kind in {"focus", "derive"} and plan.strategy == "magnitude_comparison":
+            # Focus the primary visual's magnitude-carrying parts one at a
+            # time, so the observed extent sweeps left to right and the
+            # animation teaches the magnitude rather than asserting it. Without
+            # this branch a magnitude_comparison plan on a `bar` or
+            # `number_line` renders as a whole-visual focus -- the same shape
+            # as `group_reveal`.
+            actions = self._magnitude_comparison_actions(plan, current_roles)
+            if actions:
+                return actions
+
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
             # Iterate pairs, not indices. The middle item is never reached, so
             # the old `if index == middle: continue` guard goes with the loop it
@@ -281,6 +330,46 @@ class BeatExpander:
             ]
 
         return self._generic_role_change(beat, "structure", current_roles)
+
+    def _regroup_actions(self, plan, current_roles):
+        layout = _regroup_layout(plan.primary_visual)
+        if layout is None:
+            return []
+        rows, columns, count = layout
+        part = _REGROUP_PART[plan.primary_visual.kind]
+        ref = plan.primary_visual.ref
+        actions = []
+        for row in range(rows):
+            row_indices = [
+                row * columns + col
+                for col in range(columns)
+                if row * columns + col < count
+            ]
+            for index in row_indices:
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=ref, part=part, index=index),
+                    "constraint", current_roles,
+                ))
+            for index in row_indices:
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=ref, part=part, index=index),
+                    "structure", current_roles,
+                ))
+        return actions
+
+    def _magnitude_comparison_actions(self, plan, current_roles):
+        count = _magnitude_count(plan.primary_visual)
+        if count is None or count == 0:
+            return []
+        part = _MAGNITUDE_PART[plan.primary_visual.kind]
+        ref = plan.primary_visual.ref
+        actions = []
+        for index in range(count):
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=ref, part=part, index=index),
+                "focus", current_roles,
+            ))
+        return actions
 
     def _median_callout(self, plan, beat, relations):
         """Name the surviving middle value -- unless the plan already names it.
@@ -434,3 +523,52 @@ class BeatExpander:
 
 def expand_beats(plan, answer_expression):
     return BeatExpander(answer_expression=answer_expression).expand(plan)
+
+
+def _literal_int(expression):
+    """Extract a whole-number literal, or return None if the expression is not one.
+
+    The plan schema allows a visual's driving fields to be any `ExpressionNode`,
+    so a regroup or magnitude_comparison plan may hand-write an addition or a
+    field reference. Nothing here evaluates such expressions; the expander only
+    walks parts whose count it can read at compile time.
+    """
+    if getattr(expression, "node", None) != "literal":
+        return None
+    value = expression.value
+    if not float(value).is_integer():
+        return None
+    return int(value)
+
+
+def _regroup_layout(spec):
+    """Return (rows, columns, count) for the regroup walk, or None if unknown.
+
+    Grid rows and columns are read from the plan; object_set inherits the
+    5-per-row wrap the renderer uses in `_measure_object_set`. The two shapes
+    are kept close to their measurement so a walk here and a mobject there
+    address the same cells.
+    """
+    if spec.kind == "grid":
+        rows = _literal_int(spec.rows)
+        columns = _literal_int(spec.columns)
+        if rows is None or columns is None or rows <= 0 or columns <= 0:
+            return None
+        return rows, columns, rows * columns
+    if spec.kind == "object_set":
+        count = _literal_int(spec.count)
+        if count is None or count <= 0:
+            return None
+        columns = min(5, count)
+        rows = -(-count // columns)
+        return rows, columns, count
+    return None
+
+
+def _magnitude_count(spec):
+    """Number of parts the magnitude sweep walks, or None if unknown."""
+    if spec.kind == "bar":
+        return _literal_int(spec.maximum)
+    if spec.kind == "number_line":
+        return len(spec.markers)
+    return None
