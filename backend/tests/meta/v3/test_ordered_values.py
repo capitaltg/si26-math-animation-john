@@ -24,8 +24,36 @@ def test_median_item_anchor_uses_eight_bounds_not_row_center():
     )
     item_bottom = visual.anchor(part="item", index=3, name="bottom")
     row_bottom = visual.anchor(part=None, index=None, name="bottom")
+    item_bounds = visual.parts[("item", 3)].bounds
     assert item_bottom.x != row_bottom.x
-    assert item_bottom.x == visual.parts[("item", 3)].bounds.center.x
+    assert item_bottom.x == item_bounds.center.x
+    # Guard the y-coordinate too: the sibling test used to compare only .x, so
+    # a "bottom" that pointed to bounds.top would slip through.
+    assert item_bottom.y == item_bounds.bottom
+
+
+def test_named_anchors_return_the_named_edge_of_the_items_bounds():
+    """`geometry.MeasuredVisual.anchor` maps five names to edges of a bounds
+    rectangle. Any test that compares an anchor to `visual.anchor(...)` proves
+    only that the name maps to *something* consistently. Assert the geometric
+    property directly, once per name, so a swapped mapping fails here."""
+    visual = measure_ordered_values(
+        ref="values",
+        values=["3", "5", "6", "8", "9", "12", "15"],
+        measurer=LiteralTextMeasurer(),
+        gap=8,
+        initial_role="neutral",
+    )
+    item_bounds = visual.parts[("item", 3)].bounds
+    expected = {
+        "top": Point(item_bounds.center.x, item_bounds.top),
+        "bottom": Point(item_bounds.center.x, item_bounds.bottom),
+        "left": Point(item_bounds.left, item_bounds.center.y),
+        "right": Point(item_bounds.right, item_bounds.center.y),
+        "center": item_bounds.center,
+    }
+    for name, point in expected.items():
+        assert visual.anchor(part="item", index=3, name=name) == point
 
 
 def test_measured_geometry_rejects_mutation_and_defensively_copies_inputs():

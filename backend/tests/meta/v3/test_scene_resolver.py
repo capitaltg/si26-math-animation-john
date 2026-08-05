@@ -100,15 +100,25 @@ def perimeter_program():
 
 
 def test_runtime_resolution_remeasures_new_values_and_keeps_callout_under_item(program, measurer):
+    """Callout target must land under item 3 as a geometric fact.
+
+    Asserting `relation.target == scene.anchor(...)` would only prove the
+    resolver calls the same anchor function twice on the same inputs -- true
+    even if `geometry.anchor`'s "bottom" entry pointed to `bounds.top`.
+    """
     first = resolve_scene(program, {"v1": 3, "v2": 5, "v3": 6, "v4": 8,
                                     "v5": 9, "v6": 12, "v7": 15}, measurer)
     second = resolve_scene(program, {"v1": 10, "v2": 20, "v3": 30, "v4": 40,
                                      "v5": 50, "v6": 60, "v7": 70}, measurer)
-    first_target = first.anchor("values", "item", 3, "bottom")
-    second_target = second.anchor("values", "item", 3, "bottom")
-    assert first.relation("median_callout").target == first_target
-    assert second.relation("median_callout").target == second_target
-    assert first_target.x != second_target.x or first.visual("values").bounds != second.visual("values").bounds
+    for scene in (first, second):
+        values = scene.visual("values")
+        item_bounds = values.measured.parts[("item", 3)].bounds
+        target = scene.relation("median_callout").target
+        assert target.y == pytest.approx(item_bounds.bottom + values.offset.y)
+        assert target.x == pytest.approx(item_bounds.center.x + values.offset.x)
+    # Wider glyphs in the second scene shift item 3 horizontally; the callout
+    # target must follow, not stick to a value cached from the first resolve.
+    assert first.relation("median_callout").target.x != second.relation("median_callout").target.x
 
 
 def test_resolve_scene_carries_a_declared_non_default_initial_role_through_ordered_values(measurer):
