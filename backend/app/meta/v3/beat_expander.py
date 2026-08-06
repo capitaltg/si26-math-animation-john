@@ -374,6 +374,14 @@ class BeatExpander:
             # recolour, and `_slot_count` sizes the beat accordingly.
             actions = self._percent_sweep_actions(plan, current_roles)
             if actions:
+                if plan.strategy == "percent_change":
+                    # Label the change with a Δ ribbon anchored at the delta's
+                    # midpoint segment. The ribbon reads before the sweep
+                    # starts, so the learner knows the coming animation names
+                    # the change rather than merely recolouring the after-bar.
+                    ribbon = self._percent_change_delta_ribbon(plan, relations)
+                    if ribbon is not None:
+                        actions = [ribbon, *actions]
                 return actions
 
         if (
@@ -596,6 +604,40 @@ class BeatExpander:
                 "focus", current_roles,
             ))
         return actions
+
+    def _percent_change_delta_ribbon(self, plan, relations):
+        """Append a Δ callout on the after-bar's delta midpoint, if not already.
+
+        Anchors at the midpoint segment of the delta range so the ribbon sits
+        directly over the change the sweep animates. Text names the delta as
+        raw units ("Δ 10"): both bars share a `maximum` (see
+        `_validate_percent_change_compatibility`), so one segment on either
+        bar is one unit of the same scale, and the ribbon reads against the
+        bars without a separate axis. Returns a `ShowRelationAction` that the
+        sweep beat plays alongside its first focus, or `None` when the sweep
+        has no target to attach to (a hand-built plan the validator would
+        have caught earlier).
+        """
+        target = getattr(self, "_percent_change_sweep_target", None)
+        if target is None:
+            return None
+        ref, indices = target
+        if not indices:
+            return None
+        midpoint = indices[len(indices) // 2]
+        delta = len(indices)
+        ribbon_ref = "delta_ribbon"
+        if any(relation.ref == ribbon_ref for relation in relations):
+            return None
+        relations.append(CalloutRelation(
+            ref=ribbon_ref,
+            target={
+                "visual_ref": ref, "part": "segment",
+                "index": midpoint, "anchor": "top",
+            },
+            text=f"Δ {delta}",
+        ))
+        return ShowRelationAction(relation_ref=ribbon_ref)
 
     def _unit_rate_actions(self, plan, current_roles):
         """Focus box[0] -- the "per one" column that carries the rate.

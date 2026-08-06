@@ -119,6 +119,15 @@ _MOVABLE_TARGETS = {"rectangle_measurement": {None}}
 _TRANSFORM_COMPATIBILITY = {"rectangle_measurement": {"rectangle_measurement"}}
 _ITEM_CALLOUT_ANCHORS = {"bottom"}
 
+#: Upper bound on segments the percent-sweep may emit. Each swept segment is a
+#: `focus` role change with its own `at_seconds` (see `_slot_count` for
+#: percent strategies), so the sweep alone contributes N timeline entries
+#: against the 40-action cap. Values above this cap compiled the plan but
+#: later failed with `too_many_timeline_actions` at scheduling; refusing them
+#: up front turns a hard-to-diagnose scheduler failure into a clear compile
+#: error naming the sweep as the cause.
+_MAX_PERCENT_SWEEP_SEGMENTS = 30
+
 
 def compile_teaching_plan(plan, answer_expression, known_fields, context):
     compile_expression(answer_expression, known_fields)
@@ -672,6 +681,14 @@ def _validate_percent_of_whole_compatibility(plan):
             str(value),
             "set value to a whole percent between 1 and 99, or use a different strategy",
         )
+    if value > _MAX_PERCENT_SWEEP_SEGMENTS:
+        _fail(
+            "percent_of_whole_sweep_over_budget", "primary_visual.value",
+            f"a percent value at most {_MAX_PERCENT_SWEEP_SEGMENTS} so the "
+            f"per-segment sweep fits under the 40-action program cap",
+            str(value),
+            f"lower value to {_MAX_PERCENT_SWEEP_SEGMENTS} or below, or use a different strategy",
+        )
     if percent_sweep_beat_id(plan) is None:
         _fail(
             "percent_of_whole_requires_sweep_beat", "beats",
@@ -761,6 +778,15 @@ def _validate_percent_change_compatibility(plan):
                 str(value),
                 "set the value between 1 and one less than maximum, or use a different strategy",
             )
+    delta = abs(after_value - before_value)
+    if delta > _MAX_PERCENT_SWEEP_SEGMENTS:
+        _fail(
+            "percent_change_sweep_over_budget", "supporting_visuals[0].value",
+            f"a delta of at most {_MAX_PERCENT_SWEEP_SEGMENTS} segments so the "
+            f"per-segment sweep fits under the 40-action program cap",
+            f"delta={delta}",
+            f"pick before/after values whose difference is {_MAX_PERCENT_SWEEP_SEGMENTS} or less",
+        )
     _require_percent_change_sweep_beat(plan, after.ref)
 
 

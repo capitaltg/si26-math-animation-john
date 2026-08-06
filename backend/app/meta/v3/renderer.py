@@ -239,6 +239,20 @@ def _build_visual(placed, palette: str):
         raise ValueError(f"unsupported resolved visual {measured.ref}")
 
     _apply_style(root, style)
+    if {"value", "maximum"} <= payload.keys():
+        # The bar's `value` is stored in the payload but never influenced how
+        # segments render -- every segment landed in the whole-visual style,
+        # so two bars with different values but the same maximum looked
+        # identical. Paint segments >= value in the `neutral` role so the
+        # bar reads as filled up to `value` before any timeline action plays.
+        # Done here rather than as a set_role in the reveal beat: a per-segment
+        # baseline via timeline actions would burn one entry per filled
+        # segment against the 40-action cap (see `_MAX_PERCENT_SWEEP_SEGMENTS`).
+        empty_style = resolve_semantic_style(palette, "neutral")
+        value = payload["value"]
+        for (part, index), mobject in children.items():
+            if part == "segment" and index >= value:
+                _apply_style(mobject, empty_style)
     return root, children
 
 

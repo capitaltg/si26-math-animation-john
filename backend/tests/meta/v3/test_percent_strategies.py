@@ -377,3 +377,86 @@ def test_percent_change_markup_acceptance_fixture(compile_context):
     ]
     assert len(focus_actions) == 10
     assert all(action.target.visual_ref == "after_bar" for action in focus_actions)
+
+
+def test_percent_change_emits_labeled_delta_ribbon(compile_context):
+    """`percent_change` must stage a labelled Δ ribbon on the after-bar so
+    the swept delta reads as the change the strategy names, not as an
+    unlabelled recolour of arbitrary segments.
+    """
+    plan = _percent_change_plan(before=40, after=50)
+
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=50), frozenset(), compile_context,
+    )
+
+    ribbon = next(
+        (relation for relation in program.relations if relation.ref == "delta_ribbon"),
+        None,
+    )
+    assert ribbon is not None, "percent_change must emit a Δ ribbon relation"
+    assert ribbon.target.visual_ref == "after_bar"
+    assert ribbon.target.part == "segment"
+    # Midpoint of the delta range [40..49] is index 45.
+    assert ribbon.target.index == 45
+    assert "10" in ribbon.text and "Δ" in ribbon.text
+
+    show_events = [
+        entry for entry in program.timeline
+        if entry.action.kind == "show_relation"
+        and entry.action.relation_ref == "delta_ribbon"
+    ]
+    assert len(show_events) == 1, "the ribbon must be shown exactly once"
+    assert show_events[0].beat_id == "sweep_delta", (
+        "the ribbon should land on the sweep beat so it labels the change "
+        "being animated"
+    )
+
+
+def test_percent_change_discount_ribbon_names_absolute_delta(compile_context):
+    """A discount ($50 -> $40) and a mark-up ($40 -> $50) both sweep the
+    same segments; the Δ ribbon reports the delta's absolute magnitude so
+    the label is consistent with the walk.
+    """
+    plan = _percent_change_plan(before=50, after=40)
+
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=40), frozenset(), compile_context,
+    )
+
+    ribbon = next(
+        (relation for relation in program.relations if relation.ref == "delta_ribbon"),
+        None,
+    )
+    assert ribbon is not None
+    assert "10" in ribbon.text
+
+
+def test_percent_of_whole_refuses_value_beyond_action_budget(compile_context):
+    """A 50% sweep would emit 50 focus actions on its own, more than the
+    40-action program cap. Reject at compile time with a strategy-specific
+    error rather than letting the plan through to a downstream
+    `too_many_timeline_actions` failure.
+    """
+    plan = _percent_of_whole_plan(value=50)
+
+    with pytest.raises(
+        V3ValidationError, match="percent_of_whole_sweep_over_budget",
+    ):
+        compile_teaching_plan(
+            plan, LiteralNode(value=50), frozenset(), compile_context,
+        )
+
+
+def test_percent_change_refuses_delta_beyond_action_budget(compile_context):
+    """A delta wider than the 30-segment budget would overrun the program
+    cap once the sweep expands segment-by-segment. Reject at compile time.
+    """
+    plan = _percent_change_plan(before=10, after=45)
+
+    with pytest.raises(
+        V3ValidationError, match="percent_change_sweep_over_budget",
+    ):
+        compile_teaching_plan(
+            plan, LiteralNode(value=45), frozenset(), compile_context,
+        )
