@@ -479,8 +479,13 @@ class BeatExpander:
         return the actions that visibly teach the inverse operation.
 
         - partition beat (the first derive/focus beat naming the primary):
-          set constant_region to `constraint` (the known addend, dimmed) and
-          x_region to `focus` (what remains after subtracting it).
+          set constant_region to `constraint` (the known addend, dimmed). Focus
+          x_region here ONLY when there is no divide beat -- x_part VGroups
+          overlap the same underlying segments as x_region, so a partition-beat
+          focus on x_region would leave every x_part already focus-coloured and
+          the divide walk would animate focus-to-focus (invisible). With a
+          divide beat pending, x_region stays structure and each x_part carries
+          its own structure-to-focus transition when the divide beat fires.
         - divide beat (only when coefficient > 1, the second such beat): focus
           each x_part in turn, so the "divide by k" reads as slicing the
           x_region into k equal pieces.
@@ -490,18 +495,19 @@ class BeatExpander:
         if plan.primary_visual.constant is None:
             return None
         ref = plan.primary_visual.ref
+        divide_beat_id = getattr(self, "_inverse_divide_beat_id", None)
         if beat.id == getattr(self, "_inverse_partition_beat_id", None):
-            return [
-                *self._role_change(
-                    TargetRef(visual_ref=ref, part="constant_region", index=0),
-                    "constraint", current_roles,
-                ),
-                *self._role_change(
+            actions = list(self._role_change(
+                TargetRef(visual_ref=ref, part="constant_region", index=0),
+                "constraint", current_roles,
+            ))
+            if divide_beat_id is None:
+                actions.extend(self._role_change(
                     TargetRef(visual_ref=ref, part="x_region", index=0),
                     "focus", current_roles,
-                ),
-            ]
-        if beat.id == getattr(self, "_inverse_divide_beat_id", None):
+                ))
+            return actions
+        if beat.id == divide_beat_id:
             coefficient_spec = plan.primary_visual.coefficient
             coefficient = int(coefficient_spec.value) if coefficient_spec else 1
             actions = []
