@@ -334,3 +334,14 @@ def test_word_token_falls_through_canonical_key_untouched():
     # words never collide with numeric canonicals.
     assert _canonical_key("three") == "three"
     assert _canonical_key("three") != _canonical_key("3")
+
+
+def test_unspaced_hyphen_between_digits_stays_operator_and_operand():
+    from app.pipeline.grounding import tokenize_for_grounding
+
+    # Regression: unspaced hyphens between digits must stay as separate tokens
+    # (operator + operand), not collapse into a single negative number token.
+    # This protects range notation "10-20" and subtraction "5-3" in discovery.py
+    # and other callsites.
+    assert tokenize_for_grounding("5-3") == ["5", "-", "3"]
+    assert tokenize_for_grounding("10-20") == ["10", "-", "20"]
