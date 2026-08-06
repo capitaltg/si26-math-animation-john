@@ -67,16 +67,24 @@ def _bridge_plan(
 ):
     """A four-beat plan for a like-whole fraction sum or difference.
 
-    Three partitions: the two operands and the LCD bridge that refines both.
-    `operation` is `"add"` or `"subtract"` so the answer_expression matches the
-    lesson's own move.
+    Five partitions: the two operands in their own denominators, each
+    operand's refinement onto the LCD (`refined_a` and `refined_b`), and the
+    LCD bridge that carries the result. The refined partitions are what let
+    the animation teach the LCD reasoning -- without them the frame jumps
+    from unlike-denominator operands to the bridge and skips the intermediate
+    3/6 and 2/6 states a 1/2 + 1/3 lesson needs. `operation` is `"add"` or
+    `"subtract"` so the answer_expression matches the lesson's own move.
     """
+    refined_a_shaded = primary_shaded * lcd_parts // primary_parts
+    refined_b_shaded = second_shaded * lcd_parts // second_parts
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": f"Combine two fractions using an LCD of {lcd_parts}.",
         "primary_visual": _partition("first_operand", parts=primary_parts, shaded=primary_shaded),
         "supporting_visuals": [
             _partition("second_operand", parts=second_parts, shaded=second_shaded),
+            _partition("refined_a", parts=lcd_parts, shaded=refined_a_shaded),
+            _partition("refined_b", parts=lcd_parts, shaded=refined_b_shaded),
             _partition("bridge_lcd", parts=lcd_parts, shaded=lcd_shaded),
         ],
         "strategy": "common_denominator_bridge",
@@ -88,16 +96,20 @@ def _bridge_plan(
             {"id": "reveal_others", "kind": "reveal",
              "targets": [
                  {"visual_ref": "second_operand"},
+                 {"visual_ref": "refined_a"},
+                 {"visual_ref": "refined_b"},
                  {"visual_ref": "bridge_lcd"},
              ],
-             "intent": "Show the second operand and the LCD bridge."},
+             "intent": "Show the second operand, both LCD refinements, and the bridge."},
             {"id": "combine_on_bridge", "kind": "derive",
              "targets": [
                  {"visual_ref": "first_operand"},
                  {"visual_ref": "second_operand"},
+                 {"visual_ref": "refined_a"},
+                 {"visual_ref": "refined_b"},
                  {"visual_ref": "bridge_lcd"},
              ],
-             "intent": "Combine the two operands on the LCD."},
+             "intent": "Refine each operand onto the LCD, then combine on the bridge."},
             {"id": "state_result", "kind": "conclude",
              "targets": [{"visual_ref": "bridge_lcd"}],
              "intent": "The bridge partition carries the answer."},
@@ -284,7 +296,20 @@ def test_common_denominator_bridge_compiles_one_half_plus_one_third():
     program = _compile_and_gate(plan, _add_answer())
 
     kinds = [visual.kind for visual in program.visuals]
-    assert kinds == ["partition", "partition", "partition", "answer_expression"]
+    assert kinds == [
+        "partition", "partition", "partition", "partition", "partition", "answer_expression",
+    ]
+
+    # The refined partitions carry each operand at the LCD (1/2 -> 3/6,
+    # 1/3 -> 2/6). Assert them by shape so a plan that renames them still
+    # has to declare the right intermediate denominators and shading.
+    refined_specs = {
+        visual.ref: visual for visual in program.visuals if visual.kind == "partition"
+    }
+    assert refined_specs["refined_a"].parts.value == 6
+    assert refined_specs["refined_a"].shaded.value == 3
+    assert refined_specs["refined_b"].parts.value == 6
+    assert refined_specs["refined_b"].shaded.value == 2
 
     whole_revealed_refs = {
         target.visual_ref
@@ -293,7 +318,9 @@ def test_common_denominator_bridge_compiles_one_half_plus_one_third():
         for target in entry.action.targets
         if target.part is None and target.index is None
     }
-    assert {"first_operand", "second_operand", "bridge_lcd"}.issubset(whole_revealed_refs), (
+    assert {
+        "first_operand", "second_operand", "refined_a", "refined_b", "bridge_lcd",
+    }.issubset(whole_revealed_refs), (
         "every partition must reveal as a whole so the animation shows the common denominator"
     )
     assert any(
@@ -301,14 +328,23 @@ def test_common_denominator_bridge_compiles_one_half_plus_one_third():
         for entry in program.timeline
     ), "the sum's arithmetic must show before the answer resolves"
 
-    # The bridge beat focuses the LCD partition's 5 shaded wedges (the
-    # refined result of 1/2 + 1/3 = 5/6) so the frame reads as "these five
-    # sixths hold the sum" rather than as a whole-visual recolour.
+    # The bridge beat focuses each operand's shaded wedges, the refined
+    # intermediates (3/6 and 2/6), and the LCD partition's 5 shaded wedges,
+    # so the frame reads as "each operand refined onto sixths, combined into
+    # 5/6" rather than jumping straight to the sum.
     focused_parts = {
         (entry.action.target.visual_ref, entry.action.target.part, entry.action.target.index)
         for entry in program.timeline
         if entry.action.kind == "set_role" and entry.action.role == "focus"
     }
+    for index in range(3):
+        assert ("refined_a", "partition", index) in focused_parts, (
+            f"the bridge beat must focus refined_a.partition[{index}] (1/2 refined to 3/6)"
+        )
+    for index in range(2):
+        assert ("refined_b", "partition", index) in focused_parts, (
+            f"the bridge beat must focus refined_b.partition[{index}] (1/3 refined to 2/6)"
+        )
     for index in range(5):
         assert ("bridge_lcd", "partition", index) in focused_parts, (
             f"the bridge beat must focus bridge_lcd.partition[{index}]"
@@ -326,7 +362,9 @@ def test_common_denominator_bridge_compiles_three_quarters_minus_one_half():
     program = _compile_and_gate(plan, _subtract_answer())
 
     kinds = [visual.kind for visual in program.visuals]
-    assert kinds == ["partition", "partition", "partition", "answer_expression"]
+    assert kinds == [
+        "partition", "partition", "partition", "partition", "partition", "answer_expression",
+    ]
 
     revealed_refs = {
         target.visual_ref
@@ -334,20 +372,35 @@ def test_common_denominator_bridge_compiles_three_quarters_minus_one_half():
         if entry.action.kind == "reveal"
         for target in entry.action.targets
     }
-    assert {"first_operand", "second_operand", "bridge_lcd"}.issubset(revealed_refs)
+    assert {
+        "first_operand", "second_operand", "refined_a", "refined_b", "bridge_lcd",
+    }.issubset(revealed_refs)
+
+    # 3/4 refines to 3/4 and 1/2 refines to 2/4 on an LCD of 4, so the
+    # bridge beat still shows the refinement even when one operand already
+    # sits on the LCD.
+    refined_specs = {
+        visual.ref: visual for visual in program.visuals if visual.kind == "partition"
+    }
+    assert (refined_specs["refined_a"].parts.value, refined_specs["refined_a"].shaded.value) == (4, 3)
+    assert (refined_specs["refined_b"].parts.value, refined_specs["refined_b"].shaded.value) == (4, 2)
 
 
-def test_common_denominator_bridge_needs_two_supporting_partitions():
+def test_common_denominator_bridge_needs_four_supporting_partitions():
     payload = _bridge_plan(
         primary_parts=2, primary_shaded=1,
         second_parts=3, second_shaded=1,
         lcd_parts=6, lcd_shaded=5,
         operation="add",
     ).model_dump()
+    # Drop the two refined partitions and the bridge; only the second operand
+    # remains, so the strategy's five-partition shape cannot land.
     payload["supporting_visuals"] = payload["supporting_visuals"][:1]
+    dropped_refs = {"refined_a", "refined_b", "bridge_lcd"}
     for beat in payload["beats"]:
         pruned = [
-            target for target in beat["targets"] if target["visual_ref"] != "bridge_lcd"
+            target for target in beat["targets"]
+            if target["visual_ref"] not in dropped_refs
         ]
         # Every beat needs at least one target; the conclude beat originally
         # named the bridge, so fall back to the primary operand when the bridge
@@ -357,7 +410,51 @@ def test_common_denominator_bridge_needs_two_supporting_partitions():
     with pytest.raises(V3ValidationError) as exc_info:
         _compile_and_gate(TeachingPlanDocument.model_validate(payload), _add_answer())
 
-    assert exc_info.value.failure.code == "common_denominator_bridge_requires_two_supporting_partitions"
+    assert exc_info.value.failure.code == "common_denominator_bridge_requires_four_supporting_partitions"
+
+
+def test_common_denominator_bridge_rejects_a_refined_partition_at_wrong_denominator():
+    """A refined operand whose parts count is not the LCD cannot express the operand.
+
+    The strategy teaches "refine each operand onto the common denominator";
+    a refined partition whose denominator is anything else does not carry the
+    operand on the LCD, so the intermediate state the animation is supposed
+    to teach is missing.
+    """
+    payload = _bridge_plan(
+        primary_parts=2, primary_shaded=1,
+        second_parts=3, second_shaded=1,
+        lcd_parts=6, lcd_shaded=5,
+        operation="add",
+    ).model_dump()
+    payload["supporting_visuals"][1]["parts"] = {"node": "literal", "value": 4}
+    payload["supporting_visuals"][1]["shaded"] = {"node": "literal", "value": 2}
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile_and_gate(TeachingPlanDocument.model_validate(payload), _add_answer())
+
+    assert exc_info.value.failure.code == "common_denominator_bridge_requires_refined_lcd_parts"
+
+
+def test_common_denominator_bridge_rejects_a_refined_partition_that_shades_a_different_amount():
+    """A refined operand's shaded count must equal its operand at the LCD.
+
+    1/2 at denominator 6 is 3 shaded wedges; a refined partition that shades
+    4/6 instead animates a different amount than the operand it is claimed to
+    refine, so the LCD reasoning contradicts the operand on-screen.
+    """
+    payload = _bridge_plan(
+        primary_parts=2, primary_shaded=1,
+        second_parts=3, second_shaded=1,
+        lcd_parts=6, lcd_shaded=5,
+        operation="add",
+    ).model_dump()
+    payload["supporting_visuals"][1]["shaded"] = {"node": "literal", "value": 4}
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile_and_gate(TeachingPlanDocument.model_validate(payload), _add_answer())
+
+    assert exc_info.value.failure.code == "common_denominator_bridge_refined_must_equal_operand"
 
 
 def test_common_denominator_bridge_rejects_a_non_lcd_bridge():
@@ -470,10 +567,14 @@ def test_common_denominator_bridge_rejects_subtract_answer_operand_swap():
     assert exc_info.value.failure.code == "common_denominator_bridge_operands_must_match_partitions"
 
 
-def test_common_denominator_bridge_bridge_beat_walks_operands_then_bridge():
-    """The bridge beat first focuses each operand's shaded wedges (their
-    refined-onto-LCD state), then the bridge's shaded wedges, so the frame
-    reads as "each operand refined onto the common denominator, combined".
+def test_common_denominator_bridge_bridge_beat_walks_operands_through_refinements_then_bridge():
+    """The bridge beat walks each operand into its LCD refinement before the bridge.
+
+    For each operand, the beat focuses the operand's own shaded wedges, then
+    the LCD-refined partition's shaded wedges, then finally the bridge. That
+    ordering is what makes the frame teach the refinement: the animation
+    passes through the intermediate 3/6 and 2/6 states, rather than jumping
+    from unlike-denominator operands straight to the sum.
     """
     plan = _bridge_plan(
         primary_parts=2, primary_shaded=1,
@@ -492,10 +593,12 @@ def test_common_denominator_bridge_bridge_beat_walks_operands_then_bridge():
     ]
     first_operand_focus = focus_sequence.index(("first_operand", "partition", 0))
     second_operand_focus = focus_sequence.index(("second_operand", "partition", 0))
+    refined_a_focus = focus_sequence.index(("refined_a", "partition", 0))
+    refined_b_focus = focus_sequence.index(("refined_b", "partition", 0))
     bridge_focus = focus_sequence.index(("bridge_lcd", "partition", 0))
-    assert first_operand_focus < bridge_focus, (
-        "operand_a's refined state must land before the bridge's combined result"
+    assert first_operand_focus < refined_a_focus < bridge_focus, (
+        "operand_a must focus, then refine onto the LCD, before the bridge lands"
     )
-    assert second_operand_focus < bridge_focus, (
-        "operand_b's refined state must land before the bridge's combined result"
+    assert second_operand_focus < refined_b_focus < bridge_focus, (
+        "operand_b must focus, then refine onto the LCD, before the bridge lands"
     )

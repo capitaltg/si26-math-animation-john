@@ -628,36 +628,54 @@ def _require_owned_equivalence_align_beat(plan):
 def _validate_common_denominator_bridge_compatibility(plan, answer_expression):
     """Fraction arithmetic across unlike denominators needs a bridge partition.
 
-    The lesson has three partitions on-screen: the two operands and the LCD
-    bridge that refines both to a common denominator. A plan with fewer than
-    two supporting partitions cannot land the bridge; more than two would
-    crowd the frame and lose the alignment the strategy teaches.
+    The lesson has five partitions on-screen: the two original operands (their
+    unlike denominators), each operand's refined form on the LCD (the
+    intermediate 3/6 and 2/6 states of a 1/2 + 1/3 lesson), and the LCD bridge
+    that carries the combined result. The refined partitions are what make the
+    animation teach the refinement itself rather than only "here are two
+    fractions, here is their sum" -- without them, the frame jumps from
+    unlike-denominator operands to the combined bridge and the LCD reasoning
+    is invisible.
+
+    The order in `supporting_visuals` is fixed: second_operand, refined_a,
+    refined_b, bridge. Refining `refined_a` from `primary_visual` and
+    `refined_b` from `second_operand` mirrors the operand order the answer
+    expression is required to match.
     """
     if plan.primary_visual.kind != "partition":
         return
     supporting_partitions = [
         spec for spec in plan.supporting_visuals if spec.kind == "partition"
     ]
-    if len(supporting_partitions) != 2:
+    if len(supporting_partitions) != 4:
         _fail(
-            "common_denominator_bridge_requires_two_supporting_partitions",
+            "common_denominator_bridge_requires_four_supporting_partitions",
             "supporting_visuals",
-            "exactly two supporting partition visuals (the second operand and the LCD bridge)",
+            "exactly four supporting partition visuals in order: "
+            "second_operand, refined_a (primary on LCD), refined_b (second on LCD), bridge",
             f"{len(supporting_partitions)} supporting partition(s)",
-            "declare the second operand and the LCD bridge as supporting partition visuals, "
+            "declare the second operand, each operand's LCD-refined partition, and "
+            "the LCD bridge as supporting partition visuals in that order, "
             "or use a different strategy",
         )
-    second_operand, bridge = supporting_partitions
+    second_operand, refined_a, refined_b, bridge = supporting_partitions
     primary_parts = _literal_integer(plan.primary_visual.parts)
     second_parts = _literal_integer(second_operand.parts)
+    refined_a_parts = _literal_integer(refined_a.parts)
+    refined_b_parts = _literal_integer(refined_b.parts)
     bridge_parts = _literal_integer(bridge.parts)
-    if primary_parts is None or second_parts is None or bridge_parts is None:
+    if (
+        primary_parts is None or second_parts is None or bridge_parts is None
+        or refined_a_parts is None or refined_b_parts is None
+    ):
         _fail(
             "common_denominator_bridge_requires_literal_denominators",
             "supporting_visuals",
-            "literal parts counts on all three partitions so the compiler can verify the LCD",
+            "literal parts counts on all five partitions so the compiler can verify the LCD",
             f"primary parts={_describe_expression(plan.primary_visual.parts)}, "
             f"second parts={_describe_expression(second_operand.parts)}, "
+            f"refined_a parts={_describe_expression(refined_a.parts)}, "
+            f"refined_b parts={_describe_expression(refined_b.parts)}, "
             f"bridge parts={_describe_expression(bridge.parts)}",
             "set every partition's parts to a literal integer, or use a different strategy",
         )
@@ -671,16 +689,50 @@ def _validate_common_denominator_bridge_compatibility(plan, answer_expression):
             f"set the bridge partition's parts to {expected_lcd}, "
             "or use a different strategy",
         )
+    for spec, spec_parts, operand_ref, operand_parts in (
+        (refined_a, refined_a_parts, plan.primary_visual.ref, primary_parts),
+        (refined_b, refined_b_parts, second_operand.ref, second_parts),
+    ):
+        if spec_parts != expected_lcd:
+            _fail(
+                "common_denominator_bridge_requires_refined_lcd_parts",
+                f"supporting_visuals.{spec.ref}.parts",
+                f"a refined partition of {expected_lcd} parts "
+                f"(the LCD of {primary_parts} and {second_parts})",
+                f"{spec.ref} parts={spec_parts}",
+                f"set {spec.ref}.parts to {expected_lcd}, or use a different strategy",
+            )
     _require_same_whole(
-        [plan.primary_visual, second_operand, bridge], "common_denominator_bridge",
+        [plan.primary_visual, second_operand, refined_a, refined_b, bridge],
+        "common_denominator_bridge",
     )
     primary_fraction = _partition_fraction(plan.primary_visual, "primary_visual")
     second_fraction = _partition_fraction(
         second_operand, f"supporting_visuals.{second_operand.ref}",
     )
+    refined_a_fraction = _partition_fraction(
+        refined_a, f"supporting_visuals.{refined_a.ref}",
+    )
+    refined_b_fraction = _partition_fraction(
+        refined_b, f"supporting_visuals.{refined_b.ref}",
+    )
     bridge_fraction = _partition_fraction(
         bridge, f"supporting_visuals.{bridge.ref}",
     )
+    for spec, refined_fraction, operand_fraction in (
+        (refined_a, refined_a_fraction, primary_fraction),
+        (refined_b, refined_b_fraction, second_fraction),
+    ):
+        if refined_fraction != operand_fraction:
+            _fail(
+                "common_denominator_bridge_refined_must_equal_operand",
+                f"supporting_visuals.{spec.ref}.shaded",
+                f"a refined partition equal to its operand ({operand_fraction}) "
+                f"expressed with denominator {expected_lcd}",
+                f"{spec.ref} = {refined_fraction}",
+                f"set {spec.ref}.shaded so shaded/{expected_lcd} = {operand_fraction}, "
+                "or use a different strategy",
+            )
     _require_bridge_matches_answer(
         answer_expression=answer_expression, bridge_ref=bridge.ref,
         primary_fraction=primary_fraction, second_fraction=second_fraction,
@@ -781,8 +833,8 @@ def _require_owned_common_denominator_bridge_beat(plan):
     if common_denominator_bridge_beat_id(plan) is None:
         bridge_ref = None
         partitions = [spec for spec in plan.supporting_visuals if spec.kind == "partition"]
-        if len(partitions) >= 2:
-            bridge_ref = partitions[1].ref
+        if len(partitions) >= 4:
+            bridge_ref = partitions[3].ref
         target_ref = bridge_ref if bridge_ref is not None else "<bridge>"
         _fail(
             "common_denominator_bridge_requires_bridge_beat", "beats",

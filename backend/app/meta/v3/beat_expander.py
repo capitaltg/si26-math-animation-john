@@ -244,6 +244,18 @@ class BeatExpander:
             and beat.id == getattr(self, "_sweep_beat_id", None)
         ):
             return len(actions)
+        if (
+            plan.strategy == _BRIDGE_STRATEGY
+            and beat.id == getattr(self, "_bridge_beat_id", None)
+        ):
+            # The bridge beat walks each operand through its LCD refinement
+            # into the bridge, then dims the operands and refined intermediates
+            # back to structure. One slot per action keeps every focus role
+            # change on its own instant so `check_salience` sees at most one
+            # focused target per second; the default `beat_seconds /
+            # MIN_ACTION_SECONDS` rule batches two focuses into one slot as soon
+            # as the beat's ~17 actions overflow the seconds/min ratio.
+            return len(actions)
         return None
 
     def _standard_actions(
@@ -399,7 +411,8 @@ class BeatExpander:
                 detailed = self._targets_detailed_by_custom_actions(beat)
                 bridge_ref = _bridge_ref(plan)
                 operand_refs = _operand_refs(plan)
-                acted_refs = {bridge_ref, *operand_refs}
+                refined_refs = {spec.ref for spec in _refined_specs(plan)}
+                acted_refs = {bridge_ref, *operand_refs, *refined_refs}
                 for target in beat.targets:
                     if target.visual_ref in acted_refs and target.part is None:
                         continue
@@ -613,20 +626,29 @@ class BeatExpander:
         return actions
 
     def _bridge_actions(self, plan, current_roles):
-        """Focus each operand's shaded wedges (their refined-onto-LCD state),
-        then focus the bridge's shaded wedges (the combined result), then dim
-        the operands back to structure so the bridge holds the punchline.
+        """Walk each operand from its own denominator into the LCD, then land
+        the bridge, then dim the operands and refined intermediates so the
+        bridge holds the punchline.
 
-        The operand-focus phase is what makes the frame teach the refinement:
-        without it the animation jumps from unfocused operand partitions to a
-        focused LCD bridge, skipping the intermediate "each operand refined
-        onto the common denominator" state the strategy exists to show.
+        For each (operand, refined) pair the beat focuses the operand's shaded
+        wedges (its unlike-denominator state), then focuses the refined
+        partition's shaded wedges (that same amount expressed on the LCD --
+        3/6 and 2/6 in a 1/2 + 1/3 lesson). Only after both refinements have
+        landed does the bridge focus, so the frame reads as "each operand
+        refined onto the common denominator, combined into the bridge" rather
+        than as a jump from unlike-denominator operands to their sum.
+
+        The compiler enforces the four supporting partitions in order --
+        second_operand, refined_a, refined_b, bridge -- so `_refined_specs`
+        and `_bridge_ref` return the matching operand refinements without a
+        separate name convention.
         """
         bridge_ref = _bridge_ref(plan)
         operand_specs = [
             spec for spec in (plan.primary_visual, *plan.supporting_visuals)
             if spec.kind == "partition" and spec.ref != bridge_ref
         ]
+        refined_specs = _refined_specs(plan)
         bridge_spec = next(
             (
                 spec for spec in plan.supporting_visuals
@@ -634,13 +656,22 @@ class BeatExpander:
             ),
             None,
         )
-        if bridge_spec is None:
+        if bridge_spec is None or len(refined_specs) != 2:
             return []
+        refined_refs = {spec.ref for spec in refined_specs}
+        original_operand_specs = [
+            spec for spec in operand_specs if spec.ref not in refined_refs
+        ]
         actions = []
-        for spec in operand_specs:
-            for index in range(_partition_shaded(spec)):
+        for operand_spec, refined_spec in zip(original_operand_specs, refined_specs):
+            for index in range(_partition_shaded(operand_spec)):
                 actions.extend(self._role_change(
-                    TargetRef(visual_ref=spec.ref, part="partition", index=index),
+                    TargetRef(visual_ref=operand_spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+            for index in range(_partition_shaded(refined_spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=refined_spec.ref, part="partition", index=index),
                     "focus", current_roles,
                 ))
         for index in range(_partition_shaded(bridge_spec)):
@@ -648,7 +679,7 @@ class BeatExpander:
                 TargetRef(visual_ref=bridge_spec.ref, part="partition", index=index),
                 "focus", current_roles,
             ))
-        for spec in operand_specs:
+        for spec in (*original_operand_specs, *refined_specs):
             for index in range(_partition_shaded(spec)):
                 actions.extend(self._role_change(
                     TargetRef(visual_ref=spec.ref, part="partition", index=index),
@@ -1042,7 +1073,7 @@ def _bridge_ref(plan):
     partitions = [
         spec for spec in plan.supporting_visuals if spec.kind == "partition"
     ]
-    return partitions[1].ref if len(partitions) >= 2 else None
+    return partitions[3].ref if len(partitions) >= 4 else None
 
 
 def _operand_refs(plan):
@@ -1050,6 +1081,20 @@ def _operand_refs(plan):
         spec for spec in plan.supporting_visuals if spec.kind == "partition"
     ]
     return (plan.primary_visual.ref, partitions[0].ref) if partitions else (plan.primary_visual.ref,)
+
+
+def _refined_specs(plan):
+    """The two LCD-refined operand partitions, or an empty tuple if absent.
+
+    Order matches operand order: refined_a is the primary_visual's refinement,
+    refined_b is the second_operand's refinement. `_validate_common_
+    denominator_bridge_compatibility` enforces the shape; falling back to an
+    empty tuple keeps `_bridge_actions` graceful on non-strategy paths.
+    """
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return (partitions[1], partitions[2]) if len(partitions) >= 4 else ()
 
 
 def _partition_shaded(spec):
