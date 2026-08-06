@@ -2,12 +2,13 @@ from dataclasses import dataclass
 
 from app.meta.dsl.scene_program import (
     AnswerProgramVisual, BarProgramVisual, CalloutRelation,
-    CoordinatePlaneProgramVisual, DataDisplayProgramVisual, DrawAction,
+    CoordinatePlaneProgramVisual, DataDisplayProgramVisual,
+    DistanceAnnotationAction, DrawAction,
     GridProgramVisual, LabelProgramVisual, MoveAction, NumberLineProgramVisual,
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
     ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
-    ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
-    UnitTapeProgramVisual,
+    ShowAnswerStageAction, ShowRelationAction, SignedHopArrowAction,
+    TraceAction, TransformAction, UnitTapeProgramVisual,
 )
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.expression_display import has_operation
@@ -61,6 +62,14 @@ _MAX_ELIMINATION_SECONDS = 6.0
 _REGROUP_PART = {"grid": "cell", "object_set": "item"}
 _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 
+# `signed_hop` and `distance_from_zero` (M6) each own one derive/focus beat on
+# the primary number_line: `signed_hop` draws one directed arrow per
+# consecutive marker pair (see `signed_hop_beat_id`); `distance_from_zero`
+# draws a bracketed span from the origin to each nonzero marker, labelled with
+# the magnitude (see `distance_from_zero_beat_id`). The generic role change
+# still fires on the same beat, so the whole line reads as focused while the
+# arrow / annotation is drawn on top.
+#
 # `equivalence_align` and `common_denominator_bridge` (M2) carry a compile-time
 # shape (which supporting partitions must be declared and which must reveal)
 # AND their own beat-owned focus walks: the align beat highlights the shaded
@@ -85,6 +94,8 @@ class BeatExpander:
         self._ray_boundary_beat_id, self._ray_shade_beat_id = (
             ray_shade_beat_ids(plan)
         )
+        self._signed_hop_beat_id = signed_hop_beat_id(plan)
+        self._distance_from_zero_beat_id = distance_from_zero_beat_id(plan)
         self._equivalence_align_beat_id = equivalence_align_beat_id(plan)
         self._bridge_beat_id = common_denominator_bridge_beat_id(plan)
         visuals = [
@@ -378,6 +389,29 @@ class BeatExpander:
                 return actions
 
         if (
+            plan.strategy == "signed_hop"
+            and beat.id == getattr(self, "_signed_hop_beat_id", None)
+        ):
+            # One directed arrow per consecutive marker pair. Emitted alongside
+            # the generic focus so the whole line still reads as the beat's
+            # subject while each hop lands. Later derive/focus beats fall
+            # through to the generic role change alone.
+            arrows = self._signed_hop_actions(plan)
+            if arrows:
+                return self._generic_role_change(beat, "focus", current_roles) + arrows
+
+        if (
+            plan.strategy == "distance_from_zero"
+            and beat.id == getattr(self, "_distance_from_zero_beat_id", None)
+        ):
+            # One bracketed span per nonzero marker, anchored at the origin
+            # and labelled with the magnitude, so the beat teaches the
+            # distance rather than just recolouring the markers.
+            annotations = self._distance_from_zero_actions(plan)
+            if annotations:
+                return self._generic_role_change(beat, "focus", current_roles) + annotations
+
+        if (
             plan.strategy == _EQUIVALENCE_ALIGN_STRATEGY
             and beat.id == getattr(self, "_equivalence_align_beat_id", None)
         ):
@@ -610,6 +644,52 @@ class BeatExpander:
             target = TargetRef(visual_ref=ref, part="ray", index=0)
             return self._reveal_unrevealed(plan, [target], revealed)
         return []
+
+    def _signed_hop_actions(self, plan):
+        """One arrow per consecutive marker pair, in plan order.
+
+        Plan order is the hop sequence, so `markers[i] -> markers[i+1]` is the
+        i-th hop. The source-then-target order encodes the sign at render time:
+        a positive hop draws source-left/target-right and a right-pointing
+        arrow; a negative hop reverses both -- see `_build_signed_hop_arrow`
+        in `renderer.py`.
+        """
+        ref = plan.primary_visual.ref
+        markers = plan.primary_visual.markers
+        return [
+            SignedHopArrowAction(
+                source=TargetRef(visual_ref=ref, part="marker", index=index),
+                target=TargetRef(visual_ref=ref, part="marker", index=index + 1),
+            )
+            for index in range(len(markers) - 1)
+        ]
+
+    def _distance_from_zero_actions(self, plan):
+        """A distance bracket for every nonzero marker, all anchored on 0.
+
+        `_validate_distance_from_zero_compatibility` (in `compiler.py`) has
+        already refused a plan without a 0 marker or without a nonzero one, so
+        the origin index and the nonzero list are both guaranteed to exist by
+        the time this runs.
+        """
+        ref = plan.primary_visual.ref
+        markers = plan.primary_visual.markers
+        origin_index = next(
+            index for index, marker in enumerate(markers)
+            if _literal_number(marker) == 0.0
+        )
+        origin = TargetRef(visual_ref=ref, part="marker", index=origin_index)
+        actions = []
+        for index, marker in enumerate(markers):
+            value = _literal_number(marker)
+            if value == 0.0:
+                continue
+            actions.append(DistanceAnnotationAction(
+                origin=origin,
+                target=TargetRef(visual_ref=ref, part="marker", index=index),
+                label=_format_magnitude(abs(value)),
+            ))
+        return actions
 
     def _equivalence_align_actions(self, plan, current_roles):
         specs = [plan.primary_visual, *[
@@ -1024,6 +1104,52 @@ def magnitude_sweep_beat_id(plan):
     return None
 
 
+def signed_hop_beat_id(plan):
+    """The single beat signed_hop stages its arrow sequence on, or None.
+
+    Same discipline as `magnitude_sweep_beat_id`: the first derive/focus beat
+    that names the primary number_line owns the hops; later derive/focus beats
+    fall through so a plan with two derive beats does not double-stage the
+    arrows. Filtering by `beat.targets` also lets a focus beat that only
+    names a specific marker (a `focus_end` in the M6 fixtures) run its own
+    generic role change without being commandeered by the arrow pass.
+    """
+    if plan.strategy != "signed_hop":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind not in {"derive", "focus"}:
+            continue
+        if any(
+            target.visual_ref == primary_ref and target.part is None
+            for target in beat.targets
+        ):
+            return beat.id
+    return None
+
+
+def distance_from_zero_beat_id(plan):
+    """The single beat distance_from_zero stages the annotation on, or None.
+
+    First derive beat naming the primary line as a whole, else the first focus
+    beat. Preferring `derive` over `focus` puts the annotation on the beat that
+    reads "measure the distance", not the one that reads "state it".
+    """
+    if plan.strategy != "distance_from_zero":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for kinds in ({"derive"}, {"focus"}):
+        for beat in plan.beats:
+            if beat.kind not in kinds:
+                continue
+            if any(
+                target.visual_ref == primary_ref and target.part is None
+                for target in beat.targets
+            ):
+                return beat.id
+    return None
+
+
 def equivalence_align_beat_id(plan):
     """The single beat equivalence_align stages its shaded-wedge walk on.
 
@@ -1194,3 +1320,14 @@ def _literal_number(expression):
     if getattr(expression, "node", None) != "literal":
         return None
     return float(expression.value)
+
+
+def _format_magnitude(value):
+    """Human-friendly label for a distance magnitude.
+
+    Whole magnitudes render without a decimal point ("7" not "7.0") so the
+    label reads as the value the lesson names. Fractional magnitudes keep the
+    decimal; the label field caps at 8 characters, which is enough for any
+    marker the schema permits.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)

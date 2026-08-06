@@ -295,6 +295,10 @@ def validate_strategy_compatibility(plan, answer_expression=None):
         _validate_inverse_operation_compatibility(plan)
     if plan.strategy == "ray_shade":
         _validate_ray_shade_compatibility(plan)
+    if plan.strategy == "signed_hop":
+        _validate_signed_hop_compatibility(plan)
+    if plan.strategy == "distance_from_zero":
+        _validate_distance_from_zero_compatibility(plan)
     if plan.strategy == "equivalence_align":
         _validate_equivalence_align_compatibility(plan)
     if plan.strategy == "common_denominator_bridge":
@@ -553,7 +557,113 @@ def _validate_magnitude_comparison_compatibility(plan):
                     _describe_expression(marker),
                     "set every marker to a literal number, or use a different strategy",
                 )
+        # magnitude_comparison sweeps markers left-to-right and reads that order
+        # as "greater magnitude". On a signed range that reading is wrong: -5
+        # sits left of 2 but has the greater magnitude, so the sweep would teach
+        # the opposite. Refuse a plan whose declared span crosses (or lives in)
+        # the negatives; the M6 strategies `signed_hop` and `distance_from_zero`
+        # handle signed number lines.
+        minimum = _literal_number(spec.minimum)
+        if minimum is not None and minimum < 0:
+            _fail(
+                "magnitude_comparison_requires_nonnegative_range", "primary_visual.minimum",
+                "a number_line whose minimum is at least 0",
+                _describe_expression(spec.minimum),
+                "raise minimum to 0 or above, or use signed_hop / distance_from_zero for a signed line",
+            )
+        for index, marker in enumerate(spec.markers):
+            if float(marker.value) < 0:
+                _fail(
+                    "magnitude_comparison_requires_nonnegative_markers",
+                    f"primary_visual.markers[{index}]",
+                    "markers on a nonnegative number_line",
+                    _describe_expression(marker),
+                    "drop the negative marker, or use signed_hop / distance_from_zero for a signed line",
+                )
     _require_owned_sweep_beat(plan)
+
+
+def _validate_signed_hop_compatibility(plan):
+    """`signed_hop` teaches directed motion on a signed number_line.
+
+    An addition or subtraction of signed integers reads as a hop that goes
+    right for a positive addend and left for a negative one. The line has to
+    carry a signed context -- either its minimum is negative or one of its
+    markers is negative -- or the strategy is indistinguishable from a
+    positive-only walk that `magnitude_comparison` already covers. Two markers
+    is the floor: one hop needs a starting point and an ending point.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "number_line":
+        # `_SUPPORTED_STRATEGIES` already rejects a non-number_line primary.
+        return
+    if len(spec.markers) < 2:
+        _fail(
+            "signed_hop_requires_at_least_two_markers", "primary_visual.markers",
+            "at least two markers so the hop has a start and an end",
+            f"{len(spec.markers)} marker(s)",
+            "declare the start and end (and any intermediate) of the hop, "
+            "or use a different strategy",
+        )
+    for index, marker in enumerate(spec.markers):
+        if marker.node != "literal":
+            _fail(
+                "signed_hop_requires_literal_markers",
+                f"primary_visual.markers[{index}]",
+                "a literal marker position so the hop sequence is fixed at compile time",
+                _describe_expression(marker),
+                "set every marker to a literal number, or use a different strategy",
+            )
+    minimum = _literal_number(spec.minimum)
+    has_negative_marker = any(float(marker.value) < 0 for marker in spec.markers)
+    if (minimum is None or minimum >= 0) and not has_negative_marker:
+        _fail(
+            "signed_hop_requires_signed_context", "primary_visual",
+            "a signed number_line (negative minimum or a negative marker)",
+            f"minimum={_describe_expression(spec.minimum)}, "
+            f"markers={[_describe_expression(m) for m in spec.markers]}",
+            "widen the range to include negatives or add a negative marker, "
+            "or use magnitude_comparison for a nonnegative line",
+        )
+
+
+def _validate_distance_from_zero_compatibility(plan):
+    """`distance_from_zero` annotates a value's distance to the origin.
+
+    The teaching move is "how far is this from 0", which only reads when 0
+    is drawn on the line and at least one other marker sits away from it.
+    A plan without a 0 marker cannot land the annotation on the origin, and
+    a plan with only 0 has nothing to measure distance to.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "number_line":
+        return
+    literal_markers = []
+    for index, marker in enumerate(spec.markers):
+        if marker.node != "literal":
+            _fail(
+                "distance_from_zero_requires_literal_markers",
+                f"primary_visual.markers[{index}]",
+                "a literal marker position so the origin and the measured point are fixed",
+                _describe_expression(marker),
+                "set every marker to a literal number, or use a different strategy",
+            )
+        literal_markers.append(float(marker.value))
+    if 0.0 not in literal_markers:
+        _fail(
+            "distance_from_zero_requires_zero_marker", "primary_visual.markers",
+            "a marker at 0 so the origin is drawn on the line",
+            f"markers={literal_markers}",
+            "add a literal marker at 0, or use a different strategy",
+        )
+    if not any(value != 0.0 for value in literal_markers):
+        _fail(
+            "distance_from_zero_requires_nonzero_marker", "primary_visual.markers",
+            "at least one nonzero marker so there is a distance to measure",
+            f"markers={literal_markers}",
+            "add the value whose distance from zero the lesson teaches, "
+            "or use a different strategy",
+        )
 
 
 def _validate_equivalence_align_compatibility(plan):
@@ -1111,6 +1221,13 @@ def _literal_integer(expression):
     if expression.node != "literal" or not float(expression.value).is_integer():
         return None
     return int(expression.value)
+
+
+def _literal_number(expression):
+    """The literal's float value, or None when the expression is not a literal."""
+    if expression.node != "literal":
+        return None
+    return float(expression.value)
 
 
 def _literal_ceiling(expression):
