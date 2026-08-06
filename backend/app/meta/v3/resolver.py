@@ -122,6 +122,7 @@ def evaluate_program_visual(
         return _evaluated_spec(visual), {
             "whole": _evaluate(visual.whole, values),
             "parts": _evaluate(visual.parts, values),
+            "shaded": _evaluate(visual.shaded, values),
         }
     if kind == "bar":
         return _evaluated_spec(visual), {

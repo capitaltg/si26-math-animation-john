@@ -957,3 +957,17 @@ def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():
     # straddle an axis when the point sits on it).
     assert point["label_dx"] != 0.0
     assert point["label_dy"] != 0.0
+
+
+def test_partition_rejects_non_integral_shaded():
+    """A fractional `shaded` was silently coerced to 0, so a partition asked to
+    shade 2.5/6 rendered as fully unshaded instead of failing measurement. The
+    factory now calls `_whole` on shaded unconditionally so a non-integral
+    value raises before the visual is built.
+    """
+    with pytest.raises(ValueError, match="shaded"):
+        default_visual_registry().measure(
+            SimpleNamespace(kind="partition", ref="parts"),
+            {"whole": Fraction(1), "parts": Fraction(6), "shaded": Fraction(5, 2)},
+            LiteralTextMeasurer(),
+        )

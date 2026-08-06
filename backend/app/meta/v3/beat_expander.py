@@ -69,6 +69,16 @@ _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 # the magnitude (see `distance_from_zero_beat_id`). The generic role change
 # still fires on the same beat, so the whole line reads as focused while the
 # arrow / annotation is drawn on top.
+#
+# `equivalence_align` and `common_denominator_bridge` (M2) carry a compile-time
+# shape (which supporting partitions must be declared and which must reveal)
+# AND their own beat-owned focus walks: the align beat highlights the shaded
+# parts of both partitions together, and the bridge beat highlights the LCD
+# partition's shaded parts. Both use `SetRoleAction` on the plan-author's own
+# partition parts -- no new action kind is needed -- but the walk is owned by
+# a single beat so a plan with two derive beats does not double-stage it.
+_EQUIVALENCE_ALIGN_STRATEGY = "equivalence_align"
+_BRIDGE_STRATEGY = "common_denominator_bridge"
 
 
 class BeatExpander:
@@ -86,6 +96,8 @@ class BeatExpander:
         )
         self._signed_hop_beat_id = signed_hop_beat_id(plan)
         self._distance_from_zero_beat_id = distance_from_zero_beat_id(plan)
+        self._equivalence_align_beat_id = equivalence_align_beat_id(plan)
+        self._bridge_beat_id = common_denominator_bridge_beat_id(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -243,6 +255,18 @@ class BeatExpander:
             and beat.id == getattr(self, "_sweep_beat_id", None)
         ):
             return len(actions)
+        if (
+            plan.strategy == _BRIDGE_STRATEGY
+            and beat.id == getattr(self, "_bridge_beat_id", None)
+        ):
+            # The bridge beat walks each operand through its LCD refinement
+            # into the bridge, then dims the operands and refined intermediates
+            # back to structure. One slot per action keeps every focus role
+            # change on its own instant so `check_salience` sees at most one
+            # focused target per second; the default `beat_seconds /
+            # MIN_ACTION_SECONDS` rule batches two focuses into one slot as soon
+            # as the beat's ~17 actions overflow the seconds/min ratio.
+            return len(actions)
         return None
 
     def _standard_actions(
@@ -386,6 +410,50 @@ class BeatExpander:
             annotations = self._distance_from_zero_actions(plan)
             if annotations:
                 return self._generic_role_change(beat, "focus", current_roles) + annotations
+
+        if (
+            plan.strategy == _EQUIVALENCE_ALIGN_STRATEGY
+            and beat.id == getattr(self, "_equivalence_align_beat_id", None)
+        ):
+            # Focus every shaded wedge of BOTH partitions in one beat so the
+            # equivalent numerators read as matching amounts. The compiler
+            # already verified the fractions are equal; the walk here is what
+            # makes that equality land in the animation.
+            actions = self._equivalence_align_actions(plan, current_roles)
+            if actions:
+                detailed = self._targets_detailed_by_custom_actions(beat)
+                acted_refs = {plan.primary_visual.ref} | {
+                    spec.ref for spec in plan.supporting_visuals if spec.kind == "partition"
+                }
+                for target in beat.targets:
+                    if target.visual_ref in acted_refs and target.part is None:
+                        continue
+                    if self._target_key(target) in detailed:
+                        continue
+                    actions.extend(self._role_change(target, "focus", current_roles))
+                return actions
+
+        if (
+            plan.strategy == _BRIDGE_STRATEGY
+            and beat.id == getattr(self, "_bridge_beat_id", None)
+        ):
+            # Focus the bridge partition's shaded wedges -- the refined result
+            # on the LCD -- and dim the operands' shaded wedges to structure,
+            # so the frame reads as "the operands combined into the bridge".
+            actions = self._bridge_actions(plan, current_roles)
+            if actions:
+                detailed = self._targets_detailed_by_custom_actions(beat)
+                bridge_ref = _bridge_ref(plan)
+                operand_refs = _operand_refs(plan)
+                refined_refs = {spec.ref for spec in _refined_specs(plan)}
+                acted_refs = {bridge_ref, *operand_refs, *refined_refs}
+                for target in beat.targets:
+                    if target.visual_ref in acted_refs and target.part is None:
+                        continue
+                    if self._target_key(target) in detailed:
+                        continue
+                    actions.extend(self._role_change(target, "focus", current_roles))
+                return actions
 
         if (
             plan.strategy == "unit_rate"
@@ -621,6 +689,82 @@ class BeatExpander:
                 target=TargetRef(visual_ref=ref, part="marker", index=index),
                 label=_format_magnitude(abs(value)),
             ))
+        return actions
+
+    def _equivalence_align_actions(self, plan, current_roles):
+        specs = [plan.primary_visual, *[
+            spec for spec in plan.supporting_visuals if spec.kind == "partition"
+        ]]
+        actions = []
+        for spec in specs:
+            shaded = _partition_shaded(spec)
+            for index in range(shaded):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+        return actions
+
+    def _bridge_actions(self, plan, current_roles):
+        """Walk each operand from its own denominator into the LCD, then land
+        the bridge, then dim the operands and refined intermediates so the
+        bridge holds the punchline.
+
+        For each (operand, refined) pair the beat focuses the operand's shaded
+        wedges (its unlike-denominator state), then focuses the refined
+        partition's shaded wedges (that same amount expressed on the LCD --
+        3/6 and 2/6 in a 1/2 + 1/3 lesson). Only after both refinements have
+        landed does the bridge focus, so the frame reads as "each operand
+        refined onto the common denominator, combined into the bridge" rather
+        than as a jump from unlike-denominator operands to their sum.
+
+        The compiler enforces the four supporting partitions in order --
+        second_operand, refined_a, refined_b, bridge -- so `_refined_specs`
+        and `_bridge_ref` return the matching operand refinements without a
+        separate name convention.
+        """
+        bridge_ref = _bridge_ref(plan)
+        operand_specs = [
+            spec for spec in (plan.primary_visual, *plan.supporting_visuals)
+            if spec.kind == "partition" and spec.ref != bridge_ref
+        ]
+        refined_specs = _refined_specs(plan)
+        bridge_spec = next(
+            (
+                spec for spec in plan.supporting_visuals
+                if spec.kind == "partition" and spec.ref == bridge_ref
+            ),
+            None,
+        )
+        if bridge_spec is None or len(refined_specs) != 2:
+            return []
+        refined_refs = {spec.ref for spec in refined_specs}
+        original_operand_specs = [
+            spec for spec in operand_specs if spec.ref not in refined_refs
+        ]
+        actions = []
+        for operand_spec, refined_spec in zip(original_operand_specs, refined_specs):
+            for index in range(_partition_shaded(operand_spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=operand_spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+            for index in range(_partition_shaded(refined_spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=refined_spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+        for index in range(_partition_shaded(bridge_spec)):
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=bridge_spec.ref, part="partition", index=index),
+                "focus", current_roles,
+            ))
+        for spec in (*original_operand_specs, *refined_specs):
+            for index in range(_partition_shaded(spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=spec.ref, part="partition", index=index),
+                    "structure", current_roles,
+                ))
         return actions
 
     def _unit_rate_actions(self, plan, current_roles):
@@ -1004,6 +1148,94 @@ def distance_from_zero_beat_id(plan):
             ):
                 return beat.id
     return None
+
+
+def equivalence_align_beat_id(plan):
+    """The single beat equivalence_align stages its shaded-wedge walk on.
+
+    The first derive/focus beat that names BOTH the primary and the supporting
+    partition owns the walk. A beat that names only one of the two would emit
+    the walk over an unrevealed second partition (or vice versa), so requiring
+    both here means the alignment lands only when both are on-screen.
+    """
+    if plan.strategy != _EQUIVALENCE_ALIGN_STRATEGY:
+        return None
+    primary_ref = plan.primary_visual.ref
+    supports = [
+        spec.ref for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if not supports:
+        return None
+    support_ref = supports[0]
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        refs = {target.visual_ref for target in beat.targets}
+        if primary_ref in refs and support_ref in refs:
+            return beat.id
+    return None
+
+
+def common_denominator_bridge_beat_id(plan):
+    """The single beat common_denominator_bridge stages its refine walk on.
+
+    The first derive/focus beat that names the bridge partition owns the walk;
+    the compiler treats the second supporting partition as the LCD bridge.
+    """
+    if plan.strategy != _BRIDGE_STRATEGY:
+        return None
+    bridge_ref = _bridge_ref(plan)
+    if bridge_ref is None:
+        return None
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == bridge_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def _bridge_ref(plan):
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return partitions[3].ref if len(partitions) >= 4 else None
+
+
+def _operand_refs(plan):
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return (plan.primary_visual.ref, partitions[0].ref) if partitions else (plan.primary_visual.ref,)
+
+
+def _refined_specs(plan):
+    """The two LCD-refined operand partitions, or an empty tuple if absent.
+
+    Order matches operand order: refined_a is the primary_visual's refinement,
+    refined_b is the second_operand's refinement. `_validate_common_
+    denominator_bridge_compatibility` enforces the shape; falling back to an
+    empty tuple keeps `_bridge_actions` graceful on non-strategy paths.
+    """
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return (partitions[1], partitions[2]) if len(partitions) >= 4 else ()
+
+
+def _partition_shaded(spec):
+    """Literal shaded count of a partition spec, else 0.
+
+    The compiler already refuses a partition without literal shaded/parts for
+    both strategies (see `_partition_fraction`), so returning 0 here is only
+    reached for a partition falling through from a non-strategy path -- the
+    same defensive shape `_literal_int` uses.
+    """
+    value = getattr(spec, "shaded", None)
+    if value is None:
+        return 0
+    literal = _literal_int(value)
+    return literal if literal is not None else 0
 
 
 def _literal_int(expression):
