@@ -6,6 +6,7 @@ from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import (
+    common_denominator_bridge_beat_id, equivalence_align_beat_id,
     expand_beats, magnitude_sweep_beat_id, regroup_beat_id,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
@@ -126,7 +127,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
         compile_expression(expression, known_fields)
     validate_unique_visual_refs(plan)
     validate_target_refs(plan)
-    validate_strategy_compatibility(plan)
+    validate_strategy_compatibility(plan, answer_expression)
     validate_unit_rate_value_range(plan, known_fields)
     validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
@@ -269,7 +270,7 @@ _MAX_REGROUP_CELLS = 30
 #: beat has emitted one `set_role` per cell.
 
 
-def validate_strategy_compatibility(plan):
+def validate_strategy_compatibility(plan, answer_expression=None):
     supported = _SUPPORTED_STRATEGIES[plan.primary_visual.kind]
     if plan.strategy not in supported:
         _fail(
@@ -297,7 +298,7 @@ def validate_strategy_compatibility(plan):
     if plan.strategy == "equivalence_align":
         _validate_equivalence_align_compatibility(plan)
     if plan.strategy == "common_denominator_bridge":
-        _validate_common_denominator_bridge_compatibility(plan)
+        _validate_common_denominator_bridge_compatibility(plan, answer_expression)
 
 
 def _validate_inverse_operation_compatibility(plan):
@@ -598,9 +599,33 @@ def _validate_equivalence_align_compatibility(plan):
             "set the supporting partition's shaded and parts so shaded/parts equals "
             "the primary's, or use a different strategy",
         )
+    _require_owned_equivalence_align_beat(plan)
 
 
-def _validate_common_denominator_bridge_compatibility(plan):
+def _require_owned_equivalence_align_beat(plan):
+    """`equivalence_align` needs a focus/derive beat that targets BOTH partitions.
+
+    `equivalence_align_beat_id` selects the beat that owns the alignment walk;
+    if none exists, `_beat_kind_actions` falls through to the generic role
+    change and the shaded-wedge focus never lands. `check_strategy_affordance`
+    would then see a compiled plan that never actually animates the alignment,
+    so it is refused here at compile time instead.
+    """
+    if equivalence_align_beat_id(plan) is None:
+        supporting_partitions = [
+            spec for spec in plan.supporting_visuals if spec.kind == "partition"
+        ]
+        support_ref = supporting_partitions[0].ref if supporting_partitions else "<supporting>"
+        _fail(
+            "equivalence_align_requires_alignment_beat", "beats",
+            f"a focus or derive beat targeting both {plan.primary_visual.ref!r} "
+            f"and {support_ref!r}, which the compiler stages the alignment walk on",
+            "no focus/derive beat targets both partitions together",
+            "add a focus or derive beat whose targets include both partitions",
+        )
+
+
+def _validate_common_denominator_bridge_compatibility(plan, answer_expression):
     """Fraction arithmetic across unlike denominators needs a bridge partition.
 
     The lesson has three partitions on-screen: the two operands and the LCD
@@ -656,23 +681,115 @@ def _validate_common_denominator_bridge_compatibility(plan):
     bridge_fraction = _partition_fraction(
         bridge, f"supporting_visuals.{bridge.ref}",
     )
-    # The bridge carries the RESULT of combining the operands. Accept either
-    # a sum (a+b) or a difference (larger - smaller) to keep the compiler
-    # agnostic to the answer_expression's operator kind here -- the operator
-    # is already tied to the answer through `answer_expression`, and both
-    # additive combinations are legitimate teaching for this archetype.
-    candidates = {
-        primary_fraction + second_fraction,
-        abs(primary_fraction - second_fraction),
-    }
-    if bridge_fraction not in candidates:
+    _require_bridge_matches_answer(
+        answer_expression=answer_expression, bridge_ref=bridge.ref,
+        primary_fraction=primary_fraction, second_fraction=second_fraction,
+        bridge_fraction=bridge_fraction,
+    )
+    _require_owned_common_denominator_bridge_beat(plan)
+
+
+def _require_bridge_matches_answer(
+    *, answer_expression, bridge_ref, primary_fraction, second_fraction, bridge_fraction,
+):
+    """The bridge is the RESULT of the specific operation `answer_expression` names.
+
+    A "sum or difference either way" acceptance let an addition answer compile
+    with a difference bridge, so the animation contradicted the arithmetic on
+    screen. Pin the accepted operator (add or subtract) and the operand order
+    to `answer_expression` itself: the bridge must equal `primary op second`
+    exactly, using the operator drawn from the answer and the operands in the
+    same order the primary/second partitions declare them.
+    """
+    if answer_expression is None or answer_expression.node not in {"add", "subtract"}:
+        _fail(
+            "common_denominator_bridge_requires_additive_answer",
+            "answer_expression",
+            "an add or subtract expression combining the two operand fractions",
+            _describe_expression(answer_expression) if answer_expression is not None else "none",
+            "set answer_expression to an add or subtract of the two operand fractions, "
+            "or use a different strategy",
+        )
+    operand_fractions = [_answer_operand_fraction(op) for op in answer_expression.operands]
+    if len(operand_fractions) != 2 or any(f is None for f in operand_fractions):
+        _fail(
+            "common_denominator_bridge_answer_operands_must_be_literal_fractions",
+            "answer_expression.operands",
+            "two literal FractionNode operands so the compiler can match them to the partitions",
+            _describe_expression(answer_expression),
+            "write answer_expression as add/subtract of two fraction(literal, literal) operands",
+        )
+    answer_a, answer_b = operand_fractions
+    if (answer_a, answer_b) != (primary_fraction, second_fraction):
+        _fail(
+            "common_denominator_bridge_operands_must_match_partitions",
+            "answer_expression.operands",
+            f"operand fractions matching primary ({primary_fraction}) and "
+            f"second ({second_fraction}) in that order",
+            f"answer operands {answer_a}, {answer_b}",
+            "reorder answer_expression's operands so operand[0] equals the primary "
+            "partition and operand[1] equals the second supporting partition",
+        )
+    if answer_expression.node == "add":
+        expected = primary_fraction + second_fraction
+        operator_label = "operand_a + operand_b"
+    else:
+        expected = primary_fraction - second_fraction
+        operator_label = "operand_a - operand_b"
+        if expected < 0:
+            _fail(
+                "common_denominator_bridge_subtract_must_be_nonnegative",
+                "answer_expression",
+                "a subtraction whose result is >= 0 (bridge cannot shade a negative fraction)",
+                f"{primary_fraction} - {second_fraction} = {expected}",
+                "swap the operand order or use a different strategy",
+            )
+    if bridge_fraction != expected:
         _fail(
             "common_denominator_bridge_result_mismatch",
-            f"supporting_visuals.{bridge.ref}",
-            "a bridge shaded/parts fraction equal to operand_a + operand_b or |operand_a - operand_b|",
+            f"supporting_visuals.{bridge_ref}",
+            f"a bridge shaded/parts fraction equal to {operator_label} ({expected})",
             f"primary {primary_fraction}, second {second_fraction}, bridge {bridge_fraction}",
-            "set the bridge partition's shaded so shaded/parts equals the sum or "
-            "difference of the operands' fractions on the LCD, or use a different strategy",
+            "set the bridge partition's shaded so shaded/parts equals the answer_expression's "
+            "operation on the operands' fractions, or use a different strategy",
+        )
+
+
+def _answer_operand_fraction(operand):
+    """Read a FractionNode(literal, literal) as a `Fraction`, else None."""
+    if getattr(operand, "node", None) != "fraction":
+        return None
+    numerator, denominator = operand.operands
+    if numerator.node != "literal" or denominator.node != "literal":
+        return None
+    if not float(numerator.value).is_integer() or not float(denominator.value).is_integer():
+        return None
+    denom = int(denominator.value)
+    if denom == 0:
+        return None
+    return Fraction(int(numerator.value), denom)
+
+
+def _require_owned_common_denominator_bridge_beat(plan):
+    """The bridge walk needs a focus/derive beat that targets the bridge partition.
+
+    `common_denominator_bridge_beat_id` returns None otherwise, and
+    `_beat_kind_actions` falls through to the generic role change so the
+    refined-onto-LCD walk never lands. Refused here so a plan that could not
+    animate the bridge fails at compile time rather than as a decorative frame.
+    """
+    if common_denominator_bridge_beat_id(plan) is None:
+        bridge_ref = None
+        partitions = [spec for spec in plan.supporting_visuals if spec.kind == "partition"]
+        if len(partitions) >= 2:
+            bridge_ref = partitions[1].ref
+        target_ref = bridge_ref if bridge_ref is not None else "<bridge>"
+        _fail(
+            "common_denominator_bridge_requires_bridge_beat", "beats",
+            f"a focus or derive beat targeting {target_ref!r}, "
+            "which the compiler stages the bridge walk on",
+            "no focus/derive beat names the bridge partition",
+            "add a focus or derive beat whose targets include the bridge partition",
         )
 
 

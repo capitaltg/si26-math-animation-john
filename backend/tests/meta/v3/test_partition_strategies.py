@@ -252,15 +252,13 @@ def test_equivalence_align_rejects_a_non_partition_primary():
 
 
 def test_equivalence_align_rejects_a_plan_that_never_reveals_the_equivalent_partition():
-    """A `group_reveal` primary + a supporting visual never named by any beat is decorative.
+    """A plan whose beats never target both partitions cannot animate the alignment.
 
-    The strategy affordance check must catch the missing reveal so the lesson
-    fails at compile time rather than as an animation with a dangling extra
-    circle.
+    `_require_owned_equivalence_align_beat` refuses the shape at compile time
+    so a plan that could not emit the shaded-wedge walk fails before the
+    quality gate ever runs.
     """
     payload = _equivalence_plan().model_dump()
-    # Drop the second beat that revealed `sixths` -- and everything downstream
-    # that named it -- so no beat targets the supporting partition.
     payload["beats"] = [
         beat for beat in payload["beats"] if beat["id"] != "reveal_sixths"
     ]
@@ -272,8 +270,7 @@ def test_equivalence_align_rejects_a_plan_that_never_reveals_the_equivalent_part
     with pytest.raises(V3ValidationError) as exc_info:
         _compile_and_gate(TeachingPlanDocument.model_validate(payload), _equivalence_answer())
 
-    # The quality gate raises with the check's code as the failure code.
-    assert exc_info.value.failure.code == "static_process_visual"
+    assert exc_info.value.failure.code == "equivalence_align_requires_alignment_beat"
 
 
 def test_common_denominator_bridge_compiles_one_half_plus_one_third():
@@ -406,16 +403,18 @@ def test_common_denominator_bridge_rejects_result_that_is_neither_sum_nor_differ
 
 
 def test_common_denominator_bridge_rejects_a_plan_that_never_reveals_the_bridge():
+    """A plan whose beats never target the bridge partition cannot stage the walk.
+
+    `_require_owned_common_denominator_bridge_beat` refuses the shape at
+    compile time so a plan that could not emit the refined-onto-LCD walk fails
+    before the quality gate ever runs.
+    """
     payload = _bridge_plan(
         primary_parts=2, primary_shaded=1,
         second_parts=3, second_shaded=1,
         lcd_parts=6, lcd_shaded=5,
         operation="add",
     ).model_dump()
-    # Drop `bridge_lcd` from every beat's targets so the compiler still sees the
-    # visual declared but nothing reveals it. Every beat still needs at least
-    # one target, so a beat that only named the bridge falls back to the
-    # primary operand.
     for beat in payload["beats"]:
         pruned = [
             target for target in beat["targets"] if target["visual_ref"] != "bridge_lcd"
@@ -425,4 +424,78 @@ def test_common_denominator_bridge_rejects_a_plan_that_never_reveals_the_bridge(
     with pytest.raises(V3ValidationError) as exc_info:
         _compile_and_gate(TeachingPlanDocument.model_validate(payload), _add_answer())
 
-    assert exc_info.value.failure.code == "static_process_visual"
+    assert exc_info.value.failure.code == "common_denominator_bridge_requires_bridge_beat"
+
+
+def test_common_denominator_bridge_rejects_addition_answer_with_difference_bridge():
+    """An add answer paired with a difference bridge contradicts the arithmetic.
+
+    Refused at compile time so the animation cannot show `1/2 + 1/3` while the
+    bridge shades the difference (which visually reads as subtraction).
+    """
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile_and_gate(
+            _bridge_plan(
+                primary_parts=2, primary_shaded=1,
+                second_parts=3, second_shaded=1,
+                lcd_parts=6, lcd_shaded=1,
+                operation="add",
+            ),
+            _add_answer(),
+        )
+
+    assert exc_info.value.failure.code == "common_denominator_bridge_result_mismatch"
+
+
+def test_common_denominator_bridge_rejects_subtract_answer_operand_swap():
+    """Subtracting `1/2 - 3/4` cannot compile onto a 3/4 primary + 1/2 second.
+
+    The compiler pins operand order to the primary/second partitions, so the
+    answer's operands must be primary first, second second.
+    """
+    payload = _bridge_plan(
+        primary_parts=4, primary_shaded=3,
+        second_parts=2, second_shaded=1,
+        lcd_parts=4, lcd_shaded=1,
+        operation="subtract",
+    )
+    swapped = SubtractNode(operands=[
+        FractionNode(operands=[LiteralNode(value=1), LiteralNode(value=2)]),
+        FractionNode(operands=[LiteralNode(value=3), LiteralNode(value=4)]),
+    ])
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile_and_gate(payload, swapped)
+
+    assert exc_info.value.failure.code == "common_denominator_bridge_operands_must_match_partitions"
+
+
+def test_common_denominator_bridge_bridge_beat_walks_operands_then_bridge():
+    """The bridge beat first focuses each operand's shaded wedges (their
+    refined-onto-LCD state), then the bridge's shaded wedges, so the frame
+    reads as "each operand refined onto the common denominator, combined".
+    """
+    plan = _bridge_plan(
+        primary_parts=2, primary_shaded=1,
+        second_parts=3, second_shaded=1,
+        lcd_parts=6, lcd_shaded=5,
+        operation="add",
+    )
+
+    program = _compile_and_gate(plan, _add_answer())
+
+    focus_sequence = [
+        (entry.action.target.visual_ref, entry.action.target.part, entry.action.target.index)
+        for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == "focus"
+        and entry.action.target.part == "partition"
+    ]
+    first_operand_focus = focus_sequence.index(("first_operand", "partition", 0))
+    second_operand_focus = focus_sequence.index(("second_operand", "partition", 0))
+    bridge_focus = focus_sequence.index(("bridge_lcd", "partition", 0))
+    assert first_operand_focus < bridge_focus, (
+        "operand_a's refined state must land before the bridge's combined result"
+    )
+    assert second_operand_focus < bridge_focus, (
+        "operand_b's refined state must land before the bridge's combined result"
+    )

@@ -419,8 +419,7 @@ def _measure_grid(*, spec, values, measurer):
 
 def _measure_partition(*, spec, values, measurer):
     whole, count = values["whole"], _whole(values["parts"], "parts")
-    shaded_raw = values.get("shaded", 0)
-    shaded = _whole(shaded_raw, "shaded") if _is_whole(shaded_raw) else 0
+    shaded = _whole(values.get("shaded", 0), "shaded")
     if whole <= 0 or count <= 0:
         raise ValueError("partition whole and parts must be positive")
     if shaded < 0 or shaded > count:

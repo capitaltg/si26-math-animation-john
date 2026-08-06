@@ -613,22 +613,42 @@ class BeatExpander:
         return actions
 
     def _bridge_actions(self, plan, current_roles):
+        """Focus each operand's shaded wedges (their refined-onto-LCD state),
+        then focus the bridge's shaded wedges (the combined result), then dim
+        the operands back to structure so the bridge holds the punchline.
+
+        The operand-focus phase is what makes the frame teach the refinement:
+        without it the animation jumps from unfocused operand partitions to a
+        focused LCD bridge, skipping the intermediate "each operand refined
+        onto the common denominator" state the strategy exists to show.
+        """
         bridge_ref = _bridge_ref(plan)
+        operand_specs = [
+            spec for spec in (plan.primary_visual, *plan.supporting_visuals)
+            if spec.kind == "partition" and spec.ref != bridge_ref
+        ]
+        bridge_spec = next(
+            (
+                spec for spec in plan.supporting_visuals
+                if spec.kind == "partition" and spec.ref == bridge_ref
+            ),
+            None,
+        )
+        if bridge_spec is None:
+            return []
         actions = []
-        for spec in plan.supporting_visuals:
-            if spec.kind != "partition" or spec.ref != bridge_ref:
-                continue
+        for spec in operand_specs:
             for index in range(_partition_shaded(spec)):
                 actions.extend(self._role_change(
                     TargetRef(visual_ref=spec.ref, part="partition", index=index),
                     "focus", current_roles,
                 ))
-        # Reduce the operands' shaded wedges to structure so the bridge reads
-        # as the refined result rather than as one of three equally-salient
-        # numerators.
-        for spec in (plan.primary_visual, *plan.supporting_visuals):
-            if spec.kind != "partition" or spec.ref == bridge_ref:
-                continue
+        for index in range(_partition_shaded(bridge_spec)):
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=bridge_spec.ref, part="partition", index=index),
+                "focus", current_roles,
+            ))
+        for spec in operand_specs:
             for index in range(_partition_shaded(spec)):
                 actions.extend(self._role_change(
                     TargetRef(visual_ref=spec.ref, part="partition", index=index),
