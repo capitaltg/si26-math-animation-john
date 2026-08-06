@@ -102,7 +102,13 @@ _CARDINALITY_FIELDS = {
 #: arrive by their own reveal -- which means the "revealing a visual reveals its
 #: parts" rule that `beat_expander._is_revealed` and `quality.check_repeated_reveal`
 #: both apply has to make an exception for them.
-DEFERRED_PARTS = {"unit_tape": ("target_label",)}
+#: `number_line`'s `boundary` and `ray` are the ray_shade affordance; a plan
+#: without `boundary`/`boundary_kind`/`ray_direction` exposes no such parts, so
+#: the entry is inert for non-ray_shade lines.
+DEFERRED_PARTS = {
+    "unit_tape": ("target_label",),
+    "number_line": ("boundary", "ray"),
+}
 
 #: One box per whole unit stops being legible past this, and a ninth box would
 #: not fit the 18.9-unit width limit with both labels inside it. `number_line`
@@ -297,10 +303,16 @@ def _measure_number_line(*, spec, values, measurer):
     labels = []
     label_widths = []
     marker_xs = []
+
+    def _project(value):
+        return line_left + (line_right - line_left) * float(
+            (value - minimum) / (maximum - minimum)
+        )
+
     for index, marker in enumerate(markers):
         if not minimum <= marker <= maximum:
             raise ValueError(f"marker {marker} outside [{minimum}, {maximum}]")
-        x = line_left + (line_right - line_left) * float((marker - minimum) / (maximum - minimum))
+        x = _project(marker)
         parts[("marker", index)] = SemanticPart("marker", index, Bounds(x, x, 0, 0))
         label = format_number(marker)
         labels.append(label)
@@ -327,6 +339,26 @@ def _measure_number_line(*, spec, values, measurer):
     )
     bounds_left = min(line_left, left_extent)
     bounds_right = max(line_right, right_extent)
+    boundary_value = values.get("boundary")
+    boundary_kind = values.get("boundary_kind")
+    ray_direction = values.get("ray_direction")
+    if boundary_value is not None:
+        if not minimum <= boundary_value <= maximum:
+            raise ValueError(
+                f"boundary {boundary_value} outside [{minimum}, {maximum}]"
+            )
+        boundary_x = _project(boundary_value)
+        parts[("boundary", 0)] = SemanticPart(
+            "boundary", 0, Bounds(boundary_x, boundary_x, 0, 0),
+        )
+        ray_end_x = line_right if ray_direction == "right" else line_left
+        parts[("ray", 0)] = SemanticPart(
+            "ray", 0,
+            Bounds(min(boundary_x, ray_end_x), max(boundary_x, ray_end_x), 0, 0),
+        )
+    else:
+        boundary_x = None
+        ray_end_x = None
     return _measured_visual(
         ref=spec.ref,
         bounds=Bounds(bounds_left, bounds_right, bottom, 0.2),
@@ -345,6 +377,15 @@ def _measure_number_line(*, spec, values, measurer):
             # them without stretching the line under the labels.
             "line_left": line_left,
             "line_right": line_right,
+            # `ray_shade` payload: `boundary_x`, `boundary_kind`, `ray_end_x`
+            # are populated only when the plan carries a boundary. The
+            # renderer branches on `boundary_x is None` and skips the
+            # circle+ray primitives entirely on a non-inequality line.
+            "boundary": boundary_value,
+            "boundary_x": boundary_x,
+            "boundary_kind": boundary_kind,
+            "ray_direction": ray_direction,
+            "ray_end_x": ray_end_x,
         },
     )
 
@@ -395,21 +436,78 @@ def _measure_bar(*, spec, values, measurer):
     value, maximum = values["value"], _whole(values["maximum"], "maximum")
     if maximum <= 0 or value < 0 or value > maximum:
         raise ValueError("bar requires 0 <= value <= maximum")
+    constant_raw = values.get("constant")
+    coefficient_raw = values.get("coefficient")
+    if constant_raw is not None:
+        constant = _whole(constant_raw, "constant")
+        coefficient = _whole(coefficient_raw, "coefficient") if coefficient_raw is not None else 1
+        if not 0 < constant < maximum:
+            raise ValueError(
+                f"bar constant must satisfy 0 < constant < maximum "
+                f"(constant={constant}, maximum={maximum})"
+            )
+        if coefficient < 1:
+            raise ValueError("bar coefficient must be >= 1")
+        x_segment_count = maximum - constant
+        if x_segment_count % coefficient != 0:
+            raise ValueError(
+                f"bar (maximum - constant) must be divisible by coefficient "
+                f"(maximum={maximum}, constant={constant}, coefficient={coefficient})"
+            )
+        segments_per_x = x_segment_count // coefficient
+    else:
+        constant = None
+        coefficient = None
+        x_segment_count = None
+        segments_per_x = None
     segment_width, gap, height = 0.6, 0.05, 0.6
     width = maximum * segment_width + (maximum - 1) * gap
     left = -width / 2
-    parts = {
-        ("segment", index): SemanticPart(
-            "segment", index,
-            Bounds(left + index * (segment_width + gap), left + index * (segment_width + gap) + segment_width, -height / 2, height / 2),
+
+    def _segment_bounds(index):
+        seg_left = left + index * (segment_width + gap)
+        return Bounds(seg_left, seg_left + segment_width, -height / 2, height / 2)
+
+    def _range_bounds(first, last):
+        """Bounds spanning segments `first..last` inclusive."""
+        first_bounds = _segment_bounds(first)
+        last_bounds = _segment_bounds(last)
+        return Bounds(
+            first_bounds.left, last_bounds.right, -height / 2, height / 2,
         )
+
+    parts = {
+        ("segment", index): SemanticPart("segment", index, _segment_bounds(index))
         for index in range(maximum)
     }
+    if constant is not None:
+        parts[("x_region", 0)] = SemanticPart(
+            "x_region", 0, _range_bounds(0, x_segment_count - 1),
+        )
+        parts[("constant_region", 0)] = SemanticPart(
+            "constant_region", 0, _range_bounds(x_segment_count, maximum - 1),
+        )
+        for i in range(coefficient):
+            first = i * segments_per_x
+            last = first + segments_per_x - 1
+            parts[("x_part", i)] = SemanticPart(
+                "x_part", i, _range_bounds(first, last),
+            )
     return _measured_visual(
         ref=spec.ref,
         bounds=Bounds(left, left + width, -height / 2, height / 2),
         parts=parts,
-        payload={"value": value, "maximum": maximum},
+        payload={
+            "value": value, "maximum": maximum,
+            # `inverse_operation` payload: `constant` is the known-addend
+            # segment count carved off the right, `coefficient` is how many
+            # equal x-parts the remaining x-region subdivides into. Both are
+            # `None` on a plain bar; the renderer branches on this to draw
+            # partition dividers between the x_region and the constant_region
+            # and (when coefficient > 1) between adjacent x_parts.
+            "constant": constant,
+            "coefficient": coefficient,
+        },
     )
 
 

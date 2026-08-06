@@ -216,6 +216,7 @@ def _build_visual(placed, palette: str):
     elif "markers" in payload:
         root, children = _line_visual(placed, "marker")
         root.add(*_number_line_labels(measured, placed))
+        _add_ray_shade_children(root, children, measured, placed, palette)
     elif {"rows", "columns"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "cell")
     elif {"whole", "parts"} <= payload.keys():
@@ -226,6 +227,7 @@ def _build_visual(placed, palette: str):
         root, children = _build_unit_tape(measured, placed, palette)
     elif {"value", "maximum"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "segment")
+        _add_inverse_operation_children(root, children, measured, placed, palette)
     elif "count" in payload:
         # `_parts_as_dots` returns the children dict alone, not a (root, children)
         # pair -- unpacking it here consumed the dict's KEYS, so every
@@ -618,6 +620,113 @@ def measurer_height_for(font_role: str) -> float:
     """
     from app.meta.v3.manim_measurer import FONT_SIZES
     return FONT_SIZES[font_role] * 0.014
+
+
+def _add_inverse_operation_children(root, children, measured, placed, palette: str):
+    """Register x_region / constant_region / x_part group children on a bar.
+
+    Only fires when the bar declares an `inverse_operation` partition
+    (`payload["constant"] is not None`). Each group child is a VGroup over
+    the segment mobjects it spans, so a `set_role` on the group applies
+    the colour transform to every segment inside the region uniformly --
+    mirroring how `_build_unit_tape` registers per-label VGroups so
+    `unit_substitution` can reveal a whole label class at once.
+
+    Also paints thin divider Lines between the x_region and the
+    constant_region and (when coefficient > 1) between adjacent x_parts,
+    so the partition reads as split even before any role change fires.
+    The dividers are added to `root` (they arrive with the whole-bar
+    reveal), NOT registered as children, since nothing addresses them.
+    """
+    payload = measured.payload
+    if payload.get("constant") is None:
+        return
+    constant = payload["constant"]
+    coefficient = payload["coefficient"] or 1
+    maximum = payload["maximum"]
+    x_segment_count = maximum - constant
+    segments_per_x = x_segment_count // coefficient
+
+    def _segment_group(first, last):
+        return VGroup(*(children[("segment", idx)] for idx in range(first, last + 1)))
+
+    children[("x_region", 0)] = _segment_group(0, x_segment_count - 1)
+    children[("constant_region", 0)] = _segment_group(x_segment_count, maximum - 1)
+    for i in range(coefficient):
+        first = i * segments_per_x
+        last = first + segments_per_x - 1
+        children[("x_part", i)] = _segment_group(first, last)
+
+    def _divider_between(left_seg_index, right_seg_index):
+        left_bounds = _translated(
+            measured.parts[("segment", left_seg_index)].bounds, placed.offset,
+        )
+        right_bounds = _translated(
+            measured.parts[("segment", right_seg_index)].bounds, placed.offset,
+        )
+        mid_x = (left_bounds.right + right_bounds.left) / 2
+        # Extend slightly above/below the bar so the divider reads as a
+        # partition rather than a gap between segments (segments already
+        # have a `gap` of 0.05 between them at measurement time).
+        overhang = 0.15
+        top = left_bounds.top + overhang
+        bottom = left_bounds.bottom - overhang
+        return Line(_array(Point(mid_x, bottom)), _array(Point(mid_x, top)))
+
+    dividers = [_divider_between(x_segment_count - 1, x_segment_count)]
+    if coefficient > 1:
+        for i in range(1, coefficient):
+            first = i * segments_per_x
+            dividers.append(_divider_between(first - 1, first))
+    for divider in dividers:
+        divider.set_stroke(width=3)
+    root.add(*dividers)
+
+
+def _add_ray_shade_children(root, children, measured, placed, palette: str):
+    """Register the boundary circle and shaded ray on a number_line.
+
+    Both parts are declared deferred (`visual_registry.DEFERRED_PARTS`), so
+    they're built here but held back from `root` -- the beat_expander's
+    `ray_shade` branch emits a `RevealAction` on each in beat order,
+    matching how `_build_unit_tape` defers `target_label`.
+
+    An `open` boundary_kind draws an unfilled ring (the strict inequality
+    excludes the value); `closed` fills the dot (the inequality includes
+    the value). The ray is a thick Line from the boundary outward to the
+    line endpoint in `ray_direction`, coloured `focus` so it reads as
+    highlighted shading rather than another axis segment.
+    """
+    payload = measured.payload
+    if payload.get("boundary_x") is None:
+        return
+    scale, offset = placed.scale, placed.offset
+    boundary_x = payload["boundary_x"] * scale + offset.x
+    line_y = payload["line_center_y"] * scale + offset.y
+    boundary_kind = payload["boundary_kind"]
+    ray_end_x = payload["ray_end_x"] * scale + offset.x
+    dot_radius = 0.12 * scale
+    circle = Circle(radius=dot_radius).move_to(_array(Point(boundary_x, line_y)))
+    ray_style = resolve_semantic_style(palette, "focus")
+    ray_color = ray_style["color"]
+    if boundary_kind == "closed":
+        # Filled disc: paint the circle in the focus colour so it reads as
+        # the included endpoint the inequality contains.
+        circle.set_fill(ray_color, opacity=1.0)
+        circle.set_stroke(ray_color, width=3)
+    else:
+        # Open ring: no fill, ring in the focus colour to match the ray.
+        circle.set_fill(opacity=0.0)
+        circle.set_stroke(ray_color, width=3)
+    ray = Line(
+        _array(Point(boundary_x, line_y)),
+        _array(Point(ray_end_x, line_y)),
+    )
+    ray.set_stroke(ray_color, width=6)
+    children[("boundary", 0)] = circle
+    children[("ray", 0)] = ray
+    # Deferred: NOT added to root. `beat_expander` reveals each on its
+    # own beat via the DEFERRED_PARTS mechanism.
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):

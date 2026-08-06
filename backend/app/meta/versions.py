@@ -40,7 +40,14 @@
 #    boundary + shaded ray). A version-9 compiler rejects the new strategy
 #    literals as unknown enum values, so a plan authored against version 10
 #    cannot be re-validated by a stale runtime.
-DSL_COMPILER_VERSION = 10
+# 11: `BarVisual` gains optional `constant` and `coefficient` fields and
+#    `NumberLineVisual` gains `boundary`, `boundary_kind`, `ray_direction` --
+#    all required by `inverse_operation` and `ray_shade` respectively. The
+#    compiler now stages the equation partition (constant_region + x_region
+#    + x_parts) and the inequality's boundary circle + shaded ray on the
+#    beats naming primary; a version-10 compiler rejects the new fields as
+#    unknown, so a plan authored against version 11 cannot be re-validated.
+DSL_COMPILER_VERSION = 11
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.
@@ -65,4 +72,10 @@ DSL_COMPILER_VERSION = 10
 # 9: `data_display` renders as a new visual kind. A version-8 renderer cannot
 #    build any of its five display styles, so an artifact stamped 8 that
 #    carries a data_display must not be replayed.
-DYNAMIC_RENDERER_VERSION = 9
+# 10: `bar` draws partition dividers between the x_region and the constant_region
+#    (plus per-x_part dividers when coefficient > 1) for `inverse_operation`
+#    plans, and `number_line` builds an open/closed boundary circle and a
+#    thick shaded ray for `ray_shade` plans. A version-9 renderer draws
+#    neither primitive, so an artifact stamped 9 that references the new
+#    payload keys must not be replayed.
+DYNAMIC_RENDERER_VERSION = 10

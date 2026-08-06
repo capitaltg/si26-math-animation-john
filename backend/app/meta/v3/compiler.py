@@ -28,6 +28,32 @@ _EXPRESSION_FIELDS = {
     "data_display": (),
 }
 
+#: Optional ExpressionNode fields whose value is only present under specific
+#: strategies. Iterated in `expressions_from_plan` when the field is set.
+_OPTIONAL_EXPRESSION_FIELDS = {
+    "bar": ("constant", "coefficient"),
+    "number_line": ("boundary",),
+}
+
+def _bar_x_region_cardinality(spec):
+    """One `x_region` / `constant_region` exists exactly when the bar carries
+    an equation partition. Returns 0 (rejecting any target) on a plain bar
+    and 1 otherwise, so `_validate_target` catches a stray part reference
+    with `target_index_out_of_range` instead of `unknown_semantic_part`.
+    """
+    return 1 if spec.constant is not None else 0
+
+
+def _bar_x_part_cardinality(spec):
+    if spec.constant is None or spec.coefficient is None:
+        return 0
+    return _literal_integer(spec.coefficient)
+
+
+def _number_line_boundary_cardinality(spec):
+    return 1 if spec.boundary is not None else 0
+
+
 _PART_CARDINALITY = {
     "ordered_values": {"item": lambda spec: len(spec.values)},
     "rectangle_measurement": {
@@ -36,10 +62,19 @@ _PART_CARDINALITY = {
         "width_edge": lambda spec: 2,
         "vertex": lambda spec: 4,
     },
-    "number_line": {"marker": lambda spec: len(spec.markers)},
+    "number_line": {
+        "marker": lambda spec: len(spec.markers),
+        "boundary": _number_line_boundary_cardinality,
+        "ray": _number_line_boundary_cardinality,
+    },
     "grid": {"cell": lambda spec: _literal_product(spec.rows, spec.columns)},
     "partition": {"partition": lambda spec: _literal_integer(spec.parts)},
-    "bar": {"segment": lambda spec: _literal_integer(spec.maximum)},
+    "bar": {
+        "segment": lambda spec: _literal_integer(spec.maximum),
+        "x_region": _bar_x_region_cardinality,
+        "constant_region": _bar_x_region_cardinality,
+        "x_part": _bar_x_part_cardinality,
+    },
     "object_set": {"item": lambda spec: _literal_integer(spec.count)},
     "label": {},
     "unit_tape": {
@@ -126,6 +161,10 @@ def expressions_from_plan(plan):
         for field_name in _EXPRESSION_FIELDS[spec.kind]:
             value = getattr(spec, field_name)
             yield from value if isinstance(value, list) else (value,)
+        for field_name in _OPTIONAL_EXPRESSION_FIELDS.get(spec.kind, ()):
+            value = getattr(spec, field_name, None)
+            if value is not None:
+                yield value
         if spec.kind == "coordinate_plane":
             for point in spec.points:
                 yield point.x
@@ -251,6 +290,128 @@ def validate_strategy_compatibility(plan):
         _validate_regroup_compatibility(plan)
     if plan.strategy == "magnitude_comparison":
         _validate_magnitude_comparison_compatibility(plan)
+    if plan.strategy == "inverse_operation":
+        _validate_inverse_operation_compatibility(plan)
+    if plan.strategy == "ray_shade":
+        _validate_ray_shade_compatibility(plan)
+
+
+def _validate_inverse_operation_compatibility(plan):
+    """Require the bar to declare the equation's partition at compile time.
+
+    `inverse_operation` teaches "peel off the known constant, then divide the
+    remainder into k equal x-parts". The compiler stages that partition on
+    the bar directly, so the segment counts have to be knowable up front:
+    `constant`, `coefficient`, and `maximum` must be literals, `0 < constant
+    < maximum` (a non-empty x-region and a non-empty constant-region), and
+    `(maximum - constant) % coefficient == 0` (each x-part is a whole
+    segment count).
+    """
+    spec = plan.primary_visual
+    maximum = _literal_integer(spec.maximum)
+    if maximum is None:
+        _fail(
+            "inverse_operation_requires_literal_partition", "primary_visual",
+            "a literal bar maximum so the compiler can partition the segments",
+            f"bar maximum={_describe_expression(spec.maximum)}",
+            "set maximum to a literal integer, or use a different strategy",
+        )
+    if spec.constant is None or spec.coefficient is None:
+        _fail(
+            "inverse_operation_requires_partition_fields", "primary_visual",
+            "bar.constant and bar.coefficient declaring the equation's known "
+            "addend and x-coefficient",
+            f"constant={spec.constant is not None}, "
+            f"coefficient={spec.coefficient is not None}",
+            "set bar.constant (the known addend) and bar.coefficient (how many "
+            "equal x-parts) as literal integers",
+        )
+    constant = _literal_integer(spec.constant)
+    coefficient = _literal_integer(spec.coefficient)
+    if constant is None or coefficient is None:
+        _fail(
+            "inverse_operation_requires_literal_partition", "primary_visual",
+            "literal bar.constant and bar.coefficient",
+            f"constant={_describe_expression(spec.constant)}, "
+            f"coefficient={_describe_expression(spec.coefficient)}",
+            "set both fields to literal integers so the compiler can partition "
+            "the segments at compile time",
+        )
+    if not 0 < constant < maximum:
+        _fail(
+            "inverse_operation_invalid_partition", "primary_visual",
+            "0 < constant < maximum so both x_region and constant_region are non-empty",
+            f"constant={constant}, maximum={maximum}",
+            "reduce constant below maximum and keep it positive",
+        )
+    if coefficient < 1:
+        _fail(
+            "inverse_operation_invalid_partition", "primary_visual",
+            "coefficient >= 1",
+            f"coefficient={coefficient}",
+            "set coefficient to 1 for a one-step equation, >= 2 for a two-step",
+        )
+    if (maximum - constant) % coefficient != 0:
+        _fail(
+            "inverse_operation_invalid_partition", "primary_visual",
+            "(maximum - constant) divisible by coefficient so each x_part is a "
+            "whole segment count",
+            f"maximum={maximum}, constant={constant}, coefficient={coefficient}",
+            "adjust the equation so (maximum - constant) is a multiple of coefficient",
+        )
+
+
+def _validate_ray_shade_compatibility(plan):
+    """Require the number_line to declare the inequality's boundary + direction.
+
+    `ray_shade` teaches "boundary at b, shade the direction the inequality
+    points". The compiler stages an open/closed circle at the boundary and
+    a thick ray from the boundary to the appropriate endpoint, so all three
+    fields must be present -- and `boundary` a literal inside
+    `[minimum, maximum]` -- for the measurer to project the boundary onto
+    the fixed +/-2.75 line.
+    """
+    spec = plan.primary_visual
+    missing = [
+        name for name in ("boundary", "boundary_kind", "ray_direction")
+        if getattr(spec, name) is None
+    ]
+    if missing:
+        _fail(
+            "ray_shade_requires_boundary_fields", "primary_visual",
+            "number_line.boundary, boundary_kind, and ray_direction all set",
+            f"missing {', '.join(missing)}",
+            "declare boundary (the inequality's cutoff value), boundary_kind "
+            "('open' for strict / 'closed' for inclusive), and ray_direction "
+            "('left' or 'right')",
+        )
+    boundary_lit = _literal_number(spec.boundary)
+    minimum_lit = _literal_number(spec.minimum)
+    maximum_lit = _literal_number(spec.maximum)
+    if boundary_lit is None or minimum_lit is None or maximum_lit is None:
+        _fail(
+            "ray_shade_requires_literal_boundary", "primary_visual",
+            "literal boundary/minimum/maximum so the boundary projects to a "
+            "definite line position",
+            f"boundary={_describe_expression(spec.boundary)}, "
+            f"minimum={_describe_expression(spec.minimum)}, "
+            f"maximum={_describe_expression(spec.maximum)}",
+            "set all three to literal numbers, or use a different strategy",
+        )
+    if not minimum_lit <= boundary_lit <= maximum_lit:
+        _fail(
+            "ray_shade_boundary_out_of_range", "primary_visual.boundary",
+            f"a boundary inside [{minimum_lit}, {maximum_lit}]",
+            f"boundary={boundary_lit}",
+            "move the boundary inside the number_line's declared range",
+        )
+
+
+def _literal_number(expression):
+    """A literal expression's numeric value, or None if not a literal."""
+    if expression is None or expression.node != "literal":
+        return None
+    return float(expression.value)
 
 
 def _validate_regroup_compatibility(plan):
