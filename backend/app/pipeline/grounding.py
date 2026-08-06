@@ -90,7 +90,8 @@ def _normalize_for_grounding(text: str) -> str:
     span-building sees identical text. `[blank]` becomes a single space so
     character offsets stay stable across match sites.
     """
-    return _BLANK_PLACEHOLDER_RE.sub(" ", text.casefold().replace("’", "'"))
+    normalized = text.casefold().replace("’", "'").replace("−", "-")
+    return _BLANK_PLACEHOLDER_RE.sub(" ", normalized)
 
 
 def tokenize_for_grounding(text: str) -> list[str]:

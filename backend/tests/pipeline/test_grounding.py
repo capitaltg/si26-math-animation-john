@@ -289,6 +289,15 @@ def test_two_negative_params_need_two_negative_source_occurrences():
     assert check_params_grounded(params, "Start at -3 and add 5.") == ["-3"]
 
 
+def test_unicode_minus_sign_normalizes_to_ascii_hyphen():
+    from app.pipeline.grounding import check_params_grounded, tokenize_for_grounding
+
+    assert tokenize_for_grounding("Start at −3 and add 5.") == ["start", "at", "-3", "and", "add", "5"]
+
+    params = _StubParams(tokens=["-3", "5"], derived_totals=[])
+    assert check_params_grounded(params, "Start at −3 and add 5.") == []
+
+
 def test_distinct_fractions_ground_against_matching_source():
     from app.pipeline.grounding import check_params_grounded
 
