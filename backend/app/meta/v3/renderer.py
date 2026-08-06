@@ -240,6 +240,20 @@ def _build_visual(placed, palette: str):
         raise ValueError(f"unsupported resolved visual {measured.ref}")
 
     _apply_style(root, style)
+    if {"value", "maximum"} <= payload.keys():
+        # The bar's `value` is stored in the payload but never influenced how
+        # segments render -- every segment landed in the whole-visual style,
+        # so two bars with different values but the same maximum looked
+        # identical. Paint segments >= value in the `neutral` role so the
+        # bar reads as filled up to `value` before any timeline action plays.
+        # Done here rather than as a set_role in the reveal beat: a per-segment
+        # baseline via timeline actions would burn one entry per filled
+        # segment against the 40-action cap (see `_MAX_PERCENT_SWEEP_SEGMENTS`).
+        empty_style = resolve_semantic_style(palette, "neutral")
+        value = payload["value"]
+        for (part, index), mobject in children.items():
+            if part == "segment" and index >= value:
+                _apply_style(mobject, empty_style)
     return root, children
 
 
@@ -843,8 +857,16 @@ def _line_for_bounds(bounds: Bounds):
 def _build_relation(relation, palette: str):
     target = _array(relation.target)
     label = Text(relation.text, font_size=FONT_SIZES["label"])
-    label.next_to(target, direction=np.array([0, -1, 0]))
-    arrow = Arrow(label.get_top(), target, buff=0.08)
+    # `top` anchors touch the anchor part's upper edge; the label has to sit
+    # above so the arrow can reach down to the tip. `bottom` (the default)
+    # puts the label below. Everything else falls back to below so a novel
+    # anchor name reads consistently rather than silently disappearing.
+    if relation.anchor == "top":
+        label.next_to(target, direction=np.array([0, 1, 0]))
+        arrow = Arrow(label.get_bottom(), target, buff=0.08)
+    else:
+        label.next_to(target, direction=np.array([0, -1, 0]))
+        arrow = Arrow(label.get_top(), target, buff=0.08)
     relation_mobject = VGroup(arrow, label)
     _apply_style(relation_mobject, resolve_semantic_style(palette, "focus"))
     return relation_mobject

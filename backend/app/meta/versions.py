@@ -59,7 +59,14 @@
 #    supporting partitions never reveal -- a version-12 compiler would
 #    reject the new strategy literals, and a version-12 report on a plan
 #    that uses them cannot be trusted as current.
-DSL_COMPILER_VERSION = 13
+# 14: `dsl/teaching_plan.py` and `app/meta/v3/compiler.py` gain the
+#    `percent_of_whole` and `percent_change` strategies on `bar` (M9). A
+#    version-13 compiler rejects the new strategy literals; and its
+#    `magnitude_comparison` on a percent-semantic bar (`maximum == 100`)
+#    would be accepted where a version-14 compiler now refuses it, so a
+#    report stamped 13 for a plan that is percent-semantic must not be
+#    trusted as current.
+DSL_COMPILER_VERSION = 14
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.

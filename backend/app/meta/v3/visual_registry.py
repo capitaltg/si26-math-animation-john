@@ -60,7 +60,10 @@ _SUPPORTED_STRATEGIES = {
         "group_reveal", "partition",
         "equivalence_align", "common_denominator_bridge",
     },
-    "bar": {"group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation"},
+    "bar": {
+        "group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation",
+        "percent_of_whole", "percent_change",
+    },
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
@@ -445,6 +448,16 @@ def _measure_partition(*, spec, values, measurer):
     )
 
 
+#: A `bar` with maximum=100 is a percent bar (see `_validate_percent_of_whole_compatibility`
+#: and `_validate_percent_change_compatibility`). Drawn as a 100-cell horizontal row it
+#: measures 64.95 units wide -- past the 18.9-unit frame limit, so `_require_renderable_extent`
+#: would reject every percent lesson before `place_vertical_lesson` ever ran. Wrap it into
+#: a compact grid so the whole 100-unit visual fits the frame while segment indices still
+#: read 0..99 in reading order for the sweep beat.
+_PERCENT_BAR_MAXIMUM = 100
+_PERCENT_BAR_COLUMNS = 20
+
+
 def _measure_bar(*, spec, values, measurer):
     value, maximum = values["value"], _whole(values["maximum"], "maximum")
     if maximum <= 0 or value < 0 or value > maximum:
@@ -473,20 +486,36 @@ def _measure_bar(*, spec, values, measurer):
         coefficient = None
         x_segment_count = None
         segments_per_x = None
-    segment_width, gap, height = 0.6, 0.05, 0.6
-    width = maximum * segment_width + (maximum - 1) * gap
+    segment_width, gap, cell_height = 0.6, 0.05, 0.6
+    if maximum == _PERCENT_BAR_MAXIMUM:
+        columns = _PERCENT_BAR_COLUMNS
+    else:
+        columns = maximum
+    rows = ceil(maximum / columns)
+    width = columns * segment_width + (columns - 1) * gap
+    total_height = rows * cell_height + (rows - 1) * gap
     left = -width / 2
+    top = total_height / 2
 
     def _segment_bounds(index):
-        seg_left = left + index * (segment_width + gap)
-        return Bounds(seg_left, seg_left + segment_width, -height / 2, height / 2)
+        row, column = divmod(index, columns)
+        x0 = left + column * (segment_width + gap)
+        y1 = top - row * (cell_height + gap)
+        return Bounds(x0, x0 + segment_width, y1 - cell_height, y1)
 
     def _range_bounds(first, last):
-        """Bounds spanning segments `first..last` inclusive."""
-        first_bounds = _segment_bounds(first)
-        last_bounds = _segment_bounds(last)
+        """Bounding box spanning segments `first..last` inclusive.
+
+        Unions each segment's own bounds rather than just the endpoints' so a
+        range that wraps onto a new grid row (only reachable when
+        `maximum == _PERCENT_BAR_MAXIMUM`; `inverse_operation`'s segment count
+        is an unrelated compile-time literal) still yields a sane box instead
+        of a rectangle that skips the wrapped rows.
+        """
+        segments = [_segment_bounds(index) for index in range(first, last + 1)]
         return Bounds(
-            first_bounds.left, last_bounds.right, -height / 2, height / 2,
+            min(b.left for b in segments), max(b.right for b in segments),
+            min(b.bottom for b in segments), max(b.top for b in segments),
         )
 
     parts = {
@@ -508,7 +537,7 @@ def _measure_bar(*, spec, values, measurer):
             )
     return _measured_visual(
         ref=spec.ref,
-        bounds=Bounds(left, left + width, -height / 2, height / 2),
+        bounds=Bounds(left, left + width, -total_height / 2, total_height / 2),
         parts=parts,
         payload={
             "value": value, "maximum": maximum,

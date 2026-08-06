@@ -515,6 +515,7 @@ class TeachingPlanDocument(BaseModel):
         "unit_rate", "inverse_operation", "ray_shade",
         "signed_hop", "distance_from_zero",
         "equivalence_align", "common_denominator_bridge",
+        "percent_of_whole", "percent_change",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
@@ -662,6 +663,38 @@ class TeachingPlanDocument(BaseModel):
                     f"beat {sweep_beat.id!r} is magnitude_comparison's sweep beat, which "
                     "the compiler stages entirely on its own; move its custom actions to "
                     "another beat"
+                )
+        if self.strategy in {"percent_of_whole", "percent_change"}:
+            # Same reasoning as magnitude_comparison: the compiler owns the
+            # sweep beat's actions (a segment-per-slot focus over the part
+            # or the delta), and a hand-written role change on the same
+            # beat would either duplicate a compiler-emitted focus or slip
+            # a second focus into a slot the salience gate expects to hold
+            # exactly one. Author-written callouts belong on an adjacent
+            # beat, not on the sweep itself.
+            #
+            # For percent_change the beat that owns the sweep is the first
+            # focus/derive beat naming the supporting (after) bar, not the
+            # primary; percent_of_whole matches magnitude_comparison and
+            # picks the first focus/derive beat naming the primary.
+            sweep_ref = (
+                self.supporting_visuals[0].ref
+                if self.strategy == "percent_change" and self.supporting_visuals
+                else self.primary_visual.ref
+            )
+            sweep_beat = next(
+                (
+                    beat for beat in self.beats
+                    if beat.kind in {"focus", "derive"}
+                    and any(target.visual_ref == sweep_ref for target in beat.targets)
+                ),
+                None,
+            )
+            if sweep_beat is not None and sweep_beat.custom_actions:
+                raise ValueError(
+                    f"beat {sweep_beat.id!r} is {self.strategy}'s sweep beat, which "
+                    "the compiler stages entirely on its own; move its custom actions "
+                    "to another beat"
                 )
         return self
 

@@ -98,6 +98,8 @@ class BeatExpander:
         self._distance_from_zero_beat_id = distance_from_zero_beat_id(plan)
         self._equivalence_align_beat_id = equivalence_align_beat_id(plan)
         self._bridge_beat_id = common_denominator_bridge_beat_id(plan)
+        self._percent_sweep_beat_id = percent_sweep_beat_id(plan)
+        self._percent_change_sweep_target = _percent_change_sweep_target(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -266,6 +268,14 @@ class BeatExpander:
             # focused target per second; the default `beat_seconds /
             # MIN_ACTION_SECONDS` rule batches two focuses into one slot as soon
             # as the beat's ~17 actions overflow the seconds/min ratio.
+            return len(actions)
+        if (
+            plan.strategy in {"percent_of_whole", "percent_change"}
+            and beat.id == getattr(self, "_percent_sweep_beat_id", None)
+        ):
+            # Same reasoning as magnitude_comparison: one slot per focus so
+            # `check_salience` sees exactly one focus role change at each
+            # at_seconds.
             return len(actions)
         return None
 
@@ -453,6 +463,27 @@ class BeatExpander:
                     if self._target_key(target) in detailed:
                         continue
                     actions.extend(self._role_change(target, "focus", current_roles))
+                return actions
+
+        if (
+            plan.strategy in {"percent_of_whole", "percent_change"}
+            and beat.id == getattr(self, "_percent_sweep_beat_id", None)
+        ):
+            # Sweep the "part" (percent_of_whole) or the delta (percent_change)
+            # one segment per slot. Same salience discipline as
+            # `magnitude_comparison`: one focus role change per at_seconds so
+            # the extent reads left to right rather than as a batched
+            # recolour, and `_slot_count` sizes the beat accordingly.
+            actions = self._percent_sweep_actions(plan, current_roles)
+            if actions:
+                if plan.strategy == "percent_change":
+                    # Label the change with a Δ ribbon anchored at the delta's
+                    # midpoint segment. The ribbon reads before the sweep
+                    # starts, so the learner knows the coming animation names
+                    # the change rather than merely recolouring the after-bar.
+                    ribbon = self._percent_change_delta_ribbon(plan, relations)
+                    if ribbon is not None:
+                        actions = [ribbon, *actions]
                 return actions
 
         if (
@@ -766,6 +797,71 @@ class BeatExpander:
                     "structure", current_roles,
                 ))
         return actions
+
+    def _percent_sweep_actions(self, plan, current_roles):
+        """Focus the "part" (percent_of_whole) or the delta (percent_change).
+
+        For `percent_of_whole` the primary bar's segments [0, value-1] are
+        the "part of the whole"; the remaining segments read as
+        "whole minus part" and stay in the initial structural role. For
+        `percent_change` the sweep colours the delta segments on the
+        supporting (after) bar, moving from `min(before, after)` up to but
+        not including `max(before, after)`, so the walk reads as
+        "the change" against the after-bar's existing fill.
+
+        `validate_strategy_compatibility` refuses either strategy when the
+        driving values are not literal, so the walk is fully known here.
+        """
+        if plan.strategy == "percent_of_whole":
+            ref = plan.primary_visual.ref
+            value = _literal_int(plan.primary_visual.value) or 0
+            indices = tuple(range(value))
+        else:  # percent_change
+            target = getattr(self, "_percent_change_sweep_target", None)
+            if target is None:
+                return []
+            ref, indices = target
+        actions = []
+        for index in indices:
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=ref, part="segment", index=index),
+                "focus", current_roles,
+            ))
+        return actions
+
+    def _percent_change_delta_ribbon(self, plan, relations):
+        """Append a Δ callout on the after-bar's delta midpoint, if not already.
+
+        Anchors at the midpoint segment of the delta range so the ribbon sits
+        directly over the change the sweep animates. Text names the delta as
+        raw units ("Δ 10"): both bars share a `maximum` (see
+        `_validate_percent_change_compatibility`), so one segment on either
+        bar is one unit of the same scale, and the ribbon reads against the
+        bars without a separate axis. Returns a `ShowRelationAction` that the
+        sweep beat plays alongside its first focus, or `None` when the sweep
+        has no target to attach to (a hand-built plan the validator would
+        have caught earlier).
+        """
+        target = getattr(self, "_percent_change_sweep_target", None)
+        if target is None:
+            return None
+        ref, indices = target
+        if not indices:
+            return None
+        midpoint = indices[len(indices) // 2]
+        delta = len(indices)
+        ribbon_ref = "delta_ribbon"
+        if any(relation.ref == ribbon_ref for relation in relations):
+            return None
+        relations.append(CalloutRelation(
+            ref=ribbon_ref,
+            target={
+                "visual_ref": ref, "part": "segment",
+                "index": midpoint, "anchor": "top",
+            },
+            text=f"Δ {delta}",
+        ))
+        return ShowRelationAction(relation_ref=ribbon_ref)
 
     def _unit_rate_actions(self, plan, current_roles):
         """Focus box[0] -- the "per one" column that carries the rate.
@@ -1236,6 +1332,64 @@ def _partition_shaded(spec):
         return 0
     literal = _literal_int(value)
     return literal if literal is not None else 0
+
+
+def percent_sweep_beat_id(plan):
+    """The single beat percent_of_whole / percent_change stage their sweep on.
+
+    Same discipline as `magnitude_sweep_beat_id`: one beat owns the sweep so
+    two focus/derive beats do not double-stage one recolour, and `_slot_count`
+    can size that beat by its action count. For `percent_of_whole` the sweep
+    lands on the primary bar (the segments 0..value-1 are the "part"); for
+    `percent_change` the sweep lands on the supporting (after) bar (the
+    segments between the before and after values are the delta). Selecting
+    by `beat.targets` picks the actual sweep beat rather than the first
+    focus/derive beat in plan order.
+    """
+    if plan.strategy == "percent_of_whole":
+        sweep_ref = plan.primary_visual.ref
+    elif plan.strategy == "percent_change":
+        if not plan.supporting_visuals:
+            return None
+        sweep_ref = plan.supporting_visuals[0].ref
+    else:
+        return None
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == sweep_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def _percent_change_sweep_target(plan):
+    """The visual and segment indices `percent_change` sweeps, or None.
+
+    The delta is the segments between the before and after values on the
+    after (supporting) bar. Direction of the change is preserved by taking
+    the min as the lower bound and the max as the upper bound of the walk:
+    a $40 -> $50 mark-up and a $50 -> $40 discount both sweep segments
+    [40, 50), so the animation always moves the same direction on screen.
+    That is the delta's magnitude, which is what percent_change teaches;
+    "before was greater than after" reads from the two labels the plan
+    puts on its supporting visuals rather than from the sweep direction.
+
+    Returns (visual_ref, indices) for the sweep, or None if the plan does
+    not carry the shape (validate_strategy_compatibility should have caught
+    this earlier; the None guard keeps expansion from raising on a
+    hand-constructed plan).
+    """
+    if plan.strategy != "percent_change" or not plan.supporting_visuals:
+        return None
+    after = plan.supporting_visuals[0]
+    if after.kind != "bar":
+        return None
+    before_value = _literal_int(plan.primary_visual.value)
+    after_value = _literal_int(after.value)
+    if before_value is None or after_value is None:
+        return None
+    lower, upper = sorted((before_value, after_value))
+    return after.ref, tuple(range(lower, upper))
 
 
 def _literal_int(expression):

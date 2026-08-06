@@ -598,11 +598,13 @@ def test_bottom_callout_pad_credits_the_gap_already_below_the_primary():
     assert primary_bottom - answer_top >= CALLOUT_ENVELOPE - 1e-9
 
 
-def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_nothing():
-    """The reservation is scoped to the primary because that is the visual
-    the answer is stacked directly below. A callout targeting a supporting
-    visual is not currently addressed by #82 and must not silently shrink
-    unrelated lessons."""
+def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_clearance():
+    """A supporting visual with a bottom callout also renders past the column
+    edge -- percent_change's ribbon is anchored to the after-bar, not the
+    primary, and would land past the safe-frame if the layout still treated
+    that anchor as free. The reservation is a full envelope (no credit for
+    interior room, since the layout does not know a supporting visual's
+    dimension geometry) applied to the frame the column fits into."""
     measurer = _WidthPerCharacterMeasurer()
     measured = [
         _label("primary", "P", measurer),
@@ -614,6 +616,12 @@ def test_bottom_anchored_callout_on_a_non_primary_visual_reserves_nothing():
     with_relation = place_vertical_lesson(measured, relations)
     without_relation = place_vertical_lesson(measured)
 
-    assert {item.measured.ref: item.bounds for item in with_relation} == {
-        item.measured.ref: item.bounds for item in without_relation
-    }
+    with_by_ref = {item.measured.ref: item.bounds for item in with_relation}
+    without_by_ref = {item.measured.ref: item.bounds for item in without_relation}
+    # Column shifts upward by half the envelope so the reserved strip sits
+    # entirely below it, out of every visual's bounds.
+    assert with_by_ref["primary"].bottom > without_by_ref["primary"].bottom
+    assert (
+        SAFE_FRAME.bottom
+        <= with_by_ref["evaluated_answer"].bottom - CALLOUT_ENVELOPE + 1e-9
+    )

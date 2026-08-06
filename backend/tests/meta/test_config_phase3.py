@@ -111,5 +111,13 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # `common_denominator_bridge` strategies on `partition`; a version-12
     # compiler rejects the new strategy literals, so a plan that carries
     # them cannot be validated against the older model.
-    assert DSL_COMPILER_VERSION == 13
+    #
+    # DSL_COMPILER_VERSION 14 adds the `percent_of_whole` and `percent_change`
+    # strategies on the `bar` kind (M9), and refuses `magnitude_comparison` on
+    # a bar whose `maximum` literal is 100 -- the percent-of-whole ratio
+    # semantic must use the new strategy so the sweep reads as "part of the
+    # whole" rather than "walk to some capacity". A version-13 compiler both
+    # rejects the new strategy literals and accepts a percent-semantic
+    # magnitude_comparison, so a report stamped 13 for either shape is stale.
+    assert DSL_COMPILER_VERSION == 14
     assert DYNAMIC_RENDERER_VERSION == 10
