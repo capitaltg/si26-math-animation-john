@@ -61,6 +61,13 @@ _MAX_ELIMINATION_SECONDS = 6.0
 _REGROUP_PART = {"grid": "cell", "object_set": "item"}
 _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 
+# M11 archetype strategies -- `inverse_operation` (bar) and `ray_shade`
+# (number_line) -- ride the generic expander path (reveal + generic role change
+# per beat kind) rather than staging their own choreography. The strategy name
+# expresses the pedagogical intent so plans can be authored, hashed, and gated
+# on it, but the beat_expander adds no branch. Same shape as `group_reveal` and
+# `partition`: named here for the capability-consistency source-text check.
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):

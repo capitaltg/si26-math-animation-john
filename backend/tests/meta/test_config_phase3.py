@@ -83,5 +83,11 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # DYNAMIC_RENDERER_VERSION 9 covers building each of the five
     # `data_display` styles as a rendered visual -- a version-8 renderer has
     # no branch for the new kind.
-    assert DSL_COMPILER_VERSION == 9
+    #
+    # DSL_COMPILER_VERSION 10 adds the `inverse_operation` strategy on `bar`
+    # (M11: one-/two-step equation solving on a tape-diagram bar) and the
+    # `ray_shade` strategy on `number_line` (M11: inequality boundary + ray).
+    # A version-9 compiler rejects the new strategy literals as unknown enum
+    # values.
+    assert DSL_COMPILER_VERSION == 10
     assert DYNAMIC_RENDERER_VERSION == 9

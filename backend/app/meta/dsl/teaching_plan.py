@@ -458,7 +458,7 @@ class TeachingPlanDocument(BaseModel):
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison", "unit_substitution",
-        "unit_rate",
+        "unit_rate", "inverse_operation", "ray_shade",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing

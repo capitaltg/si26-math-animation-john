@@ -51,10 +51,10 @@ class VisualRegistry:
 _SUPPORTED_STRATEGIES = {
     "ordered_values": {"group_reveal", "short_stagger", "pair_elimination"},
     "rectangle_measurement": {"group_reveal", "boundary_trace"},
-    "number_line": {"group_reveal", "short_stagger", "magnitude_comparison"},
+    "number_line": {"group_reveal", "short_stagger", "magnitude_comparison", "ray_shade"},
     "grid": {"group_reveal", "short_stagger", "regroup"},
     "partition": {"group_reveal", "partition"},
-    "bar": {"group_reveal", "short_stagger", "magnitude_comparison"},
+    "bar": {"group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation"},
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},

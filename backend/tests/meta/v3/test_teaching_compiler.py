@@ -2,7 +2,9 @@ from copy import deepcopy
 
 import pytest
 
-from app.meta.dsl.expression import AddNode, FieldRefNode, LiteralNode, MultiplyNode
+from app.meta.dsl.expression import (
+    AddNode, DivideNode, FieldRefNode, LiteralNode, MultiplyNode, SubtractNode,
+)
 from app.meta.dsl.scene_program import (
     DrawAction, MoveAction, RevealAction, SetRoleAction, TransformAction,
 )
@@ -2126,3 +2128,202 @@ def test_coordinate_plane_rejects_a_point_target_beyond_the_declared_points(comp
         compile_teaching_plan(plan, LiteralNode(value=2), frozenset(), compile_context)
 
     assert exc_info.value.failure.code == "target_index_out_of_range"
+
+
+# --- M11 acceptance: expressions, one-/two-step equations, inequalities ------
+#
+# Each fixture is one row of ticket #105's acceptance criteria. The strategies
+# and visual kinds involved are:
+#
+# - `expression_evaluate` (evaluate 3n + 2 at n = 4): label + group_reveal.
+#   No new kind or strategy -- the label carries the expression's text and the
+#   compiler resolves the answer to its value on the conclude beat.
+# - `one_step_equation` (solve x + 7 = 12): bar + inverse_operation.
+# - `two_step_equation` (solve 2x + 3 = 11): bar + inverse_operation.
+# - `inequality_line` (graph x > 3): number_line + ray_shade.
+#
+# `inverse_operation` and `ray_shade` join the strategy set as first-class
+# literals. They fall through to the generic beat expander (like `group_reveal`
+# and `partition` do) rather than staging their own choreography, so the
+# strategy name expresses the pedagogical intent without a new compiler pass.
+
+
+def test_expression_evaluate_label_group_reveal_compiles(compile_context):
+    """Ticket #105 acceptance: evaluate 3n + 2 at n = 4 with the existing
+    label + group_reveal path (the ticket notes this archetype "may not need
+    a new kind"). The plan carries the expression's text on a label; the
+    answer expression resolves to 14 = 3 x 4 + 2 on the conclude beat.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Evaluate the expression 3n + 2 for a given value of n.",
+        "primary_visual": {"kind": "label", "ref": "expression", "text": "3n + 2"},
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_expression", "kind": "reveal",
+             "targets": [{"visual_ref": "expression"}],
+             "intent": "show the expression to evaluate"},
+            {"id": "substitute", "kind": "derive",
+             "targets": [{"visual_ref": "expression"}],
+             "intent": "substitute n = 4 into the expression"},
+            {"id": "state_value", "kind": "conclude",
+             "targets": [{"visual_ref": "expression"}],
+             "intent": "state the evaluated value"},
+        ],
+        "variation_seed": "m11-eval-3n-plus-2",
+    })
+    answer = AddNode(operands=[
+        MultiplyNode(operands=[LiteralNode(value=3), FieldRefNode(field="n")]),
+        LiteralNode(value=2),
+    ])
+
+    program = compile_teaching_plan(
+        plan, answer, frozenset({"n"}), compile_context,
+    )
+
+    # The answer visual carries the substituted arithmetic on its `work` stage
+    # and the value 14 on `value`, so the conclusion resolves without reflowing.
+    answer_visual = next(v for v in program.visuals if v.ref == "evaluated_answer")
+    assert answer_visual.kind == "answer_expression"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_one_step_equation_bar_inverse_operation_compiles(compile_context):
+    """Ticket #105 acceptance: solve x + 7 = 12 on a bar (tape) using the new
+    `inverse_operation` strategy. The bar carries 12 total units; the derive
+    beat is where the plan applies the inverse operation (subtract 7) to
+    isolate x. The compiler resolves the answer to 12 - 7 = 5.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Solve x + 7 = 12 by applying the inverse operation.",
+        "primary_visual": {
+            "kind": "bar", "ref": "tape",
+            "value": {"node": "literal", "value": 12},
+            "maximum": {"node": "literal", "value": 12},
+        },
+        "strategy": "inverse_operation",
+        "beats": [
+            {"id": "reveal_equation", "kind": "reveal",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "show the tape representing x + 7 = 12"},
+            {"id": "isolate_x", "kind": "derive",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "subtract 7 from both sides to isolate x"},
+            {"id": "state_solution", "kind": "conclude",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "state the value of x"},
+        ],
+        "variation_seed": "m11-one-step",
+    })
+    answer = SubtractNode(operands=[LiteralNode(value=12), LiteralNode(value=7)])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    tape = next(v for v in program.visuals if v.ref == "tape")
+    assert tape.kind == "bar"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_two_step_equation_bar_inverse_operation_compiles(compile_context):
+    """Ticket #105 acceptance: solve 2x + 3 = 11 on a bar with two inverse
+    steps. The derive beat applies both -- subtract 3, then divide by 2 --
+    to isolate x. Answer resolves to (11 - 3) / 2 = 4.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Solve 2x + 3 = 11 by applying two inverse operations.",
+        "primary_visual": {
+            "kind": "bar", "ref": "tape",
+            "value": {"node": "literal", "value": 11},
+            "maximum": {"node": "literal", "value": 11},
+        },
+        "strategy": "inverse_operation",
+        "beats": [
+            {"id": "reveal_equation", "kind": "reveal",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "show the tape representing 2x + 3 = 11"},
+            {"id": "subtract_constant", "kind": "focus",
+             "targets": [{"visual_ref": "tape", "part": "segment", "index": 10}],
+             "intent": "subtract 3 from both sides"},
+            {"id": "divide_by_coefficient", "kind": "derive",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "divide both sides by 2 to isolate x"},
+            {"id": "state_solution", "kind": "conclude",
+             "targets": [{"visual_ref": "tape"}],
+             "intent": "state the value of x"},
+        ],
+        "variation_seed": "m11-two-step",
+    })
+    answer = DivideNode(operands=[
+        SubtractNode(operands=[LiteralNode(value=11), LiteralNode(value=3)]),
+        LiteralNode(value=2),
+    ])
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    tape = next(v for v in program.visuals if v.ref == "tape")
+    assert tape.kind == "bar"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]
+
+
+def test_inequality_number_line_ray_shade_compiles(compile_context):
+    """Ticket #105 acceptance: graph x > 3 on a number line using the new
+    `ray_shade` strategy. The line's boundary is expressed as a marker at 3
+    (the value below the shaded ray). The answer expression carries the
+    boundary; a full inequality-as-set is not expressible as an ExpressionNode,
+    so the boundary stands in for what conclude resolves.
+    """
+    from app.meta.v3.quality import validate_static_quality
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Graph the inequality x > 3 on a number line.",
+        "primary_visual": {
+            "kind": "number_line", "ref": "line",
+            "minimum": {"node": "literal", "value": 0},
+            "maximum": {"node": "literal", "value": 6},
+            "markers": [
+                {"node": "literal", "value": 0},
+                {"node": "literal", "value": 3},
+                {"node": "literal", "value": 6},
+            ],
+        },
+        "strategy": "ray_shade",
+        "beats": [
+            {"id": "reveal_line", "kind": "reveal",
+             "targets": [{"visual_ref": "line"}],
+             "intent": "show the number line with the boundary at 3"},
+            {"id": "focus_boundary", "kind": "focus",
+             "targets": [{"visual_ref": "line", "part": "marker", "index": 1}],
+             "intent": "mark 3 as the boundary of the inequality"},
+            {"id": "shade_ray", "kind": "derive",
+             "targets": [{"visual_ref": "line"}],
+             "intent": "shade every value greater than 3"},
+            {"id": "state_solution", "kind": "conclude",
+             "targets": [{"visual_ref": "line"}],
+             "intent": "state that x > 3 is the shaded ray"},
+        ],
+        "variation_seed": "m11-inequality",
+    })
+    answer = LiteralNode(value=3)
+
+    program = compile_teaching_plan(plan, answer, frozenset(), compile_context)
+
+    line = next(v for v in program.visuals if v.ref == "line")
+    assert line.kind == "number_line"
+
+    report = validate_static_quality(plan, program)
+    assert report.passed, [check for check in report.checks if not check.passed]

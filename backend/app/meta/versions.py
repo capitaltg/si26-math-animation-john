@@ -34,7 +34,13 @@
 #    `dsl/scene_program.py`. A version-8 compiler cannot deserialize the new
 #    kind, so a report stamped 8 that references a data_display draft must not
 #    be trusted as current.
-DSL_COMPILER_VERSION = 9
+# 10: `dsl/teaching_plan.py` gains two strategies for MCAP 6.EE / 7.EE
+#    archetypes: `inverse_operation` on `bar` (one-/two-step equation solving
+#    on a tape-diagram bar), and `ray_shade` on `number_line` (an inequality's
+#    boundary + shaded ray). A version-9 compiler rejects the new strategy
+#    literals as unknown enum values, so a plan authored against version 10
+#    cannot be re-validated by a stale runtime.
+DSL_COMPILER_VERSION = 10
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.
