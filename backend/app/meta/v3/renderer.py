@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
+from math import tau
+
 from manim import (
     AnimationGroup,
     Arrow,
@@ -12,6 +14,7 @@ from manim import (
     FadeIn,
     Line,
     Rectangle,
+    Sector,
     Text,
     Transform,
     VectorizedPoint,
@@ -220,9 +223,7 @@ def _build_visual(placed, palette: str):
     elif {"rows", "columns"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "cell")
     elif {"whole", "parts"} <= payload.keys():
-        root = Circle(radius=(bounds.right - bounds.left) / 2).move_to(_array(bounds.center))
-        children = _parts_as_dots(measured, placed.offset, "partition")
-        root.add(*children.values())
+        root, children = _build_partition(measured, placed, palette)
     elif "boxes" in payload:
         root, children = _build_unit_tape(measured, placed, palette)
     elif {"value", "maximum"} <= payload.keys():
@@ -793,6 +794,33 @@ def _build_unit_tape(measured, placed, palette: str):
     return root, children
 
 
+def _build_partition(measured, placed, palette: str):
+    """Wedge-per-part rendering, with the numerator's wedges filled.
+
+    A plain Circle + dots hid the numerator entirely: a plan for "2/3" and one
+    for "3/3" rendered identically. Each part becomes an addressable Sector so
+    a `set_role` on `partition[i]` recolours a visible wedge, not a marker dot;
+    the first `shaded` wedges are filled to make the numerator readable at
+    rest, before any beat plays.
+    """
+    payload = measured.payload
+    center = _array(measured.bounds.center) + _array(placed.offset)
+    count = payload["parts"]
+    shaded = payload.get("shaded", 0)
+    radius = (measured.bounds.right - measured.bounds.left) / 2
+    angle = tau / count
+    style = resolve_semantic_style(palette, "focus")
+    wedges = {}
+    for index in range(count):
+        wedge = Sector(radius=radius, angle=angle, start_angle=index * angle)
+        wedge.move_arc_center_to(center)
+        if index < shaded:
+            wedge.set_fill(style["color"], opacity=0.4)
+        wedges[("partition", index)] = wedge
+    root = VGroup(*wedges.values())
+    return root, wedges
+
+
 def _partial_fill(bounds: Bounds, fraction: float, palette: str):
     """The shaded portion of the remainder box, so 0.75 of a unit reads as 0.75."""
     width = (bounds.right - bounds.left) * fraction
@@ -984,7 +1012,70 @@ def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, p
         return build_move_along_path(_target_mobject(rendered, action.targets[0].ref), _path_mobject(action.path))
     if kind == "show_answer_stage":
         return _stage_transition(rendered, action.targets[0].ref, action.action.stage)
+    if kind == "signed_hop_arrow":
+        return Create(_build_signed_hop_arrow(action, palette))
+    if kind == "distance_annotation":
+        return Create(_build_distance_annotation(action, palette))
     raise ValueError(f"unsupported resolved action {kind}")
+
+
+#: Vertical clearance above the number line for the hop arrow. Keeps the shaft
+#: clear of the marker dots so the arrowhead reads as a direction rather than
+#: as another marker glyph.
+_HOP_ARROW_ELEVATION = 0.35
+#: Elevation for the distance bracket. Placed above the hop-arrow band so a
+#: composite lesson (both strategies) does not stack marks on top of each other.
+_DISTANCE_BRACKET_ELEVATION = 0.55
+#: Bracket "tick" height dropping from the horizontal span down to each end.
+_DISTANCE_BRACKET_TICK = 0.12
+#: Label sits above the bracket by this margin so the glyphs clear the span.
+_DISTANCE_LABEL_GAP = 0.12
+
+
+def _build_signed_hop_arrow(action, palette: str):
+    """Arrow from the source marker to the target marker, above the line.
+
+    Source-then-target order is what encodes the sign: a positive hop has the
+    source left of the target (arrow points right); a negative hop has it right
+    of the target (arrow points left).
+    """
+    source, target = action.targets[0].bounds.center, action.targets[1].bounds.center
+    start = Point(source.x, source.y + _HOP_ARROW_ELEVATION)
+    end = Point(target.x, target.y + _HOP_ARROW_ELEVATION)
+    arrow = Arrow(_array(start), _array(end), buff=0.0, stroke_width=4)
+    _apply_style(arrow, resolve_semantic_style(palette, "focus"))
+    return arrow
+
+
+def _build_distance_annotation(action, palette: str):
+    """A bracket from the origin to the target marker, labelled with the magnitude.
+
+    The bracket is a three-segment polyline (down-tick at the origin, horizontal
+    span across the top, down-tick at the target); the label sits centred above
+    the span. Assembled as a `VGroup` so `Create` traces the whole annotation as
+    one animation and one recolour.
+    """
+    origin, target = action.targets[0].bounds.center, action.targets[1].bounds.center
+    top_y = max(origin.y, target.y) + _DISTANCE_BRACKET_ELEVATION
+    left, right = sorted((origin.x, target.x))
+    corners = [
+        Point(left, top_y - _DISTANCE_BRACKET_TICK),
+        Point(left, top_y),
+        Point(right, top_y),
+        Point(right, top_y - _DISTANCE_BRACKET_TICK),
+    ]
+    bracket = VMobject()
+    bracket.set_points_as_corners([_array(point) for point in corners])
+    label = _text(
+        action.action.label, "label",
+        Point((left + right) / 2, top_y + _DISTANCE_LABEL_GAP), 1.0,
+    )
+    # `_text` centres the mobject on the given point, so lift the whole glyph
+    # strip clear of the bracket top edge.
+    label.shift(np.array([0.0, label.height / 2, 0.0]))
+    group = VGroup(bracket, label)
+    _apply_style(group, resolve_semantic_style(palette, "focus"))
+    return group
 
 
 def _stage_transition(rendered: RenderedScene, ref, stage: str, style: dict | None = None):

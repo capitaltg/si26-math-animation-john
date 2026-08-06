@@ -1004,3 +1004,17 @@ def test_inverse_operation_partition_spans_a_wrapped_percent_bar_grid_correctly(
     assert constant_region.left == visual.bounds.left
     assert constant_region.right == visual.bounds.right
     assert row3_first_constant.left > visual.bounds.left
+
+
+def test_partition_rejects_non_integral_shaded():
+    """A fractional `shaded` was silently coerced to 0, so a partition asked to
+    shade 2.5/6 rendered as fully unshaded instead of failing measurement. The
+    factory now calls `_whole` on shaded unconditionally so a non-integral
+    value raises before the visual is built.
+    """
+    with pytest.raises(ValueError, match="shaded"):
+        default_visual_registry().measure(
+            SimpleNamespace(kind="partition", ref="parts"),
+            {"whole": Fraction(1), "parts": Fraction(6), "shaded": Fraction(5, 2)},
+            LiteralTextMeasurer(),
+        )

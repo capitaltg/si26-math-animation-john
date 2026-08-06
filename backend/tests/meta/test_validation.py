@@ -92,4 +92,4 @@ def test_older_runtime_versions_make_their_validation_reports_stale():
         DYNAMIC_RENDERER_VERSION,
     )
     # Pinned so a compiler/renderer change cannot land without a deliberate bump.
-    assert (DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION) == (12, 10)
+    assert (DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION) == (14, 10)
