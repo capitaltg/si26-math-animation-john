@@ -840,6 +840,75 @@ def test_a_data_display_box_plot_rejects_an_inverted_summary():
     assert "monotonic" in exc_info.value.failure.expected
 
 
+def test_a_data_display_line_plot_stacks_repeated_values_vertically():
+    """Frequency is the point of a line plot -- three fives must show as three
+    stacked marks, not one over-stamped mark that hides two of the readings.
+    """
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="scores", initial_role="structure"),
+        {
+            "display_style": "line_plot",
+            "axis_label": "score",
+            "values": [Fraction(3), Fraction(5), Fraction(5), Fraction(5), Fraction(8)],
+            "axis_min": Fraction(0), "axis_max": Fraction(10),
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    marks_at_five = [
+        measured.parts[("mark", index)].bounds.center.y
+        for index in range(5)
+        if measured.payload["values"][index]["value"] == 5
+    ]
+    assert len(marks_at_five) == 3
+    assert len(set(marks_at_five)) == 3
+
+
+def test_a_data_display_line_plot_axis_labels_fractional_ticks_on_a_sub_unit_span():
+    """5.MD.B.2 line plots often live on a fractional axis like [1/4, 3/4];
+    integer-only tick generation would produce zero labels there, so the axis
+    reads as blank.
+    """
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="cups", initial_role="structure"),
+        {
+            "display_style": "line_plot",
+            "axis_label": "cups",
+            "values": [Fraction(1, 4), Fraction(1, 2), Fraction(3, 4)],
+            "axis_min": Fraction(1, 4), "axis_max": Fraction(3, 4),
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    tick_values = [tick["value"] for tick in measured.payload["ticks"]]
+    assert Fraction(1, 4) in tick_values
+    assert Fraction(1, 2) in tick_values
+    assert Fraction(3, 4) in tick_values
+
+
+def test_a_data_display_bar_graph_rejects_overlapping_count_labels():
+    """Wide numeric counts above adjacent bars can collide even when the
+    category labels below the axis fit -- the check catches that.
+    """
+    from fractions import Fraction
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="data_display", ref="wide", initial_role="structure"),
+            {
+                "display_style": "bar_graph",
+                "categories": [
+                    {"label": "a", "count": Fraction(1234567890123)},
+                    {"label": "b", "count": Fraction(2345678901234)},
+                    {"label": "c", "count": Fraction(3456789012345)},
+                ],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "count labels" in exc_info.value.failure.expected
+
+
 def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():
     """Point (0, 0) sits at the axis intersection: every cardinal candidate
     rect straddles either the x-axis or the y-axis, but a diagonal quadrant

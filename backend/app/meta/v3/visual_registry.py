@@ -1273,6 +1273,8 @@ DATA_DISPLAY_DOT_PITCH = 0.22
 #: X mark drawn at each line_plot value: a crossed pair of line segments of
 #: this half-length. Kept small so a mark reads as a single glyph.
 DATA_DISPLAY_MARK_HALF = 0.13
+#: Stacking pitch between adjacent X marks at the same value in a line_plot.
+DATA_DISPLAY_MARK_PITCH = 0.30
 #: Vertical thickness of a box_plot's box.
 DATA_DISPLAY_BOX_HEIGHT = 0.9
 
@@ -1424,9 +1426,9 @@ def _measure_data_display_number_line_points(*, spec, values, measurer, style: s
                 hint="move the value inside the axis range, or widen the axis span",
             ))
         u = left + (right - left) * float((value - axis_min) / (axis_max - axis_min))
+        stack_level = stack_index[value]
+        stack_index[value] += 1
         if style == "dot_plot":
-            stack_level = stack_index[value]
-            stack_index[value] += 1
             cy = axis_y + DATA_DISPLAY_DOT_RADIUS + stack_level * DATA_DISPLAY_DOT_PITCH
             parts[("mark", index)] = SemanticPart(
                 "mark", index,
@@ -1434,8 +1436,11 @@ def _measure_data_display_number_line_points(*, spec, values, measurer, style: s
                        cy - DATA_DISPLAY_DOT_RADIUS, cy + DATA_DISPLAY_DOT_RADIUS),
             )
             payload_values.append({"value": value, "u": u, "cy": cy})
-        else:  # line_plot
-            cy = axis_y + DATA_DISPLAY_MARK_HALF + 0.05
+        else:  # line_plot -- stack repeated values so the same X mark does
+               # not stamp on itself and hide the frequency the plot claims to
+               # show. Height check below rejects a stack that overruns the
+               # reserved plot band.
+            cy = axis_y + DATA_DISPLAY_MARK_HALF + 0.05 + stack_level * DATA_DISPLAY_MARK_PITCH
             parts[("mark", index)] = SemanticPart(
                 "mark", index,
                 Bounds(u - DATA_DISPLAY_MARK_HALF, u + DATA_DISPLAY_MARK_HALF,
@@ -1597,36 +1602,81 @@ def _axis_title_room(values, measurer) -> float:
 def _data_display_axis_ticks(axis_min, axis_max, measurer):
     """At most eight numeric ticks along a data_display's number line.
 
-    Chosen so the axis carries some numeric context without label crowding.
-    Every tick label is measured so `_require_renderable_extent` can catch a
-    tick that would push the visual past the frame's width.
+    The finest stride from a fixed set of fractional / integer candidates that
+    keeps tick count within `max_ticks` AND whose measured labels leave at
+    least `DATA_DISPLAY_LABEL_INTER_GAP` between adjacent labels. Fractional
+    candidates (1/8, 1/4, 1/2) are what make 5.MD.B.2 line plots on a
+    sub-unit axis (e.g. [1/4, 3/4]) render labelled ticks -- integer-only
+    stride would skip the whole span. Width-based thinning stops wide integer
+    labels (13-digit counts, long fractions) from stamping on their neighbours.
     """
-    from math import ceil, floor
-    lo, hi = int(ceil(float(axis_min))), int(floor(float(axis_max)))
-    if hi < lo:
+    axis_min_f = Fraction(axis_min)
+    axis_max_f = Fraction(axis_max)
+    if axis_max_f <= axis_min_f:
         return []
-    count = hi - lo + 1
     max_ticks = 8
-    if count > max_ticks:
-        stride = -(-count // max_ticks)
-        raw = list(range(lo, hi + 1, stride))
-    else:
-        raw = list(range(lo, hi + 1))
-    result = []
-    for value in raw:
-        text = format_number(value)
-        w, h = measurer.measure(text, "label")
-        result.append((value, text, w, h))
-    return result
+    width = DATA_DISPLAY_AXIS_WIDTH
+    left, right = -width / 2, width / 2
+    candidates = [
+        Fraction(1, 8), Fraction(1, 4), Fraction(1, 2),
+        Fraction(1), Fraction(2), Fraction(5),
+        Fraction(10), Fraction(20), Fraction(25), Fraction(50),
+        Fraction(100), Fraction(250), Fraction(500), Fraction(1000),
+    ]
+    fallback = None
+    for step in candidates:
+        first = int(ceil(axis_min_f / step))
+        last = int(floor(axis_max_f / step))
+        if last < first:
+            continue
+        if last - first + 1 > max_ticks:
+            continue
+        measured = []
+        for k in range(first, last + 1):
+            value = Fraction(k) * step
+            text = format_number(value)
+            w, h = measurer.measure(text, "label")
+            u = _project(value, axis_min_f, axis_max_f, left, right)
+            measured.append((value, text, w, h, u))
+        if _tick_labels_do_not_overlap(measured, DATA_DISPLAY_LABEL_INTER_GAP):
+            return [(v, t, w, h) for v, t, w, h, _u in measured]
+        if fallback is None:
+            fallback = measured
+    if fallback is None:
+        return []
+    for skip in range(2, len(fallback) + 1):
+        thinned = fallback[::skip]
+        if _tick_labels_do_not_overlap(thinned, DATA_DISPLAY_LABEL_INTER_GAP):
+            return [(v, t, w, h) for v, t, w, h, _u in thinned]
+    endpoints = [fallback[0]] + ([fallback[-1]] if len(fallback) > 1 else [])
+    if _tick_labels_do_not_overlap(endpoints, DATA_DISPLAY_LABEL_INTER_GAP):
+        return [(v, t, w, h) for v, t, w, h, _u in endpoints]
+    return [(fallback[0][0], fallback[0][1], fallback[0][2], fallback[0][3])]
+
+
+def _tick_labels_do_not_overlap(measured, min_gap):
+    for a, b in zip(measured, measured[1:]):
+        _va, _ta, wa, _ha, ua = a
+        _vb, _tb, wb, _hb, ub = b
+        if (ub - wb / 2) - (ua + wa / 2) < min_gap:
+            return False
+    return True
 
 
 def _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths):
-    """Reject a bar_graph / histogram whose category labels would overlap."""
+    """Reject a bar_graph / histogram whose category or count labels would overlap.
+
+    Two symmetric checks: category labels below the axis, and numeric count
+    labels above each bar. Wide counts (e.g. three 13-digit values) can collide
+    even when short category names fit, so measuring both keeps the display
+    honest instead of silently stamping labels on top of each other.
+    """
+    def bar_center(bar):
+        return bar["left"] + (bar["right"] - bar["left"]) / 2
+
     for a, b in zip(range(len(payload_bars) - 1), range(1, len(payload_bars))):
-        gap = (payload_bars[b]["left"] + (payload_bars[b]["right"] - payload_bars[b]["left"]) / 2
-               - label_widths[b] / 2) - (
-            payload_bars[a]["left"] + (payload_bars[a]["right"] - payload_bars[a]["left"]) / 2
-            + label_widths[a] / 2
+        gap = (bar_center(payload_bars[b]) - label_widths[b] / 2) - (
+            bar_center(payload_bars[a]) + label_widths[a] / 2
         )
         if gap >= DATA_DISPLAY_LABEL_INTER_GAP:
             continue
@@ -1645,6 +1695,30 @@ def _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths
             hint=(
                 f"shorten {payload_bars[a]['label']!r} or "
                 f"{payload_bars[b]['label']!r}, or reduce `categories`"
+            ),
+        ))
+
+    for a, b in zip(range(len(payload_bars) - 1), range(1, len(payload_bars))):
+        gap = (bar_center(payload_bars[b]) - payload_bars[b]["count_width"] / 2) - (
+            bar_center(payload_bars[a]) + payload_bars[a]["count_width"] / 2
+        )
+        if gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"count labels separated by at least "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP:g} units"
+            ),
+            observed=(
+                f"counts {payload_bars[a]['count_text']!r} and "
+                f"{payload_bars[b]['count_text']!r} above adjacent bars "
+                f"overlap by {DATA_DISPLAY_LABEL_INTER_GAP - gap:.2f} units"
+            ),
+            hint=(
+                "reduce `categories`, or use smaller counts -- adjacent count "
+                "labels have no room at this density"
             ),
         ))
 
