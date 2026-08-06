@@ -83,5 +83,22 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # DYNAMIC_RENDERER_VERSION 9 covers building each of the five
     # `data_display` styles as a rendered visual -- a version-8 renderer has
     # no branch for the new kind.
-    assert DSL_COMPILER_VERSION == 9
-    assert DYNAMIC_RENDERER_VERSION == 9
+    #
+    # DSL_COMPILER_VERSION 10 adds the `inverse_operation` strategy on `bar`
+    # (M11: one-/two-step equation solving on a tape-diagram bar) and the
+    # `ray_shade` strategy on `number_line` (M11: inequality boundary + ray).
+    # A version-9 compiler rejects the new strategy literals as unknown enum
+    # values.
+    #
+    # DSL_COMPILER_VERSION 11 introduces the equation-partition DSL fields
+    # (`BarVisual.constant` / `.coefficient` and `NumberLineVisual.boundary`
+    # / `.boundary_kind` / `.ray_direction`) and the compiler branches that
+    # stage x_region / constant_region / x_part role changes for
+    # `inverse_operation` and boundary-circle / shaded-ray reveals for
+    # `ray_shade`. A version-10 compiler rejects the new fields as unknown.
+    #
+    # DYNAMIC_RENDERER_VERSION 10 draws the bar's partition dividers and the
+    # number_line's open/closed boundary circle plus shaded ray -- primitives
+    # a version-9 renderer has no branch for.
+    assert DSL_COMPILER_VERSION == 11
+    assert DYNAMIC_RENDERER_VERSION == 10

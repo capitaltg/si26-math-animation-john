@@ -223,7 +223,13 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
 _MEASURABLE_VALUES = {
     "ordered_values": {"values": ["3", "5", "8"]},
     "rectangle_measurement": {"length": Fraction(8), "width": Fraction(3), "unit": "cm"},
-    "number_line": {"minimum": Fraction(0), "maximum": Fraction(10), "markers": [Fraction(4)]},
+    "number_line": {
+        "minimum": Fraction(0), "maximum": Fraction(10),
+        "markers": [Fraction(4)],
+        # Includes ray_shade fields so `test_every_deferred_part_is_held_out_of_
+        # the_root_group[number_line]` finds the boundary/ray mobjects to check.
+        "boundary": Fraction(4), "boundary_kind": "open", "ray_direction": "right",
+    },
     "grid": {"rows": 2, "columns": 3},
     "partition": {"whole": Fraction(8), "parts": 4},
     "bar": {"value": Fraction(3), "maximum": Fraction(5)},

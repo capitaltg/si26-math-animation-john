@@ -45,6 +45,29 @@ class NumberLineVisual(BaseModel):
             "the ends labelled."
         ),
     )
+    boundary: ExpressionNode | None = Field(
+        default=None,
+        description=(
+            "The boundary value of an inequality graphed on the line. Required "
+            "for the `ray_shade` strategy; leave `None` otherwise. The measurer "
+            "exposes it as a `boundary` semantic part addressable by beats."
+        ),
+    )
+    boundary_kind: Literal["open", "closed"] | None = Field(
+        default=None,
+        description=(
+            "Whether the boundary is inclusive (`closed`, filled dot; the "
+            "inequality includes the value) or exclusive (`open`, ring; the "
+            "inequality is strict). Required for `ray_shade`."
+        ),
+    )
+    ray_direction: Literal["left", "right"] | None = Field(
+        default=None,
+        description=(
+            "Which side of the boundary the ray shades: `right` for x > b or "
+            "x >= b, `left` for x < b or x <= b. Required for `ray_shade`."
+        ),
+    )
 
 
 class GridVisual(BaseModel):
@@ -90,6 +113,27 @@ class BarVisual(BaseModel):
         f"whose maximum is a scale, or on a unit_tape when the lesson converts "
         f"between two units."
     ))
+    constant: ExpressionNode | None = Field(
+        default=None,
+        description=(
+            "The known-addend portion the bar splits off from the unknown x. "
+            "Required for the `inverse_operation` strategy on one- or two-step "
+            "equations (`x + c = r`, `k*x + c = r`); the last `constant` "
+            "segments are grouped as the `constant_region` and the first "
+            "`maximum - constant` segments as the `x_region`. Leave `None` "
+            "otherwise."
+        ),
+    )
+    coefficient: ExpressionNode | None = Field(
+        default=None,
+        description=(
+            "How many equal x-parts the x_region subdivides into (the `k` in "
+            "`k*x + c = r`). Required for `inverse_operation`; use 1 for a "
+            "one-step equation, k >= 2 for a two-step equation. The compiler "
+            "requires `(maximum - constant) % coefficient == 0` so each "
+            "x_part is a whole segment count."
+        ),
+    )
 
 
 class ObjectSetVisual(BaseModel):
@@ -458,7 +502,7 @@ class TeachingPlanDocument(BaseModel):
     strategy: Literal[
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison", "unit_substitution",
-        "unit_rate",
+        "unit_rate", "inverse_operation", "ray_shade",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing

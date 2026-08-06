@@ -69,6 +69,12 @@ class BeatExpander:
     def expand(self, plan):
         self._sweep_beat_id = magnitude_sweep_beat_id(plan)
         self._regroup_beat_id = regroup_beat_id(plan)
+        self._inverse_partition_beat_id, self._inverse_divide_beat_id = (
+            inverse_operation_beat_ids(plan)
+        )
+        self._ray_boundary_beat_id, self._ray_shade_beat_id = (
+            ray_shade_beat_ids(plan)
+        )
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -241,6 +247,8 @@ class BeatExpander:
         """
         actions = self._reveal_unrevealed(plan, beat.targets, revealed)
         actions.extend(self._beat_kind_actions(plan, beat, relations, current_roles))
+        if plan.strategy == "ray_shade":
+            actions.extend(self._ray_shade_extra_actions(plan, beat, revealed))
         if plan.strategy == "boundary_trace" and beat.id == boundary_trace_beat_id:
             actions.append(TraceAction(path_ref=f"{plan.primary_visual.ref}.perimeter"))
         if beat.id == unit_substitution_beat_id:
@@ -308,6 +316,11 @@ class BeatExpander:
     def _beat_kind_actions(self, plan, beat, relations, current_roles):
         if beat.kind in {"orient", "reveal"}:
             return []  # `_reveal_unrevealed` has already staged the reveal
+
+        if plan.strategy == "inverse_operation":
+            actions = self._inverse_operation_actions(plan, beat, current_roles)
+            if actions is not None:
+                return actions
 
         if (
             plan.strategy == "regroup"
@@ -457,6 +470,78 @@ class BeatExpander:
                 "focus", current_roles,
             ))
         return actions
+
+    def _inverse_operation_actions(self, plan, beat, current_roles):
+        """Stage the equation's partition on the bar, one beat at a time.
+
+        Return `None` when this beat is not one of the strategy's owned beats
+        so the caller falls through to the generic role change; otherwise
+        return the actions that visibly teach the inverse operation.
+
+        - partition beat (the first derive/focus beat naming the primary):
+          set constant_region to `constraint` (the known addend, dimmed). Focus
+          x_region here ONLY when there is no divide beat -- x_part VGroups
+          overlap the same underlying segments as x_region, so a partition-beat
+          focus on x_region would leave every x_part already focus-coloured and
+          the divide walk would animate focus-to-focus (invisible). With a
+          divide beat pending, x_region stays structure and each x_part carries
+          its own structure-to-focus transition when the divide beat fires.
+        - divide beat (only when coefficient > 1, the second such beat): focus
+          each x_part in turn, so the "divide by k" reads as slicing the
+          x_region into k equal pieces.
+        """
+        if plan.primary_visual.kind != "bar":
+            return None
+        if plan.primary_visual.constant is None:
+            return None
+        ref = plan.primary_visual.ref
+        divide_beat_id = getattr(self, "_inverse_divide_beat_id", None)
+        if beat.id == getattr(self, "_inverse_partition_beat_id", None):
+            actions = list(self._role_change(
+                TargetRef(visual_ref=ref, part="constant_region", index=0),
+                "constraint", current_roles,
+            ))
+            if divide_beat_id is None:
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=ref, part="x_region", index=0),
+                    "focus", current_roles,
+                ))
+            return actions
+        if beat.id == divide_beat_id:
+            coefficient_spec = plan.primary_visual.coefficient
+            coefficient = int(coefficient_spec.value) if coefficient_spec else 1
+            actions = []
+            for index in range(coefficient):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=ref, part="x_part", index=index),
+                    "focus", current_roles,
+                ))
+            return actions
+        return None
+
+    def _ray_shade_extra_actions(self, plan, beat, revealed):
+        """Reveal the boundary circle then the shaded ray, in beat order.
+
+        The boundary and ray parts are deferred (see
+        `visual_registry.DEFERRED_PARTS`), so the whole-line reveal on the
+        first beat leaves them off-screen; each arrives on its own beat.
+        The boundary reveal rides the `focus_boundary` beat (first
+        focus/derive beat naming primary), and the ray reveal rides the
+        `shade_ray` beat (the next one), so the inequality lands as
+        "boundary here, everything to the right shaded".
+        """
+        if plan.primary_visual.kind != "number_line":
+            return []
+        if plan.primary_visual.boundary is None:
+            return []
+        ref = plan.primary_visual.ref
+        if beat.id == getattr(self, "_ray_boundary_beat_id", None):
+            target = TargetRef(visual_ref=ref, part="boundary", index=0)
+            return self._reveal_unrevealed(plan, [target], revealed)
+        if beat.id == getattr(self, "_ray_shade_beat_id", None):
+            target = TargetRef(visual_ref=ref, part="ray", index=0)
+            return self._reveal_unrevealed(plan, [target], revealed)
+        return []
 
     def _unit_rate_actions(self, plan, current_roles):
         """Focus box[0] -- the "per one" column that carries the rate.
@@ -722,6 +807,49 @@ def regroup_beat_id(plan):
         if any(target.visual_ref == primary_ref for target in beat.targets):
             return beat.id
     return None
+
+
+def inverse_operation_beat_ids(plan):
+    """Return `(partition_beat_id, divide_beat_id)` for an inverse_operation plan.
+
+    The first derive/focus beat naming the primary owns the partition (peel
+    off the constant, focus x); the second owns the per-x_part divide walk.
+    Either may be `None` when the plan has fewer than that many
+    focus/derive beats naming the primary. Non-inverse_operation plans
+    return `(None, None)` so the expander branches short-circuit.
+    """
+    if plan.strategy != "inverse_operation":
+        return None, None
+    primary_ref = plan.primary_visual.ref
+    matches = [
+        beat.id for beat in plan.beats
+        if beat.kind in {"focus", "derive"}
+        and any(target.visual_ref == primary_ref for target in beat.targets)
+    ]
+    partition = matches[0] if matches else None
+    divide = matches[1] if len(matches) >= 2 else None
+    return partition, divide
+
+
+def ray_shade_beat_ids(plan):
+    """Return `(boundary_reveal_beat_id, ray_reveal_beat_id)` for ray_shade.
+
+    Same selection rule as `inverse_operation_beat_ids`: the first two
+    focus/derive beats naming the primary. The first reveals the boundary
+    circle, the second reveals the shaded ray. `(None, None)` for other
+    strategies.
+    """
+    if plan.strategy != "ray_shade":
+        return None, None
+    primary_ref = plan.primary_visual.ref
+    matches = [
+        beat.id for beat in plan.beats
+        if beat.kind in {"focus", "derive"}
+        and any(target.visual_ref == primary_ref for target in beat.targets)
+    ]
+    boundary = matches[0] if matches else None
+    ray = matches[1] if len(matches) >= 2 else None
+    return boundary, ray
 
 
 def magnitude_sweep_beat_id(plan):
