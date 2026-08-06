@@ -889,8 +889,10 @@ def test_a_data_display_line_plot_axis_labels_fractional_ticks_on_a_sub_unit_spa
 
 
 def test_a_data_display_bar_graph_rejects_overlapping_count_labels():
-    """Wide numeric counts above adjacent bars can collide even when the
-    category labels below the axis fit -- the check catches that.
+    """Wide numeric counts above adjacent bars can collide when the labels
+    both overlap in x AND sit at the same height -- the check catches that
+    2D collision. Same-count bars force identical count-label y so the x
+    overlap is not saved by a height difference.
     """
     from fractions import Fraction
     with pytest.raises(V3ValidationError) as exc_info:
@@ -900,13 +902,34 @@ def test_a_data_display_bar_graph_rejects_overlapping_count_labels():
                 "display_style": "bar_graph",
                 "categories": [
                     {"label": "a", "count": Fraction(1234567890123)},
-                    {"label": "b", "count": Fraction(2345678901234)},
-                    {"label": "c", "count": Fraction(3456789012345)},
+                    {"label": "b", "count": Fraction(1234567890123)},
+                    {"label": "c", "count": Fraction(1234567890123)},
                 ],
             },
             LiteralTextMeasurer(),
         )
     assert "count labels" in exc_info.value.failure.expected
+
+
+def test_a_data_display_bar_graph_accepts_x_overlap_when_heights_differ():
+    """When count labels overlap in x but sit at substantially different
+    heights (very different bar counts), the labels are readable and the
+    display must not be rejected. Guards against a too-aggressive
+    1D-only overlap check.
+    """
+    from fractions import Fraction
+    default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="stagger", initial_role="structure"),
+        {
+            "display_style": "bar_graph",
+            "categories": [
+                {"label": "a", "count": Fraction(1)},
+                {"label": "b", "count": Fraction(1234567890123)},
+                {"label": "c", "count": Fraction(2)},
+            ],
+        },
+        LiteralTextMeasurer(),
+    )
 
 
 def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():

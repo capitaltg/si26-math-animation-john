@@ -1360,12 +1360,13 @@ def _measure_data_display_bars(*, spec, values, measurer, contiguous: bool):
         )
         label_w, _label_h = measurer.measure(category["label"], "label")
         count_text = format_number(raw_count)
-        count_w, _count_h = measurer.measure(count_text, "label")
+        count_w, count_h = measurer.measure(count_text, "label")
         label_widths.append(label_w)
         payload_bars.append({
             "label": category["label"], "count": count,
             "count_text": count_text,
             "count_width": count_w,
+            "count_height": count_h,
             "left": bar_left, "right": bar_right,
             "height": bar_height,
         })
@@ -1617,12 +1618,14 @@ def _data_display_axis_ticks(axis_min, axis_max, measurer):
     max_ticks = 8
     width = DATA_DISPLAY_AXIS_WIDTH
     left, right = -width / 2, width / 2
-    candidates = [
-        Fraction(1, 8), Fraction(1, 4), Fraction(1, 2),
-        Fraction(1), Fraction(2), Fraction(5),
-        Fraction(10), Fraction(20), Fraction(25), Fraction(50),
-        Fraction(100), Fraction(250), Fraction(500), Fraction(1000),
-    ]
+    candidates = [Fraction(1, 8), Fraction(1, 4), Fraction(1, 2)]
+    span = axis_max_f - axis_min_f
+    decade = Fraction(1)
+    while True:
+        candidates.extend([decade, 2 * decade, 5 * decade])
+        if decade >= span:
+            break
+        decade *= 10
     fallback = None
     for step in candidates:
         first = int(ceil(axis_min_f / step))
@@ -1699,10 +1702,18 @@ def _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths
         ))
 
     for a, b in zip(range(len(payload_bars) - 1), range(1, len(payload_bars))):
-        gap = (bar_center(payload_bars[b]) - payload_bars[b]["count_width"] / 2) - (
-            bar_center(payload_bars[a]) + payload_bars[a]["count_width"] / 2
+        ba, bb = payload_bars[a], payload_bars[b]
+        x_gap = (bar_center(bb) - bb["count_width"] / 2) - (
+            bar_center(ba) + ba["count_width"] / 2
         )
-        if gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+        if x_gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+            continue
+        ya_bot = ba["height"] + DATA_DISPLAY_COUNT_LABEL_GAP
+        ya_top = ya_bot + ba["count_height"]
+        yb_bot = bb["height"] + DATA_DISPLAY_COUNT_LABEL_GAP
+        yb_top = yb_bot + bb["count_height"]
+        y_gap = max(ya_bot, yb_bot) - min(ya_top, yb_top)
+        if y_gap >= DATA_DISPLAY_LABEL_INTER_GAP:
             continue
         raise V3ValidationError(V3Failure(
             code="visual_extent_unrenderable",
@@ -1712,9 +1723,9 @@ def _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths
                 f"{DATA_DISPLAY_LABEL_INTER_GAP:g} units"
             ),
             observed=(
-                f"counts {payload_bars[a]['count_text']!r} and "
-                f"{payload_bars[b]['count_text']!r} above adjacent bars "
-                f"overlap by {DATA_DISPLAY_LABEL_INTER_GAP - gap:.2f} units"
+                f"counts {ba['count_text']!r} and "
+                f"{bb['count_text']!r} above adjacent bars overlap by "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP - min(x_gap, y_gap):.2f} units"
             ),
             hint=(
                 "reduce `categories`, or use smaller counts -- adjacent count "
