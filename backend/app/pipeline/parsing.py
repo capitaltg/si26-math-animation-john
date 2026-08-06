@@ -1,35 +1,59 @@
+import itertools
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
-def _extract_shape_text(shape) -> list[str]:
+@dataclass(frozen=True)
+class Block:
+    kind: Literal["text", "cell"]
+    table_ord: int | None
+    text: str
+
+
+def _extract_shape_blocks(shape, table_ords: "itertools.count") -> list[Block]:
     if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
         return [
-            text
+            block
             for child in shape.shapes
-            for text in _extract_shape_text(child)
+            for block in _extract_shape_blocks(child, table_ords)
         ]
     if getattr(shape, "has_table", False):
-        return [cell.text for row in shape.table.rows for cell in row.cells]
+        table_ord = next(table_ords)
+        return [
+            Block(kind="cell", table_ord=table_ord, text=cell.text)
+            for row in shape.table.rows
+            for cell in row.cells
+        ]
     if getattr(shape, "has_text_frame", False):
-        return [shape.text_frame.text]
+        return [Block(kind="text", table_ord=None, text=shape.text_frame.text)]
     return []
 
 
-def extract_slide_texts(pptx_path: Path) -> list[str]:
+def extract_slide_blocks(pptx_path: Path) -> list[list[Block]]:
     presentation = Presentation(pptx_path)
-    texts = []
+    slides_blocks: list[list[Block]] = []
     for slide in presentation.slides:
-        parts = []
+        table_ords = itertools.count()
+        blocks: list[Block] = []
         for shape in slide.shapes:
-            parts.extend(_extract_shape_text(shape))
+            blocks.extend(_extract_shape_blocks(shape, table_ords))
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-            parts.append(slide.notes_slide.notes_text_frame.text)
-        texts.append("\n".join(p for p in parts if p.strip()))
-    return texts
+            blocks.append(
+                Block(kind="text", table_ord=None, text=slide.notes_slide.notes_text_frame.text)
+            )
+        slides_blocks.append([block for block in blocks if block.text.strip()])
+    return slides_blocks
 
 
-def chunk_slide_texts(slide_texts: list[str], chunk_size: int = 25) -> list[list[str]]:
-    return [slide_texts[i:i + chunk_size] for i in range(0, len(slide_texts), chunk_size)]
+def flatten_blocks(blocks: list[Block]) -> str:
+    return "\n".join(block.text for block in blocks if block.text.strip())
+
+
+def chunk_slide_blocks(
+    slide_blocks: list[list[Block]], chunk_size: int = 25
+) -> list[list[list[Block]]]:
+    return [slide_blocks[i:i + chunk_size] for i in range(0, len(slide_blocks), chunk_size)]
