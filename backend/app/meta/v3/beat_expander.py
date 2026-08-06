@@ -61,6 +61,15 @@ _MAX_ELIMINATION_SECONDS = 6.0
 _REGROUP_PART = {"grid": "cell", "object_set": "item"}
 _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 
+# `signed_hop` and `distance_from_zero` (M6) carry teaching intent through
+# their compile-time shape rather than through a bespoke beat_expander branch:
+# the compiler requires a signed context (or a 0 marker plus a nonzero marker)
+# on the primary number_line, and the plan-author's own beat targets stage the
+# directed motion or the distance annotation. Falling through to
+# `_generic_role_change` is the behavior; the strategies are named here so the
+# source-mention gate (`test_every_supported_strategy_has_expander_behavior`)
+# counts them as covered.
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):

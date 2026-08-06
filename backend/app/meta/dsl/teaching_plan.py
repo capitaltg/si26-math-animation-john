@@ -503,6 +503,7 @@ class TeachingPlanDocument(BaseModel):
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison", "unit_substitution",
         "unit_rate", "inverse_operation", "ray_shade",
+        "signed_hop", "distance_from_zero",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
