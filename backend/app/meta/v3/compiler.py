@@ -1,6 +1,6 @@
 from dataclasses import asdict
 from fractions import Fraction
-from math import ceil
+from math import ceil, gcd
 
 from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
@@ -19,7 +19,7 @@ _EXPRESSION_FIELDS = {
     "rectangle_measurement": ("length", "width"),
     "number_line": ("minimum", "maximum", "markers"),
     "grid": ("rows", "columns"),
-    "partition": ("whole", "parts"),
+    "partition": ("whole", "parts", "shaded"),
     "bar": ("value", "maximum"),
     "object_set": ("count",),
     "label": (),
@@ -580,6 +580,24 @@ def _validate_equivalence_align_compatibility(plan):
             "add one supporting partition whose parts count is the equivalent denominator, "
             "or use a different strategy",
         )
+    primary_fraction = _partition_fraction(plan.primary_visual, "primary_visual")
+    support_fraction = _partition_fraction(
+        supporting_partitions[0],
+        f"supporting_visuals.{supporting_partitions[0].ref}",
+    )
+    _require_same_whole(
+        [plan.primary_visual, *supporting_partitions], "equivalence_align",
+    )
+    if primary_fraction != support_fraction:
+        _fail(
+            "equivalence_align_requires_equal_fractions",
+            f"supporting_visuals.{supporting_partitions[0].ref}",
+            "a supporting partition whose shaded/parts fraction equals the primary's",
+            f"primary {primary_fraction.numerator}/{primary_fraction.denominator} "
+            f"vs supporting {support_fraction.numerator}/{support_fraction.denominator}",
+            "set the supporting partition's shaded and parts so shaded/parts equals "
+            "the primary's, or use a different strategy",
+        )
 
 
 def _validate_common_denominator_bridge_compatibility(plan):
@@ -604,6 +622,112 @@ def _validate_common_denominator_bridge_compatibility(plan):
             "declare the second operand and the LCD bridge as supporting partition visuals, "
             "or use a different strategy",
         )
+    second_operand, bridge = supporting_partitions
+    primary_parts = _literal_integer(plan.primary_visual.parts)
+    second_parts = _literal_integer(second_operand.parts)
+    bridge_parts = _literal_integer(bridge.parts)
+    if primary_parts is None or second_parts is None or bridge_parts is None:
+        _fail(
+            "common_denominator_bridge_requires_literal_denominators",
+            "supporting_visuals",
+            "literal parts counts on all three partitions so the compiler can verify the LCD",
+            f"primary parts={_describe_expression(plan.primary_visual.parts)}, "
+            f"second parts={_describe_expression(second_operand.parts)}, "
+            f"bridge parts={_describe_expression(bridge.parts)}",
+            "set every partition's parts to a literal integer, or use a different strategy",
+        )
+    expected_lcd = _lcm(primary_parts, second_parts)
+    if bridge_parts != expected_lcd:
+        _fail(
+            "common_denominator_bridge_requires_lcd",
+            f"supporting_visuals.{bridge.ref}.parts",
+            f"a bridge partition of {expected_lcd} parts (the LCD of {primary_parts} and {second_parts})",
+            f"bridge parts={bridge_parts}",
+            f"set the bridge partition's parts to {expected_lcd}, "
+            "or use a different strategy",
+        )
+    _require_same_whole(
+        [plan.primary_visual, second_operand, bridge], "common_denominator_bridge",
+    )
+    primary_fraction = _partition_fraction(plan.primary_visual, "primary_visual")
+    second_fraction = _partition_fraction(
+        second_operand, f"supporting_visuals.{second_operand.ref}",
+    )
+    bridge_fraction = _partition_fraction(
+        bridge, f"supporting_visuals.{bridge.ref}",
+    )
+    # The bridge carries the RESULT of combining the operands. Accept either
+    # a sum (a+b) or a difference (larger - smaller) to keep the compiler
+    # agnostic to the answer_expression's operator kind here -- the operator
+    # is already tied to the answer through `answer_expression`, and both
+    # additive combinations are legitimate teaching for this archetype.
+    candidates = {
+        primary_fraction + second_fraction,
+        abs(primary_fraction - second_fraction),
+    }
+    if bridge_fraction not in candidates:
+        _fail(
+            "common_denominator_bridge_result_mismatch",
+            f"supporting_visuals.{bridge.ref}",
+            "a bridge shaded/parts fraction equal to operand_a + operand_b or |operand_a - operand_b|",
+            f"primary {primary_fraction}, second {second_fraction}, bridge {bridge_fraction}",
+            "set the bridge partition's shaded so shaded/parts equals the sum or "
+            "difference of the operands' fractions on the LCD, or use a different strategy",
+        )
+
+
+def _partition_fraction(spec, path):
+    parts = _literal_integer(spec.parts)
+    shaded = _literal_integer(spec.shaded)
+    if parts is None or shaded is None:
+        _fail(
+            "partition_requires_literal_shaded_and_parts", path,
+            "a partition with literal shaded and parts so the compiler can compare fractions",
+            f"shaded={_describe_expression(spec.shaded)}, parts={_describe_expression(spec.parts)}",
+            "set shaded and parts to literal integers, or use a different strategy",
+        )
+    if parts <= 0:
+        _fail(
+            "partition_requires_positive_parts", f"{path}.parts",
+            "a partition with at least one part", str(parts),
+            "raise parts to a positive integer",
+        )
+    if shaded < 0 or shaded > parts:
+        _fail(
+            "partition_shaded_out_of_range", f"{path}.shaded",
+            f"a shaded count between 0 and {parts}", str(shaded),
+            f"set shaded between 0 and {parts}",
+        )
+    return Fraction(shaded, parts)
+
+
+def _require_same_whole(specs, strategy):
+    wholes = []
+    for spec in specs:
+        whole = _literal_integer(spec.whole)
+        if whole is None:
+            _fail(
+                f"{strategy}_requires_literal_whole",
+                f"supporting_visuals.{spec.ref}.whole",
+                "a literal whole on every partition so the compiler can verify they share it",
+                _describe_expression(spec.whole),
+                "set whole to a literal integer, or use a different strategy",
+            )
+        wholes.append((spec.ref, whole))
+    reference_ref, reference_whole = wholes[0]
+    for ref, whole in wholes[1:]:
+        if whole != reference_whole:
+            _fail(
+                f"{strategy}_requires_same_whole",
+                f"supporting_visuals.{ref}.whole",
+                f"every partition to share the primary's whole ({reference_whole})",
+                f"{ref} whole={whole}",
+                f"set {ref}.whole to {reference_whole}",
+            )
+
+
+def _lcm(a, b):
+    return a * b // gcd(a, b)
 
 
 def validate_unit_rate_value_range(plan, known_fields):

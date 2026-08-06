@@ -419,19 +419,27 @@ def _measure_grid(*, spec, values, measurer):
 
 def _measure_partition(*, spec, values, measurer):
     whole, count = values["whole"], _whole(values["parts"], "parts")
+    shaded_raw = values.get("shaded", 0)
+    shaded = _whole(shaded_raw, "shaded") if _is_whole(shaded_raw) else 0
     if whole <= 0 or count <= 0:
         raise ValueError("partition whole and parts must be positive")
+    if shaded < 0 or shaded > count:
+        raise ValueError(f"partition requires 0 <= shaded <= parts, got shaded={shaded} parts={count}")
     radius = 1.2
     parts = {}
     for index in range(count):
+        # Wedge centroid (~2/3 of the radius, mid-angle of the wedge). The
+        # renderer draws one filled Sector per part; the SemanticPart bounds
+        # anchor a `set_role` transform to the wedge's visible centre rather
+        # than to a bare marker dot.
         angle = tau * (index + 0.5) / count
-        x, y = radius * cos(angle) / 2, radius * sin(angle) / 2
+        x, y = (2 * radius / 3) * cos(angle), (2 * radius / 3) * sin(angle)
         parts[("partition", index)] = SemanticPart("partition", index, Bounds(x, x, y, y))
     return _measured_visual(
         ref=spec.ref,
         bounds=Bounds(-radius, radius, -radius, radius),
         parts=parts,
-        payload={"whole": whole, "parts": count},
+        payload={"whole": whole, "parts": count, "shaded": shaded},
     )
 
 

@@ -341,21 +341,31 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
         # strategy but never reveals its supporting partitions is decorative:
         # the animation shows the primary alone, and the equivalence /
         # bridge the strategy is named for never lands.
+        #
+        # Require a WHOLE-visual reveal (`part is None and index is None`)
+        # for each supporting partition, not just any reveal that names its
+        # ref: a plan that only reveals `support.partition[0]` shows one
+        # wedge but never the circle around it and the remaining parts, and
+        # the equivalence/refine walk that follows lands on invisible
+        # geometry. `beat_expander._is_revealed` mirrors this rule -- the
+        # whole reveal is what brings a partition's wedges on-screen.
         supporting_partitions = [
             spec for spec in plan.supporting_visuals if spec.kind == "partition"
         ]
-        revealed_refs = {
+        whole_revealed_refs = {
             target.visual_ref
             for entry in program.timeline
             if entry.action.kind == "reveal"
             for target in entry.action.targets
+            if target.part is None and target.index is None
         }
         for spec in supporting_partitions:
-            if spec.ref not in revealed_refs:
+            if spec.ref not in whole_revealed_refs:
                 return _failed(
                     "static_process_visual", "timeline",
                     f"{plan.strategy} needs the supporting partition {spec.ref!r} "
-                    "revealed on the timeline",
+                    "revealed as a whole visual on the timeline (no part, no index) "
+                    "so its circle and every wedge land before the alignment plays",
                 )
         return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":

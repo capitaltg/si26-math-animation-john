@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
+from math import tau
+
 from manim import (
     AnimationGroup,
     Arrow,
@@ -12,6 +14,7 @@ from manim import (
     FadeIn,
     Line,
     Rectangle,
+    Sector,
     Text,
     Transform,
     VectorizedPoint,
@@ -220,9 +223,7 @@ def _build_visual(placed, palette: str):
     elif {"rows", "columns"} <= payload.keys():
         root, children = _parts_as_rectangles(measured, placed.offset, "cell")
     elif {"whole", "parts"} <= payload.keys():
-        root = Circle(radius=(bounds.right - bounds.left) / 2).move_to(_array(bounds.center))
-        children = _parts_as_dots(measured, placed.offset, "partition")
-        root.add(*children.values())
+        root, children = _build_partition(measured, placed, palette)
     elif "boxes" in payload:
         root, children = _build_unit_tape(measured, placed, palette)
     elif {"value", "maximum"} <= payload.keys():
@@ -777,6 +778,33 @@ def _build_unit_tape(measured, placed, palette: str):
             children[(part, index)] for index in range(len(payload["boxes"]))
         ))
     return root, children
+
+
+def _build_partition(measured, placed, palette: str):
+    """Wedge-per-part rendering, with the numerator's wedges filled.
+
+    A plain Circle + dots hid the numerator entirely: a plan for "2/3" and one
+    for "3/3" rendered identically. Each part becomes an addressable Sector so
+    a `set_role` on `partition[i]` recolours a visible wedge, not a marker dot;
+    the first `shaded` wedges are filled to make the numerator readable at
+    rest, before any beat plays.
+    """
+    payload = measured.payload
+    center = _array(measured.bounds.center) + _array(placed.offset)
+    count = payload["parts"]
+    shaded = payload.get("shaded", 0)
+    radius = (measured.bounds.right - measured.bounds.left) / 2
+    angle = tau / count
+    style = resolve_semantic_style(palette, "focus")
+    wedges = {}
+    for index in range(count):
+        wedge = Sector(radius=radius, angle=angle, start_angle=index * angle)
+        wedge.move_arc_center_to(center)
+        if index < shaded:
+            wedge.set_fill(style["color"], opacity=0.4)
+        wedges[("partition", index)] = wedge
+    root = VGroup(*wedges.values())
+    return root, wedges
 
 
 def _partial_fill(bounds: Bounds, fraction: float, palette: str):
