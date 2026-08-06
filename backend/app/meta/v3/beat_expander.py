@@ -566,10 +566,14 @@ class BeatExpander:
         per-one column, so the primary tape must already be on screen by the
         end of the chosen beat -- otherwise the focus lands on an invisible
         mobject and the target labels arrive before the tape they belong to.
-        A beat qualifies once a prior beat (or the beat itself) names the
-        primary visual with `part is None`, either via `beat.targets` or via a
-        custom `reveal` action, since only a whole-visual reveal populates the
-        renderer's root group that carries `box[0]`.
+        A beat qualifies once a prior beat -- or the current beat via its
+        `beat.targets` -- names the primary visual with `part is None`, since
+        only a whole-visual reveal populates the renderer's root group that
+        carries `box[0]`. A same-beat custom `reveal` does *not* qualify the
+        beat itself: the compiler schedules the substitution's box focus and
+        target-label reveal before the beat's custom actions run, so the focus
+        would land on an invisible mobject. Custom reveals only qualify
+        subsequent beats.
         """
         if plan.strategy not in {"unit_substitution", "unit_rate"}:
             return None
@@ -577,18 +581,24 @@ class BeatExpander:
         tape_revealed = False
         eligible = set()
         for beat in plan.beats:
-            if not tape_revealed:
-                reveal_targets = list(beat.targets)
-                for action in beat.custom_actions:
-                    if getattr(action, "kind", None) == "reveal":
-                        reveal_targets.extend(getattr(action, "targets", ()))
-                if any(
-                    target.visual_ref == primary_ref and target.part is None
-                    for target in reveal_targets
-                ):
-                    tape_revealed = True
+            if not tape_revealed and any(
+                target.visual_ref == primary_ref and target.part is None
+                for target in beat.targets
+            ):
+                tape_revealed = True
             if tape_revealed and beat.kind in {"derive", "organize", "focus"}:
                 eligible.add(beat.id)
+            if not tape_revealed:
+                for action in beat.custom_actions:
+                    if getattr(action, "kind", None) != "reveal":
+                        continue
+                    if any(
+                        getattr(t, "visual_ref", None) == primary_ref
+                        and getattr(t, "part", None) is None
+                        for t in getattr(action, "targets", ())
+                    ):
+                        tape_revealed = True
+                        break
         for kinds in ({"derive"}, {"organize"}, {"focus"}):
             for beat in plan.beats:
                 if beat.kind in kinds and beat.id in eligible:
