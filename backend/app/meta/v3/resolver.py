@@ -233,6 +233,10 @@ def action_targets(action: ProgramAction) -> list[TargetRef]:
         return [action.target]
     if action.kind == "transform":
         return [action.source, action.target]
+    if action.kind == "signed_hop_arrow":
+        return [action.source, action.target]
+    if action.kind == "distance_annotation":
+        return [action.origin, action.target]
     return []
 
 
@@ -312,6 +316,10 @@ def _action_target_items(action, index):
         return [(action.target, f"{root}.target")]
     if action.kind == "transform":
         return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]
+    if action.kind == "signed_hop_arrow":
+        return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]
+    if action.kind == "distance_annotation":
+        return [(action.origin, f"{root}.origin"), (action.target, f"{root}.target")]
     return []
 
 
