@@ -96,6 +96,9 @@ class BeatExpander:
             for spec in self._visual_specs(plan)
         }
         unit_substitution_beat_id = self._unit_substitution_beat_id(plan)
+        self._unit_rate_beat_id_state = (
+            unit_substitution_beat_id if plan.strategy == "unit_rate" else None
+        )
         answer_declared = any(visual.ref == "evaluated_answer" for visual in visuals)
         answer_target = TargetRef(visual_ref="evaluated_answer")
         work_beat_id = self._work_beat_id(plan) if answer_declared else None
@@ -334,6 +337,31 @@ class BeatExpander:
             if actions:
                 return actions
 
+        if (
+            plan.strategy == "unit_rate"
+            and beat.id == getattr(self, "_unit_rate_beat_id_state", None)
+        ):
+            # `unit_rate` teaches "one source unit is per_unit target units" by
+            # emphasising the first box while the target labels arrive. Focus
+            # box[0] rather than the whole tape so the per-one column reads as
+            # the rate; a whole-tape focus would fall through to
+            # `_generic_role_change` and put every box on equal footing.
+            # Only the whole-primary target gets swapped for the box[0] focus;
+            # other targets on the same beat (a supporting visual named by a
+            # `derive`, for instance) still get their generic role change, so
+            # this branch does not silently drop them.
+            role = "focus" if beat.kind in {"focus", "derive"} else "structure"
+            actions = list(self._unit_rate_actions(plan, current_roles))
+            detailed = self._targets_detailed_by_custom_actions(beat)
+            primary_ref = plan.primary_visual.ref
+            for target in beat.targets:
+                if target.visual_ref == primary_ref and target.part is None:
+                    continue
+                if self._target_key(target) in detailed:
+                    continue
+                actions.extend(self._role_change(target, role, current_roles))
+            return actions
+
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
             # Iterate pairs, not indices. The middle item is never reached, so
             # the old `if index == middle: continue` guard goes with the loop it
@@ -426,6 +454,17 @@ class BeatExpander:
                 "focus", current_roles,
             ))
         return actions
+
+    def _unit_rate_actions(self, plan, current_roles):
+        """Focus box[0] -- the "per one" column that carries the rate.
+
+        Box[0] alone rather than every box: the rate is what one source unit
+        buys in target units, so the column that reads "1 source = per_unit
+        target" is where the beat lands. A whole-tape focus would make every
+        column equally salient and lose that reading.
+        """
+        target = TargetRef(visual_ref=plan.primary_visual.ref, part="box", index=0)
+        return self._role_change(target, "focus", current_roles)
 
     def _median_callout(self, plan, beat, relations):
         """Name the surviving middle value -- unless the plan already names it.
@@ -521,12 +560,48 @@ class BeatExpander:
         focus; a substitution belongs on the beat that derives, so `derive` is
         preferred here. `require_unit_substitution_shape` forbids the plan from
         staging this itself, so there is no author's version to defer to.
+
+        `unit_rate` shares the same staged reveal so the per-one pairing is
+        legible when the rate beat lands. That reveal focuses `box[0]` as the
+        per-one column, so the primary tape must already be on screen by the
+        end of the chosen beat -- otherwise the focus lands on an invisible
+        mobject and the target labels arrive before the tape they belong to.
+        A beat qualifies once a prior beat -- or the current beat via its
+        `beat.targets` -- names the primary visual with `part is None`, since
+        only a whole-visual reveal populates the renderer's root group that
+        carries `box[0]`. A same-beat custom `reveal` does *not* qualify the
+        beat itself: the compiler schedules the substitution's box focus and
+        target-label reveal before the beat's custom actions run, so the focus
+        would land on an invisible mobject. Custom reveals only qualify
+        subsequent beats.
         """
-        if plan.strategy != "unit_substitution":
+        if plan.strategy not in {"unit_substitution", "unit_rate"}:
             return None
+        primary_ref = plan.primary_visual.ref
+        tape_revealed = False
+        eligible = set()
+        for beat in plan.beats:
+            if not tape_revealed and any(
+                target.visual_ref == primary_ref and target.part is None
+                for target in beat.targets
+            ):
+                tape_revealed = True
+            if tape_revealed and beat.kind in {"derive", "organize", "focus"}:
+                eligible.add(beat.id)
+            if not tape_revealed:
+                for action in beat.custom_actions:
+                    if getattr(action, "kind", None) != "reveal":
+                        continue
+                    if any(
+                        getattr(t, "visual_ref", None) == primary_ref
+                        and getattr(t, "part", None) is None
+                        for t in getattr(action, "targets", ())
+                    ):
+                        tape_revealed = True
+                        break
         for kinds in ({"derive"}, {"organize"}, {"focus"}):
             for beat in plan.beats:
-                if beat.kind in kinds:
+                if beat.kind in kinds and beat.id in eligible:
                     return beat.id
         return None
 
@@ -541,7 +616,32 @@ class BeatExpander:
         if self._current_role(key, current_roles) == role:
             return []
         current_roles[key] = role
+        self._clear_descendant_roles(key, current_roles)
         return [SetRoleAction(target=target, role=role)]
+
+    def _clear_descendant_roles(self, key, current_roles):
+        """A whole-visual `set_role` restyles descendants in the renderer
+        (`build_role_transition` recolours the whole group). If an earlier
+        explicit descendant role stays in `current_roles`, `_current_role`
+        keeps returning it and a follow-up `_role_change` back to that role
+        is silently dropped as a no-op -- but the frame just switched to the
+        parent's role, so the descendant needs the transition too.
+
+        Deferred parts (see `visual_registry.DEFERRED_PARTS`) are excluded
+        from the visual's root group -- `_build_unit_tape` registers them as
+        children but does not `.add()` them -- so a whole-visual role change
+        does *not* restyle them. Clearing their bookkeeping here would falsely
+        forget a role they still hold, and a later valid role change on that
+        part would be suppressed as a no-op. Preserve those keys.
+        """
+        visual_ref, part, index = key
+        if part is not None or index is not None:
+            return
+        deferred = self._deferred_parts.get(visual_ref, ())
+        for descendant_key in [k for k in current_roles if k[0] == visual_ref and k != key]:
+            if descendant_key[1] in deferred:
+                continue
+            del current_roles[descendant_key]
 
     @staticmethod
     def _current_role(key, current_roles):
@@ -590,7 +690,9 @@ class BeatExpander:
         return target.visual_ref, target.part, target.index
 
     def _set_role(self, target, role, current_roles):
-        current_roles[self._target_key(target)] = role
+        key = self._target_key(target)
+        current_roles[key] = role
+        self._clear_descendant_roles(key, current_roles)
         return SetRoleAction(target=target, role=role)
 
 

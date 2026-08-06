@@ -165,13 +165,18 @@ def _answer_expression():
 
 
 def _compile(plan):
+    from app.meta.dsl.expression import FieldContract
     from app.meta.dsl.v3_common import CompileContext
     from app.meta.v3.compiler import compile_teaching_plan
 
     return compile_teaching_plan(
         plan,
         _answer_expression(),
-        frozenset({"distance_km"}),
+        FieldContract(
+            scalars=frozenset({"distance_km"}),
+            arrays={},
+            scalar_minimums={"distance_km": Fraction(1)},
+        ),
         CompileContext(concept_family="transform_other", grade_band="3-5"),
     )
 
@@ -333,6 +338,290 @@ def test_revealing_a_deferred_part_twice_is_still_a_repeat():
     doubled = program.model_copy(update={"timeline": [*program.timeline, label_entry]})
 
     assert not check_repeated_reveal(doubled).passed
+
+
+def _role_changes(program, role):
+    return [
+        entry.action for entry in program.timeline
+        if entry.action.kind == "set_role" and entry.action.role == role
+    ]
+
+
+def test_unit_rate_focuses_the_per_one_column_at_the_derive_beat():
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    focus_actions = _role_changes(program, "focus")
+    box_zero_focuses = [
+        action for action in focus_actions
+        if action.target.visual_ref == "trail_tape"
+        and action.target.part == "box"
+        and action.target.index == 0
+    ]
+    assert box_zero_focuses, "unit_rate should focus box[0] as the per-one column"
+
+
+def test_unit_rate_still_stages_the_target_label_reveal():
+    """`unit_rate` shares `unit_substitution`'s group reveal so the per-one
+    pairing is legible when the rate beat lands."""
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    label_reveals = [
+        action for action in _reveals(program)
+        if any(target.part == "target_label" for target in action.targets)
+    ]
+    assert len(label_reveals) == 1
+    target = label_reveals[0].targets[0]
+    assert (target.visual_ref, target.part, target.index) == ("trail_tape", "target_label", None)
+
+
+def test_unit_rate_plan_rejects_a_target_label_target():
+    """`require_unit_substitution_shape` now guards `unit_rate` too, since the
+    compiler stages the same reveal for both strategies."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    from pydantic import ValidationError
+
+    payload = _tape_plan(strategy="unit_rate").model_dump()
+    payload["beats"][1]["custom_actions"] = [
+        {"kind": "reveal",
+         "targets": [{"visual_ref": "trail_tape", "part": "target_label", "index": 0}]},
+    ]
+
+    with pytest.raises(ValidationError, match="target_label"):
+        TeachingPlanDocument.model_validate(payload)
+
+
+def test_unit_rate_derive_beat_does_not_focus_the_whole_tape():
+    """When an earlier beat already focuses box[0], `_unit_rate_actions` yields
+    no actions -- and the derive beat must not fall through to a whole-visual
+    focus, which would put every column on equal footing and defeat the
+    per-one emphasis."""
+    program = _compile(_tape_plan(strategy="unit_rate"))
+
+    reveal_beat_id = next(
+        entry.beat_id for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    whole_tape_focus_at_reveal = [
+        entry for entry in program.timeline
+        if entry.beat_id == reveal_beat_id
+        and entry.action.kind == "set_role"
+        and entry.action.role == "focus"
+        and entry.action.target.visual_ref == "trail_tape"
+        and entry.action.target.part is None
+    ]
+    assert not whole_tape_focus_at_reveal, (
+        "unit_rate derive beat refocused the whole tape, defeating the "
+        "per-one emphasis"
+    )
+
+
+def test_unit_rate_quality_gate_catches_whole_tape_focus_at_reveal_beat():
+    """The tightened gate rejects a timeline where the reveal beat also
+    focuses the whole primary visual -- the exact failure the beat-expander
+    early-return prevents."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds,
+        duration_seconds=reveal_entry.duration_seconds,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="focus",
+        ),
+    )
+    with_whole_tape_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_whole_tape_focus).passed
+
+
+def test_unit_rate_quality_gate_catches_whole_tape_focus_after_reveal_in_same_beat():
+    """A whole-tape focus scheduled *after* the reveal within the same beat
+    still overwrites box[0]'s per-one emphasis on that beat's final frame.
+    The gate must scan through the end of the reveal beat, not stop at the
+    reveal's start time."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds + reveal_entry.duration_seconds / 2,
+        duration_seconds=reveal_entry.duration_seconds / 2,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="focus",
+        ),
+    )
+    with_late_whole_tape_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_late_whole_tape_focus).passed
+
+
+def test_unit_rate_quality_gate_catches_whole_tape_reset_after_box_focus():
+    """A whole-visual `set_role` restyles descendants in the renderer, so a
+    plan that focuses box[0] and then resets the whole tape to `structure`
+    before the reveal ends up with an unemphasised per-one column. The gate
+    must reject that even though box[0] has an earlier explicit focus."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    box_focus_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "set_role"
+        and entry.action.target.visual_ref == "trail_tape"
+        and entry.action.target.part == "box"
+        and entry.action.target.index == 0
+        and entry.action.role == "focus"
+    )
+    reset_at = (box_focus_entry.at_seconds + reveal_entry.at_seconds) / 2
+    assert box_focus_entry.at_seconds < reset_at < reveal_entry.at_seconds
+    whole_tape_reset = TimedAction(
+        at_seconds=reset_at,
+        duration_seconds=box_focus_entry.duration_seconds,
+        beat_id=box_focus_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape"),
+            role="structure",
+        ),
+    )
+    with_reset = program.model_copy(update={
+        "timeline": [*program.timeline, whole_tape_reset],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_reset).passed
+
+
+def test_unit_rate_quality_gate_requires_the_per_one_focus():
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    without_per_one = program.model_copy(update={
+        "timeline": [
+            entry for entry in program.timeline
+            if not (
+                entry.action.kind == "set_role"
+                and entry.action.role == "focus"
+                and entry.action.target.visual_ref == "trail_tape"
+                and entry.action.target.part == "box"
+                and entry.action.target.index == 0
+            )
+        ],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, without_per_one).passed
+
+
+def test_unit_rate_quality_gate_catches_a_focused_non_zero_box_at_reveal():
+    """A second focused column defeats the per-one emphasis just as thoroughly
+    as a whole-tape focus. The gate must reject any focused box whose index is
+    not 0 through the reveal beat, not stop after confirming box[0]."""
+    from app.meta.dsl.scene_program import SetRoleAction, TimedAction
+    from app.meta.dsl.v3_common import TargetRef
+    from app.meta.v3.quality import check_strategy_affordance
+
+    plan = _tape_plan(strategy="unit_rate")
+    program = _compile(plan)
+    reveal_entry = next(
+        entry for entry in program.timeline
+        if entry.action.kind == "reveal"
+        and any(target.part == "target_label" for target in entry.action.targets)
+    )
+    injected = TimedAction(
+        at_seconds=reveal_entry.at_seconds,
+        duration_seconds=reveal_entry.duration_seconds,
+        beat_id=reveal_entry.beat_id,
+        action=SetRoleAction(
+            target=TargetRef(visual_ref="trail_tape", part="box", index=1),
+            role="focus",
+        ),
+    )
+    with_extra_focus = program.model_copy(update={
+        "timeline": [*program.timeline, injected],
+    })
+
+    assert check_strategy_affordance(plan, program).passed
+    assert not check_strategy_affordance(plan, with_extra_focus).passed
+
+
+def test_whole_visual_role_change_preserves_deferred_part_bookkeeping():
+    """`_build_unit_tape` registers `target_label` as a child but does *not*
+    add it to the visual's root group, so a whole-visual `set_role` in the
+    renderer does not restyle the deferred part. Bookkeeping must agree: if
+    we cleared the deferred descendant here, a later valid role change back
+    to its true style would be silently dropped as a no-op even though the
+    frame really did need the transition."""
+    from app.meta.v3.beat_expander import BeatExpander
+
+    expander = BeatExpander(answer_expression=LiteralNode(node="literal", value=1))
+    expander._deferred_parts = {"trail_tape": ("target_label",)}
+    current_roles = {
+        ("trail_tape", None, None): "structure",
+        ("trail_tape", "target_label", 0): "focus",
+        ("trail_tape", "box", 0): "focus",
+    }
+
+    expander._clear_descendant_roles(("trail_tape", None, None), current_roles)
+
+    assert ("trail_tape", "target_label", 0) in current_roles
+    assert current_roles[("trail_tape", "target_label", 0)] == "focus"
+    assert ("trail_tape", "box", 0) not in current_roles
+
+
+def test_unit_rate_is_rejected_on_a_non_tape_visual():
+    """Only `unit_tape` supports `unit_rate` today; the registry gate refuses
+    the pairing on any other kind."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan(strategy="unit_rate").model_dump()
+    payload["primary_visual"] = {
+        "kind": "bar", "ref": "trail_tape",
+        "value": {"node": "literal", "value": 3},
+        "maximum": {"node": "literal", "value": 5},
+    }
+    payload["beats"][1]["custom_actions"] = []
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "segment", "index": 0},
+    ]
+
+    with pytest.raises(V3ValidationError) as exc_info:
+        _compile(TeachingPlanDocument.model_validate(payload))
+
+    assert exc_info.value.failure.code == "incompatible_strategy"
 
 
 def _observation():

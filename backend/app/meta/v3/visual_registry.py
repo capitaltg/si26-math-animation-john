@@ -56,7 +56,7 @@ _SUPPORTED_STRATEGIES = {
     "bar": {"group_reveal", "short_stagger", "magnitude_comparison"},
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
-    "unit_tape": {"group_reveal", "unit_substitution"},
+    "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
 }
 
 

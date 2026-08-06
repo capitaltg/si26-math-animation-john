@@ -44,10 +44,16 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # `unit_substitution` strategy to `dsl/teaching_plan.py` and
     # `dsl/scene_program.py`.
     #
+    # DSL_COMPILER_VERSION 7 pairs `unit_tape` with `unit_rate`: the compiler
+    # stages a per-one focus on box[0] at the reveal beat (preserving generic
+    # role changes for other targets), rejects a plan whose tape value is not
+    # guaranteed >= 1, and the quality gate rejects any active whole-tape
+    # focus through the reveal.
+    #
     # DYNAMIC_RENDERER_VERSION 6 covers `number_line` labelling each marker and
     # reserving a strip below the line for those labels, growing its measured
     # height; and the line itself moving to draw at its markers' y instead of
     # at its label-padded bounds' center, so it passes through its own dots
     # again.
-    assert DSL_COMPILER_VERSION == 6
+    assert DSL_COMPILER_VERSION == 7
     assert DYNAMIC_RENDERER_VERSION == 6

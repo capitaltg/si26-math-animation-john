@@ -1,7 +1,8 @@
 from dataclasses import asdict
+from fractions import Fraction
 from math import ceil
 
-from app.meta.dsl.expression import compile_expression
+from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import (
@@ -61,6 +62,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
     validate_unique_visual_refs(plan)
     validate_target_refs(plan)
     validate_strategy_compatibility(plan)
+    validate_unit_rate_value_range(plan, known_fields)
     validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
     recipe = resolve_style_recipe(
@@ -328,6 +330,51 @@ def _validate_magnitude_comparison_compatibility(plan):
                     "set every marker to a literal number, or use a different strategy",
                 )
     _require_owned_sweep_beat(plan)
+
+
+def validate_unit_rate_value_range(plan, known_fields):
+    """`unit_rate` teaches "1 source unit = per_unit target units".
+
+    Box[0] carries the rate, so it has to read as a full source unit. A
+    tape whose value can fall below 1 (a literal 0.5 km, or a field whose
+    minimum is 0.5) would put "0.5 km" on box[0] and defeat the per-one
+    framing -- the same failure mode the beat-expander and quality gate
+    guard against for the render, refused here at compile time so a plan
+    that could never pass is rejected before it renders.
+    """
+    if plan.strategy != "unit_rate":
+        return
+    value = plan.primary_visual.value
+    contract = FieldContract.of(known_fields)
+    if value.node == "literal":
+        if Fraction(value.value) >= 1:
+            return
+        _fail(
+            "unit_rate_requires_full_unit_value", "primary_visual.value",
+            "a value of at least 1 so box[0] is a full source unit",
+            str(value.value),
+            "raise value to 1 or more, or use a different strategy",
+        )
+    if value.node == "field_ref" and value.index is None and value.item_field is None:
+        minimum = contract.scalar_minimums.get(value.field)
+        if minimum is not None and minimum >= 1:
+            return
+        observed = (
+            f"field:{value.field} (minimum={minimum})"
+            if minimum is not None else f"field:{value.field} (minimum unknown)"
+        )
+        _fail(
+            "unit_rate_requires_full_unit_value", "primary_visual.value",
+            "a field_ref whose minimum is at least 1",
+            observed,
+            "raise the field's minimum to 1 or more, use a literal, or use a different strategy",
+        )
+    _fail(
+        "unit_rate_requires_full_unit_value", "primary_visual.value",
+        "a literal or scalar field_ref whose minimum is at least 1",
+        _describe_expression(value),
+        "use a literal >= 1 or a scalar field_ref with minimum >= 1, or use a different strategy",
+    )
 
 
 def _require_owned_sweep_beat(plan):

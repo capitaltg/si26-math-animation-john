@@ -90,13 +90,19 @@ class FieldContract:
 
     scalars: frozenset[str] = frozenset()
     arrays: Mapping[str, frozenset[str]] = dataclass_field(default_factory=dict)
+    #: Minimum value each numeric scalar field can carry, keyed by field name.
+    #: Only integer/decimal fields appear here; string/enum fields have no
+    #: numeric minimum. Callers that hand compilation a bare set of names get
+    #: an empty mapping, so a range check falls back to "unknown" rather than
+    #: passing a field with an unknowable minimum.
+    scalar_minimums: Mapping[str, Fraction] = dataclass_field(default_factory=dict)
 
     @classmethod
     def of(cls, fields) -> "FieldContract":
         """Accept a contract, or a bare set of names from a caller without types."""
         if isinstance(fields, FieldContract):
             return fields
-        return cls(scalars=frozenset(fields), arrays={})
+        return cls(scalars=frozenset(fields), arrays={}, scalar_minimums={})
 
     @property
     def names(self) -> frozenset[str]:

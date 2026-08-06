@@ -238,7 +238,7 @@ def check_unexplained_idle_time(program) -> QualityCheck:
 
 
 def check_strategy_affordance(plan, program) -> QualityCheck:
-    if plan.strategy == "unit_substitution":
+    if plan.strategy in {"unit_substitution", "unit_rate"}:
         # The lesson's whole move is the exchange, so the target unit's labels
         # have to reach the screen. The compiler stages this reveal; the check
         # exists because a strategy whose affordance is optional is decorative.
@@ -250,8 +250,90 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
         if not has_substitution:
             return _failed(
                 "static_process_visual", "timeline",
-                "unit-substitution instruction needs the target unit's labels revealed",
+                f"{plan.strategy} instruction needs the target unit's labels revealed",
             )
+        if plan.strategy == "unit_rate":
+            # `unit_rate` adds a per-one emphasis on box[0]; without it the
+            # lesson is indistinguishable from `unit_substitution`.
+            primary_ref = plan.primary_visual.ref
+            reveal_entry = next(
+                (
+                    entry for entry in program.timeline
+                    if entry.action.kind == "reveal"
+                    and any(target.part == "target_label" for target in entry.action.targets)
+                ),
+                None,
+            )
+            # Effective role of box[0] at the *end* of the reveal beat.
+            # Scoping by the reveal entry's `at_seconds` alone would miss
+            # actions scheduled in the same beat after the reveal (a custom
+            # whole-tape focus attached to the reveal beat lands later on the
+            # timeline but is still part of the compiler-owned reveal beat's
+            # final state). Use plan beat order and include every entry in
+            # prior beats or the reveal beat itself, sorted by at_seconds so
+            # a later-appended entry is not missed by list order. A
+            # whole-visual `set_role` restyles descendants in the renderer
+            # (`build_role_transition` recolours the whole group), so it
+            # OVERWRITES any earlier explicit box[0] role -- preserving the
+            # older one would let a plan reset the tape to `structure` after
+            # box[0] was focused and still pass, while the frame shows no
+            # per-one emphasis.
+            reveal_beat_id = reveal_entry.beat_id if reveal_entry is not None else None
+            beat_order = {beat.id: index for index, beat in enumerate(plan.beats)}
+            reveal_beat_index = beat_order.get(reveal_beat_id) if reveal_beat_id is not None else None
+            # Effective role per box index AND for the whole visual through
+            # the reveal beat. Tracking only box[0] let another box (say
+            # box[1]) stay focused across the reveal -- box[0]'s per-one
+            # emphasis passes, but a second focused column defeats it. A
+            # whole-visual `set_role` restyles descendants in the renderer
+            # (see `build_role_transition`), so it overwrites every tracked
+            # per-box role -- preserving them would let a plan reset the
+            # tape to `structure` after box[0] was focused and still pass.
+            box_roles: dict[int, str] = {}
+            whole_visual_role = None
+            entries_through_reveal = (
+                sorted(
+                    (
+                        entry for entry in program.timeline
+                        if entry.beat_id in beat_order
+                        and beat_order[entry.beat_id] <= reveal_beat_index
+                    ),
+                    key=lambda entry: entry.at_seconds,
+                )
+                if reveal_beat_index is not None else []
+            )
+            for entry in entries_through_reveal:
+                if entry.action.kind == "set_role":
+                    target = entry.action.target
+                    if target.visual_ref == primary_ref:
+                        if target.part == "box" and target.index is not None:
+                            box_roles[target.index] = entry.action.role
+                        elif target.part is None:
+                            whole_visual_role = entry.action.role
+                            box_roles.clear()
+            effective_box_zero_role = box_roles.get(0, whole_visual_role)
+            if effective_box_zero_role != "focus":
+                return _failed(
+                    "static_process_visual", "timeline",
+                    "unit_rate instruction needs box[0] focused as the per-one column",
+                )
+            # The rate is *only* box[0]. Any focused non-zero box makes a
+            # second column read as equally salient and defeats the per-one
+            # emphasis; a whole-visual focus applies focus to every box
+            # (indices past the ones named explicitly too) and has the same
+            # effect. Both are caught here through the reveal beat, so a
+            # stale earlier focus and a same-beat focus are both rejected.
+            for index, role in box_roles.items():
+                if index != 0 and role == "focus":
+                    return _failed(
+                        "static_process_visual", "timeline",
+                        f"unit_rate reveal beat must not focus box[{index}] alongside the per-one column",
+                    )
+            if whole_visual_role == "focus":
+                return _failed(
+                    "static_process_visual", "timeline",
+                    "unit_rate reveal beat must not focus the whole primary visual",
+                )
         return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":
         return _passed("static_process_visual", "strategy")

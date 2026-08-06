@@ -1,3 +1,4 @@
+import math
 from fractions import Fraction
 from itertools import product
 from typing import Annotated, Literal, Union
@@ -49,6 +50,20 @@ class DecimalFieldSpec(BaseModel):
     default: float | None = None
     minimum: float
     maximum: float
+
+    @model_validator(mode="after")
+    def _finite_bounds(self):
+        # `Fraction(nan)` raises `ValueError` and `Fraction(inf)` raises
+        # `OverflowError`; both propagate uncaught out of candidate compilation
+        # (`field_contract_for` and value coercion in `DynamicTemplateParams`),
+        # which turns a spec-level input error into a runtime crash. Reject
+        # non-finite bounds up front so the failure surfaces as validation.
+        for name, value in (("minimum", self.minimum), ("maximum", self.maximum), ("default", self.default)):
+            if value is None:
+                continue
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value}")
+        return self
 
     @model_validator(mode="after")
     def _min_le_max(self):
@@ -335,5 +350,18 @@ def field_contract_for(document: ParamsDocument) -> FieldContract:
         arrays={
             spec.name: frozenset(item.name for item in spec.item_fields)
             for spec in document.fields if spec.type == "array"
+        },
+        # Only required numeric fields expose a scalar minimum as a
+        # compile-time non-null guarantee. An optional numeric field's schema
+        # accepts None (see `_field_definition`: `py_type | None` when not
+        # required), so a caller like `validate_unit_rate_value_range` that
+        # trusts `minimum >= 1` would accept a nullable field, then crash at
+        # runtime with `unsupported_type: NoneType` when the accepted null
+        # value flows through expression evaluation. Withholding the minimum
+        # instead reports the field as "minimum unknown" and rejects it.
+        scalar_minimums={
+            spec.name: Fraction(spec.minimum).limit_denominator(10**9)
+            for spec in document.fields
+            if spec.type in ("integer", "decimal") and spec.required
         },
     )

@@ -16,7 +16,12 @@
 #    `unit_substitution` strategy, and `dsl/scene_program.py` gains
 #    `UnitTapeProgramVisual` -- a new frozen visual kind and strategy pairing
 #    that did not previously compile.
-DSL_COMPILER_VERSION = 6
+# 7: `unit_rate` strategy joins `unit_tape`. The compiler stages a per-one
+#    emphasis on box[0] on the reveal beat (preserving generic role changes
+#    for other targets), rejects a plan whose tape value cannot be guaranteed
+#    >= 1, and the quality gate rejects any active whole-tape focus through
+#    the reveal so every column does not read as equally salient.
+DSL_COMPILER_VERSION = 7
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.
