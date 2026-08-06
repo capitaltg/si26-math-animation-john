@@ -173,3 +173,14 @@ def test_array_grid_chain_grounds_start_and_factors_without_dimensions():
         params,
         "Start with 24 counters, divide by 3, then multiply by 2.",
     ) == []
+
+
+def test_duplicate_param_token_requires_duplicate_source_occurrence():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Source has one "3"; params want two.
+    params = _StubParams(tokens=["3", "3"], derived_totals=[])
+    assert check_params_grounded(
+        params,
+        "A box has 3 red balls and 5 blue balls.",
+    ) == ["3"]
