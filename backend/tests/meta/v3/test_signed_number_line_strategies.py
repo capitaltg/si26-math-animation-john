@@ -254,6 +254,169 @@ def test_magnitude_comparison_rejects_a_negative_marker(compile_context):
         compile_teaching_plan(plan, LiteralNode(value=8), frozenset(), compile_context)
 
 
+# -- Emitted arrow / annotation actions ------------------------------------
+
+
+def _hop_actions(program):
+    return [entry for entry in program.timeline if entry.action.kind == "signed_hop_arrow"]
+
+
+def _distance_actions(program):
+    return [entry for entry in program.timeline if entry.action.kind == "distance_annotation"]
+
+
+def _target_key(target):
+    return (target.visual_ref, target.part, target.index)
+
+
+def test_signed_hop_emits_one_arrow_between_each_consecutive_marker_pair(compile_context):
+    """`2 x -3 = -6` has three markers (0, -3, -6) and therefore two hops."""
+    plan = _signed_hop_plan(
+        minimum=-8, maximum=2, markers=[0, -3, -6],
+        seed="signed-hop-arrows-two-times-neg-three",
+        objective="Model multiplication as repeated signed hops.",
+    )
+    program = _assert_compiles_and_passes_quality(
+        plan,
+        MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=-3)]),
+        compile_context,
+    )
+    arrows = _hop_actions(program)
+    assert len(arrows) == 2, "one arrow per marker pair"
+    # Every arrow lands on the hop derive beat (single-owner rule, mirrors
+    # magnitude_comparison's sweep beat), so a later derive/focus beat cannot
+    # double-stage the arrows.
+    assert {entry.beat_id for entry in arrows} == {"hop"}
+    ordered = sorted(arrows, key=lambda entry: entry.at_seconds)
+    endpoints = [
+        (_target_key(entry.action.source), _target_key(entry.action.target))
+        for entry in ordered
+    ]
+    assert endpoints == [
+        (("line", "marker", 0), ("line", "marker", 1)),
+        (("line", "marker", 1), ("line", "marker", 2)),
+    ], "arrows follow the plan's marker order in time"
+
+
+def test_signed_hop_encodes_direction_through_source_target_order(compile_context):
+    """A positive hop (-3 -> 2) draws source left of target; a negative hop
+    (-4 -> -2 is still rightward, but on `2 x -3` the hops read left).
+
+    The renderer draws the arrow from `source` to `target`, so the arrowhead
+    lands under `target`. That is how the sign is animated: for `2 x -3` both
+    hops go leftward and their `source` markers sit to the right of their
+    `target` markers on the line.
+    """
+    plan = _signed_hop_plan(
+        minimum=-8, maximum=2, markers=[0, -3, -6],
+        seed="signed-hop-direction-two-times-neg-three",
+        objective="Model multiplication as repeated signed hops.",
+    )
+    program = _assert_compiles_and_passes_quality(
+        plan,
+        MultiplyNode(operands=[LiteralNode(value=2), LiteralNode(value=-3)]),
+        compile_context,
+    )
+    hop_targets = {entry.action.target.index for entry in _hop_actions(program)}
+    hop_sources = {entry.action.source.index for entry in _hop_actions(program)}
+    # Sources point to the earlier marker, targets to the later; for a left
+    # sequence of markers, `target.index > source.index` places the arrowhead
+    # under the marker whose numeric value is smaller (more negative), which
+    # is the leftward direction on the rendered line.
+    assert hop_sources == {0, 1}
+    assert hop_targets == {1, 2}
+
+
+def test_distance_from_zero_emits_a_bracket_labelled_with_the_magnitude(compile_context):
+    """|-7| = 7: one annotation, anchored at the origin marker, labelled `7`."""
+    plan = _distance_plan(
+        minimum=-9, maximum=2, markers=[-7, 0], seed="distance-abs-neg-seven-actions",
+        objective="Show that the absolute value of -7 is its distance from 0.",
+    )
+    program = _assert_compiles_and_passes_quality(
+        plan, LiteralNode(value=7), compile_context,
+    )
+    annotations = _distance_actions(program)
+    assert len(annotations) == 1
+    annotation = annotations[0].action
+    # Origin is the 0 marker (index 1 in [-7, 0]); target is the -7 marker.
+    assert _target_key(annotation.origin) == ("line", "marker", 1)
+    assert _target_key(annotation.target) == ("line", "marker", 0)
+    assert annotation.label == "7"
+    assert annotations[0].beat_id == "measure"
+
+
+def test_distance_from_zero_renders_end_to_end(compile_context):
+    """`|-7|` compiles, resolves, and renders without raising -- the
+    annotation reaches the recorded play calls as a `distance_annotation`
+    animation. Guards the two rendering paths added for M6 (bracket and
+    label) against future regressions that a compile-only test would miss.
+    """
+    from app.meta.v3.renderer import render_resolved_scene
+    from app.meta.v3.resolver import resolve_scene
+
+    plan = _distance_plan(
+        minimum=-9, maximum=2, markers=[-7, 0], seed="distance-abs-neg-seven-render",
+        objective="Show that the absolute value of -7 is its distance from 0.",
+    )
+    program = _assert_compiles_and_passes_quality(
+        plan, LiteralNode(value=7), compile_context,
+    )
+
+    class _LiteralTextMeasurer:
+        def measure(self, text, font_role):
+            return len(text) * 0.3, 0.6
+
+    class _RecordingScene:
+        def __init__(self):
+            self.kinds = []
+
+        def play(self, animation, **_kwargs):
+            self.kinds.append(animation._semantic_kind)
+
+        def wait(self, _seconds):
+            return None
+
+    resolved = resolve_scene(program, {}, _LiteralTextMeasurer())
+    scene = _RecordingScene()
+    render_resolved_scene(scene, resolved)
+    assert "distance_annotation" in scene.kinds
+
+
+def test_signed_hop_renders_end_to_end(compile_context):
+    """`-3 + 5` compiles, resolves, and renders; the hop arrow is played."""
+    from app.meta.v3.renderer import render_resolved_scene
+    from app.meta.v3.resolver import resolve_scene
+
+    plan = _signed_hop_plan(
+        minimum=-6, maximum=6, markers=[-3, 2], seed="signed-hop-neg-three-plus-five-render",
+    )
+    program = _assert_compiles_and_passes_quality(
+        plan,
+        AddNode(operands=[LiteralNode(value=-3), LiteralNode(value=5)]),
+        compile_context,
+    )
+
+    class _LiteralTextMeasurer:
+        def measure(self, text, font_role):
+            return len(text) * 0.3, 0.6
+
+    class _RecordingScene:
+        def __init__(self):
+            self.kinds = []
+
+        def play(self, animation, **_kwargs):
+            self.kinds.append(animation._semantic_kind)
+
+        def wait(self, _seconds):
+            return None
+
+    resolved = resolve_scene(program, {}, _LiteralTextMeasurer())
+    scene = _RecordingScene()
+    render_resolved_scene(scene, resolved)
+    assert "signed_hop_arrow" in scene.kinds
+
+
 def test_magnitude_comparison_still_accepts_a_nonnegative_signed_plan(compile_context):
     """Regression: the new guard must not tighten past the M6 boundary. A
     [0, 10] line with all-positive markers stays a legal magnitude_comparison.

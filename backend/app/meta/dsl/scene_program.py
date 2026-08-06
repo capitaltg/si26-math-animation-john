@@ -157,10 +157,39 @@ class ShowAnswerStageAction(BaseModel):
     stage: Literal["work", "value"]
 
 
+class SignedHopArrowAction(BaseModel):
+    """Directed arrow from a start marker to an end marker on a number_line.
+
+    Compiler-emitted for the `signed_hop` strategy: one action per consecutive
+    marker pair encodes the hop's sign through the source/target order (source
+    left of target -> right-pointing arrow -> positive; reversed -> negative).
+    Not authored by plans, so it has no `custom_action` counterpart.
+    """
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["signed_hop_arrow"] = "signed_hop_arrow"
+    source: TargetRef
+    target: TargetRef
+
+
+class DistanceAnnotationAction(BaseModel):
+    """Span from the origin to a marker, labelled with the magnitude.
+
+    Compiler-emitted for the `distance_from_zero` strategy. `label` is the
+    formatted absolute value (e.g. `"7"` for the fixture `|-7|`) and is what
+    the renderer draws above the bracket.
+    """
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["distance_annotation"] = "distance_annotation"
+    origin: TargetRef
+    target: TargetRef
+    label: ProseText = Field(min_length=1, max_length=8)
+
+
 ProgramAction = Annotated[
     Union[
         RevealAction, SetRoleAction, TraceAction, ShowRelationAction,
         DrawAction, TransformAction, MoveAction, ShowAnswerStageAction,
+        SignedHopArrowAction, DistanceAnnotationAction,
     ],
     Field(discriminator="kind"),
 ]
