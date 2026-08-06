@@ -100,5 +100,10 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # DYNAMIC_RENDERER_VERSION 10 draws the bar's partition dividers and the
     # number_line's open/closed boundary circle plus shaded ray -- primitives
     # a version-9 renderer has no branch for.
-    assert DSL_COMPILER_VERSION == 11
+    #
+    # DSL_COMPILER_VERSION 12 adds the `equivalence_align` and
+    # `common_denominator_bridge` strategies on `partition`; a version-11
+    # compiler rejects the new strategy literals, so a plan that carries
+    # them cannot be validated against the older model.
+    assert DSL_COMPILER_VERSION == 12
     assert DYNAMIC_RENDERER_VERSION == 10

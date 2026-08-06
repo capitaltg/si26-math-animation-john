@@ -294,6 +294,10 @@ def validate_strategy_compatibility(plan):
         _validate_inverse_operation_compatibility(plan)
     if plan.strategy == "ray_shade":
         _validate_ray_shade_compatibility(plan)
+    if plan.strategy == "equivalence_align":
+        _validate_equivalence_align_compatibility(plan)
+    if plan.strategy == "common_denominator_bridge":
+        _validate_common_denominator_bridge_compatibility(plan)
 
 
 def _validate_inverse_operation_compatibility(plan):
@@ -549,6 +553,57 @@ def _validate_magnitude_comparison_compatibility(plan):
                     "set every marker to a literal number, or use a different strategy",
                 )
     _require_owned_sweep_beat(plan)
+
+
+def _validate_equivalence_align_compatibility(plan):
+    """Fraction equivalence needs a second partition of the same whole.
+
+    The strategy teaches "these two partitions describe the same amount": one
+    partition alone shows only its own fraction, and the alignment is what the
+    lesson turns on. The compiler enforces the shape here so a plan that names
+    the strategy but omits the equivalent partition fails at compile time
+    rather than as a decorative animation later.
+    """
+    if plan.primary_visual.kind != "partition":
+        # `_SUPPORTED_STRATEGIES` already rejects a non-partition primary, so
+        # reaching here means the supported-strategy check let the plan through
+        # for a kind that should not carry this strategy.
+        return
+    supporting_partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if len(supporting_partitions) != 1:
+        _fail(
+            "equivalence_align_requires_one_supporting_partition", "supporting_visuals",
+            "exactly one supporting partition visual carrying the equivalent fraction",
+            f"{len(supporting_partitions)} supporting partition(s)",
+            "add one supporting partition whose parts count is the equivalent denominator, "
+            "or use a different strategy",
+        )
+
+
+def _validate_common_denominator_bridge_compatibility(plan):
+    """Fraction arithmetic across unlike denominators needs a bridge partition.
+
+    The lesson has three partitions on-screen: the two operands and the LCD
+    bridge that refines both to a common denominator. A plan with fewer than
+    two supporting partitions cannot land the bridge; more than two would
+    crowd the frame and lose the alignment the strategy teaches.
+    """
+    if plan.primary_visual.kind != "partition":
+        return
+    supporting_partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if len(supporting_partitions) != 2:
+        _fail(
+            "common_denominator_bridge_requires_two_supporting_partitions",
+            "supporting_visuals",
+            "exactly two supporting partition visuals (the second operand and the LCD bridge)",
+            f"{len(supporting_partitions)} supporting partition(s)",
+            "declare the second operand and the LCD bridge as supporting partition visuals, "
+            "or use a different strategy",
+        )
 
 
 def validate_unit_rate_value_range(plan, known_fields):

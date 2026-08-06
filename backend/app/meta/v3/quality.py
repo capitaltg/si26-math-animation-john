@@ -335,6 +335,29 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
                     "unit_rate reveal beat must not focus the whole primary visual",
                 )
         return _passed("static_process_visual", "timeline")
+    if plan.strategy in {"equivalence_align", "common_denominator_bridge"}:
+        # The teaching move is that a second (and, for the bridge, third)
+        # partition arrives on screen with the primary. A plan that names the
+        # strategy but never reveals its supporting partitions is decorative:
+        # the animation shows the primary alone, and the equivalence /
+        # bridge the strategy is named for never lands.
+        supporting_partitions = [
+            spec for spec in plan.supporting_visuals if spec.kind == "partition"
+        ]
+        revealed_refs = {
+            target.visual_ref
+            for entry in program.timeline
+            if entry.action.kind == "reveal"
+            for target in entry.action.targets
+        }
+        for spec in supporting_partitions:
+            if spec.ref not in revealed_refs:
+                return _failed(
+                    "static_process_visual", "timeline",
+                    f"{plan.strategy} needs the supporting partition {spec.ref!r} "
+                    "revealed on the timeline",
+                )
+        return _passed("static_process_visual", "timeline")
     if plan.strategy != "boundary_trace":
         return _passed("static_process_visual", "strategy")
     has_boundary_trace = any(

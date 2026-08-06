@@ -47,7 +47,14 @@
 #    + x_parts) and the inequality's boundary circle + shaded ray on the
 #    beats naming primary; a version-10 compiler rejects the new fields as
 #    unknown, so a plan authored against version 11 cannot be re-validated.
-DSL_COMPILER_VERSION = 11
+# 12: `dsl/teaching_plan.py` gains `equivalence_align` and
+#    `common_denominator_bridge` strategies on `partition`. The compiler
+#    requires the matching supporting partition(s) (one for equivalence,
+#    two for the bridge) and the quality gate rejects a plan whose
+#    supporting partitions never reveal -- a version-11 compiler would
+#    reject the new strategy literals, and a version-11 report on a plan
+#    that uses them cannot be trusted as current.
+DSL_COMPILER_VERSION = 12
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.

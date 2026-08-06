@@ -53,7 +53,10 @@ _SUPPORTED_STRATEGIES = {
     "rectangle_measurement": {"group_reveal", "boundary_trace"},
     "number_line": {"group_reveal", "short_stagger", "magnitude_comparison", "ray_shade"},
     "grid": {"group_reveal", "short_stagger", "regroup"},
-    "partition": {"group_reveal", "partition"},
+    "partition": {
+        "group_reveal", "partition",
+        "equivalence_align", "common_denominator_bridge",
+    },
     "bar": {"group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation"},
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
