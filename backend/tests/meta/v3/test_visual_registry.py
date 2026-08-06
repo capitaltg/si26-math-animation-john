@@ -683,6 +683,163 @@ def test_a_coordinate_plane_point_label_avoids_covering_other_dots():
             assert not _rects_overlap(label_rect, dot_rect)
 
 
+def test_a_data_display_bar_graph_places_a_labelled_bar_per_category():
+    """The M19 acceptance fixture for a categorical bar graph.
+
+    Each category gets exactly one `mark` semantic part sized to its count
+    fraction of the tallest bar, and the axis strip fits inside the safe
+    frame. `data_display` is one kind with five styles; this test pins the
+    bar_graph variant.
+    """
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="pets", initial_role="structure"),
+        {
+            "display_style": "bar_graph",
+            "axis_label": "pet",
+            "categories": [
+                {"label": "dog", "count": Fraction(6)},
+                {"label": "cat", "count": Fraction(4)},
+                {"label": "fish", "count": Fraction(2)},
+            ],
+            "values": [],
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+
+    assert measured.payload["display_style"] == "bar_graph"
+    assert len(measured.parts) == 3
+    for index in range(3):
+        assert ("mark", index) in measured.parts
+    dog = measured.parts[("mark", 0)].bounds
+    fish = measured.parts[("mark", 2)].bounds
+    assert (dog.top - dog.bottom) > (fish.top - fish.bottom)
+    assert measured.bounds.left >= SAFE_FRAME.left
+    assert measured.bounds.right <= SAFE_FRAME.right
+
+
+def test_a_data_display_line_plot_marks_each_value_above_a_number_line():
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="scores", initial_role="structure"),
+        {
+            "display_style": "line_plot",
+            "axis_label": "score",
+            "values": [Fraction(3), Fraction(5), Fraction(8), Fraction(5)],
+            "axis_min": Fraction(0), "axis_max": Fraction(10),
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    assert measured.payload["display_style"] == "line_plot"
+    assert len(measured.parts) == 4
+    for index in range(4):
+        assert ("mark", index) in measured.parts
+
+
+def test_a_data_display_dot_plot_stacks_repeated_values_vertically():
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="siblings", initial_role="structure"),
+        {
+            "display_style": "dot_plot",
+            "axis_label": "siblings",
+            "values": [Fraction(0), Fraction(1), Fraction(1), Fraction(1), Fraction(2)],
+            "axis_min": Fraction(0), "axis_max": Fraction(5),
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    # Three dots at value=1 must stack: their cy values differ.
+    dots_at_one = [
+        measured.parts[("mark", index)].bounds.center.y
+        for index in range(5)
+        if measured.payload["values"][index]["value"] == 1
+    ]
+    assert len(dots_at_one) == 3
+    assert len(set(dots_at_one)) == 3
+
+
+def test_a_data_display_histogram_paints_contiguous_bars():
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="ages", initial_role="structure"),
+        {
+            "display_style": "histogram",
+            "axis_label": "age",
+            "categories": [
+                {"label": "0-9", "count": Fraction(4)},
+                {"label": "10-19", "count": Fraction(7)},
+                {"label": "20-29", "count": Fraction(3)},
+            ],
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    # Histogram bars must touch: bar 0's right edge equals bar 1's left edge.
+    b0 = measured.parts[("mark", 0)].bounds
+    b1 = measured.parts[("mark", 1)].bounds
+    assert b0.right == pytest.approx(b1.left)
+
+
+def test_a_data_display_box_plot_projects_five_number_summary():
+    from fractions import Fraction
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="data_display", ref="times", initial_role="structure"),
+        {
+            "display_style": "box_plot",
+            "axis_label": "minutes",
+            "axis_min": Fraction(0), "axis_max": Fraction(60),
+            "summary": {
+                "minimum": Fraction(5), "q1": Fraction(15),
+                "median": Fraction(30), "q3": Fraction(45), "maximum": Fraction(55),
+            },
+        },
+        LiteralTextMeasurer(),
+        strategy="group_reveal",
+    )
+    projected = measured.payload["projected"]
+    assert projected["minimum"] < projected["q1"] < projected["median"] < projected["q3"] < projected["maximum"]
+    # The box spans q1..q3 and holds the median between.
+    box = measured.parts[("mark", 0)].bounds
+    assert box.left == pytest.approx(projected["q1"])
+    assert box.right == pytest.approx(projected["q3"])
+
+
+def test_a_data_display_line_plot_rejects_a_value_outside_the_axis_range():
+    from fractions import Fraction
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="data_display", ref="scores", initial_role="structure"),
+            {
+                "display_style": "line_plot",
+                "values": [Fraction(3), Fraction(15)],
+                "axis_min": Fraction(0), "axis_max": Fraction(10),
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "outside" in exc_info.value.failure.observed
+
+
+def test_a_data_display_box_plot_rejects_an_inverted_summary():
+    from fractions import Fraction
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="data_display", ref="times", initial_role="structure"),
+            {
+                "display_style": "box_plot",
+                "axis_min": Fraction(0), "axis_max": Fraction(60),
+                "summary": {
+                    "minimum": Fraction(30), "q1": Fraction(15),
+                    "median": Fraction(45), "q3": Fraction(20), "maximum": Fraction(55),
+                },
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "monotonic" in exc_info.value.failure.expected
+
+
 def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():
     """Point (0, 0) sits at the axis intersection: every cardinal candidate
     rect straddles either the x-axis or the y-axis, but a diagonal quadrant

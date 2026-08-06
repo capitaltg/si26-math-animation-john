@@ -241,6 +241,16 @@ _MEASURABLE_VALUES = {
             {"x": Fraction(-1), "y": Fraction(4)},
         ],
     },
+    "data_display": {
+        "display_style": "bar_graph",
+        "axis_label": "pet",
+        "categories": [
+            {"label": "dog", "count": Fraction(6)},
+            {"label": "cat", "count": Fraction(4)},
+            {"label": "fish", "count": Fraction(2)},
+        ],
+        "values": [],
+    },
 }
 
 

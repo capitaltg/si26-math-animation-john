@@ -140,7 +140,13 @@ def _build_visual(placed, palette: str):
     role = _initial_role(measured.ref, payload)
     style = resolve_semantic_style(palette, role)
 
-    if "values" in payload:
+    if "display_style" in payload:
+        # Checked before `values`: line_plot / dot_plot / box_plot payloads
+        # also carry a `values` key, which the ordered_values branch below
+        # would otherwise claim first and rebuild as text glyphs at part
+        # centers.
+        root, children = _build_data_display(measured, placed, palette)
+    elif "values" in payload:
         children = {
             ("item", index): _text(
                 value, "math_value", _center(part.bounds, placed.offset), placed.scale,
@@ -430,6 +436,188 @@ def _build_coordinate_plane(measured, placed):
         *children.values(), *point_labels,
     )
     return root, children
+
+
+def _build_data_display(measured, placed, palette: str):
+    """Axes and marks for one of five display styles.
+
+    Marks are added to `children` under the shared `mark` part name so the
+    plan can address a specific bar / dot / stack / box without branching on
+    display style. Axis lines and tick labels are added to the root group but
+    not registered -- nothing addresses them, mirroring `_number_line_labels`.
+    """
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    cx, cy = offset.x, offset.y
+    axis_y = payload["axis_y"] * scale + cy
+    axis_left = payload["axis_left"] * scale + cx
+    axis_right = payload["axis_right"] * scale + cx
+    axis_line = Line(
+        _array(Point(axis_left, axis_y)), _array(Point(axis_right, axis_y)),
+    )
+    style = payload["display_style"]
+    if style in {"bar_graph", "histogram"}:
+        return _build_data_display_bars(measured, placed, palette, axis_line, axis_y)
+    if style in {"line_plot", "dot_plot"}:
+        return _build_data_display_number_line_points(measured, placed, axis_line, axis_y)
+    if style == "box_plot":
+        return _build_data_display_box_plot(measured, placed, axis_line, axis_y)
+    raise ValueError(f"unsupported data_display style {style!r}")
+
+
+def _build_data_display_bars(measured, placed, palette, axis_line, axis_y):
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    cx = offset.x
+    children = {}
+    parts_group = []
+    count_labels = []
+    category_labels = []
+    label_y = payload["label_center_y"] * scale + offset.y
+    for index, bar in enumerate(payload["bars"]):
+        bounds = measured.parts[("mark", index)].bounds
+        translated = _translated(bounds, placed.offset)
+        rect = _rectangle_for_bounds(translated)
+        children[("mark", index)] = rect
+        parts_group.append(rect)
+        cx_bar = (bar["left"] + bar["right"]) / 2 * scale + cx
+        # Category label under the axis.
+        category_labels.append(_text(
+            bar["label"], "label", Point(cx_bar, label_y), scale,
+        ))
+        # Count label above the bar top.
+        if bar["height"] > 0:
+            count_y = translated.top + payload["count_label_gap"] * scale + (
+                measurer_height_for("label") / 2
+            ) * scale
+            count_labels.append(_text(
+                bar["count_text"], "label", Point(cx_bar, count_y), scale,
+            ))
+    root = VGroup(axis_line, *parts_group, *category_labels, *count_labels)
+    root.add(*_data_display_axis_title(payload, placed))
+    return root, children
+
+
+def _build_data_display_number_line_points(measured, placed, axis_line, axis_y):
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    cx = offset.x
+    style = payload["display_style"]
+    children = {}
+    marks = []
+    for index, entry in enumerate(payload["values"]):
+        u = entry["u"] * scale + cx
+        cy_mark = entry["cy"] * scale + offset.y
+        if style == "dot_plot":
+            mark = Dot(_array(Point(u, cy_mark)))
+        else:  # line_plot: X-shaped mark drawn as two crossed line segments
+            half = payload["mark_half"] * scale
+            mark = VGroup(
+                Line(_array(Point(u - half, cy_mark - half)),
+                     _array(Point(u + half, cy_mark + half))),
+                Line(_array(Point(u - half, cy_mark + half)),
+                     _array(Point(u + half, cy_mark - half))),
+            )
+        children[("mark", index)] = mark
+        marks.append(mark)
+    tick_group = _data_display_axis_ticks_group(payload, placed, axis_y)
+    root = VGroup(axis_line, *tick_group, *marks)
+    root.add(*_data_display_axis_title(payload, placed))
+    return root, children
+
+
+def _build_data_display_box_plot(measured, placed, axis_line, axis_y):
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    cx, cy = offset.x, offset.y
+    projected = {name: value * scale + cx for name, value in payload["projected"].items()}
+    box_top = payload["box_top"] * scale + cy
+    box_bottom = payload["box_bottom"] * scale + cy
+    box_center_y = (box_top + box_bottom) / 2
+    box_rect = _rectangle_for_bounds(Bounds(
+        projected["q1"], projected["q3"], box_bottom, box_top,
+    ))
+    median_line = Line(
+        _array(Point(projected["median"], box_bottom)),
+        _array(Point(projected["median"], box_top)),
+    )
+    left_whisker = Line(
+        _array(Point(projected["minimum"], box_center_y)),
+        _array(Point(projected["q1"], box_center_y)),
+    )
+    right_whisker = Line(
+        _array(Point(projected["q3"], box_center_y)),
+        _array(Point(projected["maximum"], box_center_y)),
+    )
+    # Small vertical bars capping each whisker so the extrema read as endpoints.
+    cap_h = 0.2 * scale
+    left_cap = Line(
+        _array(Point(projected["minimum"], box_center_y - cap_h)),
+        _array(Point(projected["minimum"], box_center_y + cap_h)),
+    )
+    right_cap = Line(
+        _array(Point(projected["maximum"], box_center_y - cap_h)),
+        _array(Point(projected["maximum"], box_center_y + cap_h)),
+    )
+    children = {("mark", 0): box_rect}
+    tick_group = _data_display_axis_ticks_group(payload, placed, axis_y)
+    root = VGroup(
+        axis_line, *tick_group,
+        left_whisker, right_whisker, left_cap, right_cap,
+        box_rect, median_line,
+    )
+    root.add(*_data_display_axis_title(payload, placed))
+    return root, children
+
+
+def _data_display_axis_ticks_group(payload, placed, axis_y):
+    """Tick marks and labels along the axis line."""
+    scale, offset = placed.scale, placed.offset
+    cx = offset.x
+    tick_len = 0.08 * scale
+    gap = payload["tick_label_gap"] * scale
+    items = []
+    for tick in payload.get("ticks", ()):
+        u = tick["u"] * scale + cx
+        items.append(Line(
+            _array(Point(u, axis_y - tick_len)),
+            _array(Point(u, axis_y + tick_len)),
+        ))
+        label_cy = axis_y - gap - (tick["label_height"] / 2) * scale
+        items.append(_text(tick["text"], "label", Point(u, label_cy), scale))
+    return items
+
+
+def _data_display_axis_title(payload, placed):
+    """The optional axis title (e.g. "hours of sleep"), drawn below the axis.
+
+    Placed near the visual's measured bottom edge; the measurer already
+    reserved room for the title in `_axis_title_room` when the axis label is
+    non-empty.
+    """
+    title = payload.get("axis_label", "")
+    if not title:
+        return ()
+    scale = placed.scale
+    bounds = placed.bounds
+    from app.meta.v3.manim_measurer import FONT_SIZES
+    label_h = FONT_SIZES["label"] * scale * 0.02
+    title_y = bounds.bottom + label_h / 2 + 0.02 * scale
+    return (_text(title, "label", Point(placed.offset.x, title_y), scale),)
+
+
+def measurer_height_for(font_role: str) -> float:
+    """Approximate glyph height in scene units, used when the measurer is out of reach.
+
+    `_build_data_display_bars` places count labels above bar tops without
+    consulting the TextMeasurer used at measurement time (the resolver has
+    the measurer, the renderer does not carry it). A close-enough constant
+    based on the label font size is fine here -- the count label lives inside
+    the reserved plot-height budget, so slight variance in vertical placement
+    does not push past the safe frame.
+    """
+    from app.meta.v3.manim_measurer import FONT_SIZES
+    return FONT_SIZES[font_role] * 0.014
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):

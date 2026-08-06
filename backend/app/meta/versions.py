@@ -28,7 +28,13 @@
 #    `CoordinatePlaneVisual` also gains an optional `grid` field, so a plan
 #    that requests grid lines cannot be validated against a version-7
 #    compiler that would reject the extra field.
-DSL_COMPILER_VERSION = 8
+# 9: `dsl/teaching_plan.py` gains the `data_display` visual kind (one kind with
+#    a `display_style` variant selector for bar_graph / line_plot / dot_plot /
+#    histogram / box_plot) and the matching `DataDisplayProgramVisual` in
+#    `dsl/scene_program.py`. A version-8 compiler cannot deserialize the new
+#    kind, so a report stamped 8 that references a data_display draft must not
+#    be trusted as current.
+DSL_COMPILER_VERSION = 9
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.
@@ -50,4 +56,7 @@ DSL_COMPILER_VERSION = 8
 #    every point label above its dot and every tick label unconditionally,
 #    which would put glyphs on top of each other for the payloads a
 #    version-8 measurer emits.
-DYNAMIC_RENDERER_VERSION = 8
+# 9: `data_display` renders as a new visual kind. A version-8 renderer cannot
+#    build any of its five display styles, so an artifact stamped 8 that
+#    carries a data_display must not be replayed.
+DYNAMIC_RENDERER_VERSION = 9

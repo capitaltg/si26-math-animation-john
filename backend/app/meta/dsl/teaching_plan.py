@@ -151,6 +151,165 @@ class CoordinatePointNode(BaseModel):
     y: ExpressionNode
 
 
+class DataDisplayCategory(BaseModel):
+    """One labelled category on a `bar_graph` or one bin on a `histogram`.
+
+    `count` is an expression so a fixture may drive category counts the same way
+    it drives every other visual's numeric field. Every category label appears on
+    the axis strip, so total label length feeds into the extent guard.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    label: ProseText = Field(min_length=1, max_length=16)
+    count: ExpressionNode
+
+
+class DataDisplayFiveNumberSummary(BaseModel):
+    """The five values a `box_plot` displays: min, Q1, median, Q3, max.
+
+    Kept as a nested model so the schema names each role rather than relying on
+    positional order in a bare list. `min <= q1 <= median <= q3 <= max` is a
+    definitional invariant enforced at measurement (the measurer refuses an
+    inverted summary), not here at schema time -- an expression whose ordering
+    depends on fixture params cannot be settled by schema validation alone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    minimum: ExpressionNode
+    q1: ExpressionNode
+    median: ExpressionNode
+    q3: ExpressionNode
+    maximum: ExpressionNode
+
+
+#: Cap on data points a `line_plot` / `dot_plot` may display. A dot plot stacks
+#: repeats vertically, so a very tall stack overruns the frame -- the extent
+#: guard rejects that with a driving-field hint. This cap is an upper bound for
+#: the schema so a fixture cannot ask for hundreds of points; anything past ~30
+#: reads as data-heavy for grades 3-6 and is better served by a summary display.
+MAX_DATA_DISPLAY_VALUES = 32
+#: Cap on categories a `bar_graph` / bins a `histogram` may show. Each category
+#: gets an axis-strip label; past ~10 categories the labels crowd unless the
+#: axis stretches wider than the frame.
+MAX_DATA_DISPLAY_CATEGORIES = 10
+
+
+class DataDisplayVisual(BaseModel):
+    """Axis-based data display -- bar graph, line plot, dot plot, histogram, or box plot.
+
+    Chosen as a single kind (not five) because every variant shares the same
+    reasoning move: an ordered collection mapped onto one axis. The
+    fixture-facing surface names each variant through `display_style`; the
+    measurer branches on it. A shared kind keeps `_PROGRAM_VISUALS`,
+    `_EXPRESSION_FIELDS` and the renderer's dispatch small, and every variant
+    that reaches for the same axis-labeling / extent-fit machinery uses the
+    same code paths.
+
+    Required fields depend on `display_style`:
+    - `bar_graph`, `histogram`: `categories` (label + count per bar).
+    - `line_plot`, `dot_plot`: `values` plus `axis_min` / `axis_max`.
+    - `box_plot`: `summary` (five-number summary) plus `axis_min` / `axis_max`.
+    Fields for other variants must be omitted; a model_validator refuses any
+    combination that would leave the shape ambiguous.
+
+    MCAP standards: 3.MD.B.3-4, 4.MD.B.4, 5.MD.B.2, 6.SP.B.4.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["data_display"] = "data_display"
+    ref: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    display_style: Literal[
+        "bar_graph", "line_plot", "dot_plot", "histogram", "box_plot",
+    ] = Field(description=(
+        "Which axis-based display to render. `bar_graph` and `histogram` "
+        "use `categories`; `line_plot` and `dot_plot` use `values` on a "
+        "number line spanning `axis_min` to `axis_max`; `box_plot` uses "
+        "`summary` on the same number-line axis."
+    ))
+    categories: list[DataDisplayCategory] = Field(
+        default_factory=list, max_length=MAX_DATA_DISPLAY_CATEGORIES,
+        description=(
+            "Bars for `bar_graph` (label + count per category) or bins for "
+            "`histogram` (label = numeric range as text; count = frequency). "
+            "Omit for `line_plot`, `dot_plot`, `box_plot`."
+        ),
+    )
+    values: list[ExpressionNode] = Field(
+        default_factory=list, max_length=MAX_DATA_DISPLAY_VALUES,
+        description=(
+            "Data points for `line_plot` / `dot_plot`. Each value must lie in "
+            "[axis_min, axis_max]. Omit for other display styles."
+        ),
+    )
+    axis_min: ExpressionNode | None = Field(
+        default=None,
+        description=(
+            "Lower end of the numeric axis, required for `line_plot`, "
+            "`dot_plot`, `box_plot`. Omit for `bar_graph` and `histogram`."
+        ),
+    )
+    axis_max: ExpressionNode | None = Field(
+        default=None,
+        description=(
+            "Upper end of the numeric axis. Must exceed `axis_min`."
+        ),
+    )
+    summary: DataDisplayFiveNumberSummary | None = Field(
+        default=None,
+        description=(
+            "Five-number summary for `box_plot`. Omit for other styles."
+        ),
+    )
+    axis_label: ProseText = Field(
+        default="", max_length=20,
+        description=(
+            "Optional axis title displayed beneath the axis strip. Empty "
+            "string omits the label."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_fields_matching_display_style(self):
+        style = self.display_style
+        if style in {"bar_graph", "histogram"}:
+            if not self.categories:
+                raise ValueError(
+                    f"{style} requires at least one entry in `categories`"
+                )
+            if self.values or self.summary is not None:
+                raise ValueError(
+                    f"{style} uses `categories`; leave `values` and `summary` empty"
+                )
+            if self.axis_min is not None or self.axis_max is not None:
+                raise ValueError(
+                    f"{style} derives its numeric axis from category counts; "
+                    "leave `axis_min` and `axis_max` empty"
+                )
+        elif style in {"line_plot", "dot_plot"}:
+            if not self.values:
+                raise ValueError(
+                    f"{style} requires at least one entry in `values`"
+                )
+            if self.categories or self.summary is not None:
+                raise ValueError(
+                    f"{style} uses `values`; leave `categories` and `summary` empty"
+                )
+            if self.axis_min is None or self.axis_max is None:
+                raise ValueError(
+                    f"{style} requires `axis_min` and `axis_max`"
+                )
+        elif style == "box_plot":
+            if self.summary is None:
+                raise ValueError("box_plot requires `summary`")
+            if self.categories or self.values:
+                raise ValueError(
+                    "box_plot uses `summary`; leave `categories` and `values` empty"
+                )
+            if self.axis_min is None or self.axis_max is None:
+                raise ValueError("box_plot requires `axis_min` and `axis_max`")
+        return self
+
+
 class CoordinatePlaneVisual(BaseModel):
     """A Cartesian grid with plotted points.
 
@@ -190,7 +349,7 @@ SemanticVisualSpec = Annotated[
     Union[
         OrderedValuesVisual, RectangleMeasurementVisual, NumberLineVisual,
         GridVisual, PartitionVisual, BarVisual, ObjectSetVisual, LabelVisual,
-        UnitTapeVisual, CoordinatePlaneVisual,
+        UnitTapeVisual, CoordinatePlaneVisual, DataDisplayVisual,
     ],
     Field(discriminator="kind"),
 ]
