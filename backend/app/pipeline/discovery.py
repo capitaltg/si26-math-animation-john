@@ -56,12 +56,11 @@ def _suffix_from_whole_cells(suffix: list[str], cell_token_lists: list[list[str]
     return len(suffix) in reachable
 
 
-def _contiguous_in_any_block(prefix: list[str], text_blocks: list[Block]) -> bool:
+def _contiguous_in_any_block(prefix: list[str], block_token_lists: list[list[str]]) -> bool:
     if not prefix:
         return True
     prefix_len = len(prefix)
-    for block in text_blocks:
-        block_tokens = tokenize_for_grounding(block.text)
+    for block_tokens in block_token_lists:
         for i in range(len(block_tokens) - prefix_len + 1):
             if block_tokens[i:i + prefix_len] == prefix:
                 return True
@@ -72,18 +71,31 @@ def _is_excerpt_grounded(excerpt_tokens: list[str], blocks: list[Block]) -> bool
     if not excerpt_tokens:
         return False
 
-    text_blocks = [block for block in blocks if block.kind == "text"]
+    text_token_lists: list[list[str]] = []
     tables: dict[int, list[list[str]]] = {}
     for block in blocks:
-        if block.kind == "cell":
-            tables.setdefault(block.table_ord, []).append(
-                tokenize_for_grounding(block.text)
-            )
+        tokens = tokenize_for_grounding(block.text)
+        if block.kind == "text":
+            text_token_lists.append(tokens)
+        else:
+            tables.setdefault(block.table_ord, []).append(tokens)
+
+    all_cell_token_lists = [
+        cell_tokens for cell_token_lists in tables.values() for cell_tokens in cell_token_lists
+    ]
+
+    # An excerpt entirely contained in one cell (a self-contained problem
+    # typed straight into a table, common in K-8 decks) grounds directly.
+    # This is single-block contiguity, the same guarantee text blocks get,
+    # so it can't recombine tokens across cells or tables — it never
+    # touches the cross-table suffix path below.
+    if _contiguous_in_any_block(excerpt_tokens, all_cell_token_lists):
+        return True
 
     for split in range(len(excerpt_tokens) + 1):
         prefix, suffix = excerpt_tokens[:split], excerpt_tokens[split:]
-        if not _contiguous_in_any_block(prefix, text_blocks):
-            continue
+        if not _contiguous_in_any_block(prefix, text_token_lists):
+            break
         if not suffix:
             return True
         if any(

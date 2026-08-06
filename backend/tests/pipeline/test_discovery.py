@@ -272,6 +272,28 @@ def test_grounding_rejects_number_spliced_across_two_tables():
     assert not _is_grounded(item, slide_blocks, start_index=0)
 
 
+def test_grounding_accepts_table_suffix_requiring_skip_not_greedy_match():
+    """Regression guard for _suffix_from_whole_cells: a greedy leftmost-match
+    (consume the first cell that matches at the current position) would
+    wrongly reject this. The correct DP must consider skipping a cell that
+    matches now in favor of a later cell whose whole content is the exact
+    suffix, since committing to the first match forecloses that option.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="width value",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="width"),
+        Block(kind="cell", table_ord=0, text="width value"),
+    ]]
+
+    assert _is_grounded(item, slide_blocks, start_index=0)
+
+
 def test_grounding_rejects_splice_built_from_two_cells_in_same_table():
     """Regression guard for the table-cell variant of the P0 splice: prose
     living in two cells of one table, spliced the same way as the

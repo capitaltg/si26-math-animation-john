@@ -89,6 +89,37 @@ def test_extract_slide_blocks_assigns_distinct_table_ord_per_table(tmp_path):
     assert {b.text for b in cell_blocks if b.table_ord == 1} == {"10", "20"}
 
 
+def test_extract_slide_blocks_assigns_table_ord_to_table_nested_in_group(tmp_path):
+    from app.pipeline.parsing import extract_slide_blocks
+
+    presentation = Presentation()
+    layout = presentation.slide_layouts[1]
+    slide = presentation.slides.add_slide(layout)
+    slide.shapes.title.text = "Nested table"
+
+    group = slide.shapes.add_group_shape()
+    nested_group = group.shapes.add_group_shape()
+
+    # python-pptx's GroupShapes has no add_table; build the table on the
+    # slide's own shape tree, then relocate its XML element into the
+    # nested group so it behaves as a table genuinely nested in a group.
+    table_shape = slide.shapes.add_table(1, 2, Inches(1), Inches(1), Inches(4), Inches(1))
+    table_shape.table.cell(0, 0).text = "7"
+    table_shape.table.cell(0, 1).text = "8"
+    table_shape._element.getparent().remove(table_shape._element)
+    nested_group.shapes._spTree.append(table_shape._element)
+
+    pptx_path = tmp_path / "nested_table.pptx"
+    presentation.save(pptx_path)
+
+    slide_blocks = extract_slide_blocks(pptx_path)
+    cell_blocks = [b for b in slide_blocks[0] if b.kind == "cell"]
+
+    assert len(cell_blocks) == 2
+    assert {b.table_ord for b in cell_blocks} == {0}
+    assert {b.text for b in cell_blocks} == {"7", "8"}
+
+
 def test_flatten_blocks_matches_legacy_join_order(tmp_path):
     from app.pipeline.parsing import extract_slide_blocks, flatten_blocks
 
@@ -98,10 +129,13 @@ def test_flatten_blocks_matches_legacy_join_order(tmp_path):
     slide_blocks = extract_slide_blocks(pptx_path)
     flat = flatten_blocks(slide_blocks[0])
 
-    assert "Sarah has 4 apples" in flat
-    assert "simple addition" in flat
-    assert "Table problem: 6 groups of 4" in flat
-    assert "Grouped problem: 9 minus 2" in flat
+    assert flat == "\n".join([
+        "Warm Up",
+        "Sarah has 4 apples and buys 3 more. How many now?",
+        "Table problem: 6 groups of 4",
+        "Grouped problem: 9 minus 2",
+        "Remind students this is simple addition.",
+    ])
 
 
 def test_chunk_slide_blocks_splits_at_chunk_size():
