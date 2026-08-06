@@ -7,7 +7,7 @@ _ABS_TOL = 1e-12
 
 _BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
 _GROUNDING_TOKEN_RE = re.compile(
-    r"(?:\d+(?:[./]\d+)*|\.\d+)"
+    r"(?:-?\d+(?:[./]\d+)*|-?\.\d+)"
     r"|[^\W\d_]+(?:'[^\W\d_]+)*"
     r"|[^\s|:,.;!?'\"“”‘’…•–—]"
 )
