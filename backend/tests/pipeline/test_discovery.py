@@ -192,6 +192,25 @@ def test_grounding_rejects_changed_reordered_or_empty_content(
     assert not _is_grounded(item, [slide_text], start_index=0)
 
 
+def test_grounding_accepts_unspaced_letter_hyphen_digit_against_spaced_excerpt():
+    """Regression guard for the shared _GROUNDING_TOKEN_RE: a slide that
+    renders "x-5" unspaced must still ground an excerpt that spells the same
+    expression with spaces ("x - 5"), since a narrower lookbehind on the
+    negative-number branch could tokenize "x-5" as ['x', '-5'] (letter
+    swallowed into the operand) instead of ['x', '-', '5'], breaking the
+    ordered-subsequence match here in discovery.py.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Solve x - 5 = 12.",
+        slide_index=0,
+        one_line_summary="Solve for x",
+    )
+
+    assert _is_grounded(item, ["Solve x-5=12."], start_index=0)
+
+
 def test_grounding_rejects_omitted_standalone_division_operator():
     from app.pipeline.discovery import _DiscoveredItem, _is_grounded
 

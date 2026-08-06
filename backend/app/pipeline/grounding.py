@@ -1,13 +1,14 @@
 import copy
 import math
 import re
+from dataclasses import dataclass
 
 _REL_TOL = 1e-9
 _ABS_TOL = 1e-12
 
 _BLANK_PLACEHOLDER_RE = re.compile(r"\[\s*blank\s*\]")
 _GROUNDING_TOKEN_RE = re.compile(
-    r"(?:(?<!\d)-?\d+(?:[./]\d+)*|(?<!\d)-?\.\d+)"
+    r"(?:(?<![\w.])-?\d+(?:[./]\d+)*|(?<![\w.])-?\.\d+)"
     r"|[^\W\d_]+(?:'[^\W\d_]+)*"
     r"|[^\s|:,.;!?'\"“”‘’…•–—]"
 )
@@ -77,8 +78,6 @@ def params_derived_totals(params) -> list[tuple[str, list[str], str]]:
         return declarations
     return []
 
-
-from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Span:
@@ -179,4 +178,3 @@ def check_params_grounded(params, source_text: str) -> list[str]:
         for token in ungrounded_pending
         if _canonical_key(token) not in allowed_totals
     ]
-
