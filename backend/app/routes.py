@@ -19,7 +19,7 @@ from app.models.scene import (
 )
 from app.pipeline.classification import ClassificationResult, classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
-from app.pipeline.parsing import extract_slide_texts
+from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
     render_chained_scene_thumbnail,
@@ -155,16 +155,16 @@ async def upload(response: Response, file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
     try:
         try:
-            slide_texts = extract_slide_texts(tmp_path)
+            slide_blocks = extract_slide_blocks(tmp_path)
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Could not parse .pptx file") from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    if len(slide_texts) > MAX_SLIDES:
+    if len(slide_blocks) > MAX_SLIDES:
         raise HTTPException(status_code=400, detail=f"Document exceeds the {MAX_SLIDES}-slide cap")
 
-    candidates = discover_candidates_for_document(slide_texts)
+    candidates = discover_candidates_for_document(slide_blocks)
     session = store.create(candidates)
     response.set_cookie(
         "session_id",
