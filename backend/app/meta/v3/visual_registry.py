@@ -562,6 +562,24 @@ COORDINATE_TICK_LABEL_GAP = 0.12
 #: Minimum whitespace between two adjacent tick labels on the same axis.
 COORDINATE_TICK_LABEL_INTER_GAP = 0.1
 
+#: Minimum projected half-extent per axis, in scene units. When one span is
+#: many orders of magnitude wider than the other, the uniform unit scale
+#: collapses the shorter axis to near-zero length: [0, 10**12] x [0, 4]
+#: projects the y-axis to ~1e-11 scene units, indistinct from a point. Reject
+#: rather than paint an unreadable plane.
+COORDINATE_PLANE_MIN_PROJECTED_EXTENT = 0.5
+
+#: Radius of a plotted point dot in scene units. Matches Manim's default Dot
+#: radius; used as the obstacle bound when checking that a label rectangle
+#: does not cover any other point's dot.
+COORDINATE_PLANE_DOT_RADIUS = 0.08
+
+#: Half-width of the axis obstacle corridor a point label must clear. Kept
+#: small (visual axis stroke, not the tick label gap) so a label sitting
+#: above (0, 2) is caught for straddling the y-axis but a label a full
+#: quadrant over is not.
+COORDINATE_PLANE_AXIS_STROKE_HALF = 0.02
+
 
 def _measure_coordinate_plane(*, spec, values, measurer):
     """Axes projected through the world origin, with plotted points and labels.
@@ -655,6 +673,34 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     )
     extent_x = span_x * unit_scale / 2
     extent_y = span_y * unit_scale / 2
+    # Uniform scale drawn from the tighter axis collapses the looser axis when
+    # the two spans are wildly unbalanced. A span like [0, 10**12] x [0, 4]
+    # yields a y-axis extent of ~1e-11 scene units, so every plotted y falls
+    # on the same pixel row and tick thinning strips the y labels entirely.
+    for axis, extent, low, high in (
+        ("x", extent_x, x_min, x_max),
+        ("y", extent_y, y_min, y_max),
+    ):
+        if extent < COORDINATE_PLANE_MIN_PROJECTED_EXTENT:
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}",
+                expected=(
+                    f"a {axis}-axis whose projected extent stays above "
+                    f"{COORDINATE_PLANE_MIN_PROJECTED_EXTENT:g} scene units "
+                    "after uniform scaling"
+                ),
+                observed=(
+                    f"{spec.ref} {axis} span [{format_number(low)}, "
+                    f"{format_number(high)}] projects to {extent:g} scene "
+                    "units -- the other axis is orders of magnitude wider "
+                    "and forces this one to collapse"
+                ),
+                hint=(
+                    "narrow the wider span or widen this one so the two axis "
+                    "ranges are within a few orders of magnitude of each other"
+                ),
+            ))
     x_center = (x_min_q + x_max_q) / 2
     y_center = (y_min_q + y_max_q) / 2
 
@@ -710,9 +756,8 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             if _rects_overlap(xr, yr):
                 y_tick_suppressed[yi] = True
 
-    parts: dict = {}
-    point_payload = []
-    point_label_rects: list = []
+    # Pre-check every point sits inside the declared span before projecting
+    # anything -- an off-plane point is refused regardless of label placement.
     for index, point in enumerate(values["points"]):
         px, py = point["x"], point["y"]
         if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
@@ -733,26 +778,60 @@ def _measure_coordinate_plane(*, spec, values, measurer):
                     "include the point -- an off-plane dot draws against the axis wall"
                 ),
             ))
-        u, v = project(px, py)
+
+    # Pre-project every dot so a label rect can be checked against every other
+    # rendered dot (labels paint above dots -- a later dot under an earlier
+    # label reads as an obscured dot).
+    projected_points = [project(p["x"], p["y"]) for p in values["points"]]
+    dot_rects = [
+        (
+            pu - COORDINATE_PLANE_DOT_RADIUS, pu + COORDINATE_PLANE_DOT_RADIUS,
+            pv - COORDINATE_PLANE_DOT_RADIUS, pv + COORDINATE_PLANE_DOT_RADIUS,
+        )
+        for pu, pv in projected_points
+    ]
+    # Axes as thin obstacle corridors: a coordinate label centered over the
+    # y-axis (e.g. above the point (0, 2)) renders glyphs on top of the axis
+    # stroke. The corridor is the axis stroke half-width, so a label a full
+    # quadrant away does not collide.
+    x_axis_rect = (
+        -extent_x, extent_x,
+        zero_v - COORDINATE_PLANE_AXIS_STROKE_HALF,
+        zero_v + COORDINATE_PLANE_AXIS_STROKE_HALF,
+    )
+    y_axis_rect = (
+        zero_u - COORDINATE_PLANE_AXIS_STROKE_HALF,
+        zero_u + COORDINATE_PLANE_AXIS_STROKE_HALF,
+        -extent_y, extent_y,
+    )
+
+    parts: dict = {}
+    point_payload = []
+    point_label_rects: list = []
+    for index, point in enumerate(values["points"]):
+        px, py = point["x"], point["y"]
+        u, v = projected_points[index]
         parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
         label_text = _coordinate_label(px, py)
         label_w, label_h = measurer.measure(label_text, "label")
+        other_dot_rects = [r for i, r in enumerate(dot_rects) if i != index]
+        hard_obstacles = other_dot_rects + [x_axis_rect, y_axis_rect]
         chosen_dx, chosen_dy, chosen_rect = _pick_point_label_offset(
             u, v, label_w, label_h,
             x_tick_rects, y_tick_rects,
             x_tick_suppressed, y_tick_suppressed,
-            point_label_rects,
+            point_label_rects, hard_obstacles,
         )
         if chosen_rect is None:
             # No fully clear quadrant. A quadrant that only collides with tick
-            # labels is still usable (the collided ticks get suppressed), but a
-            # quadrant that overlaps a prior point label would stack two
-            # coordinate labels on top of each other -- refuse in that case.
+            # labels is still usable (the collided ticks get suppressed), but
+            # a quadrant that overlaps a prior point label, another point's
+            # dot, or an axis corridor cannot be recovered -- refuse.
             chosen_dx, chosen_dy, chosen_rect = _pick_point_label_offset_over_ticks(
                 u, v, label_w, label_h,
                 x_tick_rects, y_tick_rects,
                 x_tick_suppressed, y_tick_suppressed,
-                point_label_rects,
+                point_label_rects, hard_obstacles,
             )
             if chosen_rect is None:
                 raise V3ValidationError(V3Failure(
@@ -765,12 +844,13 @@ def _measure_coordinate_plane(*, spec, values, measurer):
                     observed=(
                         f"{spec.ref} point ({format_number(px)}, "
                         f"{format_number(py)}) cannot place its label without "
-                        "overlapping another point label"
+                        "overlapping another point label, another dot, or an "
+                        "axis line"
                     ),
                     hint=(
                         "spread the points, widen the axis span, or drop "
-                        "points -- clustered coordinates leave no quadrant "
-                        "free for the label"
+                        "points -- clustered coordinates or points on the axes "
+                        "leave no quadrant free for the label"
                     ),
                 ))
             for i, tr in enumerate(x_tick_rects):
@@ -876,16 +956,21 @@ def _pick_point_label_offset(
     u, v, label_w, label_h,
     x_tick_rects, y_tick_rects,
     x_tick_suppressed, y_tick_suppressed,
-    point_label_rects,
+    point_label_rects, hard_obstacles,
 ):
     """Return the first quadrant offset whose rect does not collide.
 
     Returns (dx, dy, rect) on success; (None, None, None) when every
     quadrant collides -- the caller then falls back to the default quadrant
-    and suppresses the tick labels the fallback overlaps.
+    and suppresses the tick labels the fallback overlaps. `hard_obstacles`
+    are axis corridors and other-point dot rects; a label overlapping any
+    of these cannot be recovered (labels paint above dots, and axis strokes
+    have no glyph the renderer can suppress).
     """
     for dx, dy in _point_label_candidates(label_w, label_h):
         rect = _point_label_rect(u, v, dx, dy, label_w, label_h)
+        if any(_rects_overlap(rect, obs) for obs in hard_obstacles):
+            continue
         if any(
             _rects_overlap(rect, tr)
             for i, tr in enumerate(x_tick_rects)
@@ -908,15 +993,16 @@ def _pick_point_label_offset_over_ticks(
     u, v, label_w, label_h,
     x_tick_rects, y_tick_rects,
     x_tick_suppressed, y_tick_suppressed,
-    point_label_rects,
+    point_label_rects, hard_obstacles,
 ):
-    """Second-chance quadrant search: tick collisions allowed, point-label
-    collisions still refused. The caller suppresses any ticks the returned
-    rect overlaps; a prior point label under this rect would produce stacked
-    coordinate glyphs and cannot be suppressed, so those quadrants are
-    skipped."""
+    """Second-chance quadrant search: tick collisions allowed, prior point
+    label / dot / axis-corridor collisions still refused. The caller
+    suppresses any ticks the returned rect overlaps; other-point dots and
+    axis strokes cannot be suppressed, so those quadrants are skipped."""
     for dx, dy in _point_label_candidates(label_w, label_h):
         rect = _point_label_rect(u, v, dx, dy, label_w, label_h)
+        if any(_rects_overlap(rect, obs) for obs in hard_obstacles):
+            continue
         if any(_rects_overlap(rect, pr) for pr in point_label_rects):
             continue
         return dx, dy, rect

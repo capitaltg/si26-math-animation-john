@@ -413,12 +413,13 @@ def test_a_coordinate_plane_bounded_tick_material_survives_a_trillion_wide_span(
     per-axis cap thinned the list, which exhausted process memory. The
     stride is now derived from the count before `range` is expanded, so a
     trillion-unit span resolves under the tick ceiling with no allocation
-    spike."""
+    spike. Both axes carry the same magnitude so the projected extent check
+    does not reject the span."""
     measured = default_visual_registry().measure(
         SimpleNamespace(kind="coordinate_plane", ref="plane"),
         {
             "x_min": Fraction(0), "x_max": Fraction(10 ** 12),
-            "y_min": Fraction(0), "y_max": Fraction(4),
+            "y_min": Fraction(0), "y_max": Fraction(10 ** 12),
             "points": [{"x": Fraction(0), "y": Fraction(0)}],
         },
         LiteralTextMeasurer(),
@@ -426,6 +427,27 @@ def test_a_coordinate_plane_bounded_tick_material_survives_a_trillion_wide_span(
 
     from app.meta.v3.visual_registry import COORDINATE_PLANE_MAX_TICKS_PER_AXIS
     assert len(measured.payload["x_ticks"]) <= COORDINATE_PLANE_MAX_TICKS_PER_AXIS
+
+
+def test_a_coordinate_plane_rejects_an_imbalanced_span_that_collapses_one_axis():
+    """[0, 10**12] x [0, 4] gets a uniform unit scale drawn from the x-axis,
+    which pins the y-axis projected extent at ~1e-11 scene units -- every y
+    coordinate lands on the same pixel row and tick thinning strips the
+    y-axis labels entirely. Refuse at measurement so the fixture author
+    picks compatible spans instead of shipping a blank axis."""
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(0), "x_max": Fraction(10 ** 12),
+                "y_min": Fraction(0), "y_max": Fraction(4),
+                "points": [{"x": Fraction(0), "y": Fraction(0)}],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert exc_info.value.failure.code == "visual_extent_unrenderable"
+    assert "collapse" in exc_info.value.failure.observed
 
 
 def test_a_coordinate_plane_point_label_moves_out_of_a_tick_label_rectangle():
@@ -494,7 +516,7 @@ def test_a_coordinate_plane_emits_grid_lines_only_when_the_grid_flag_is_set():
         {
             "x_min": Fraction(-2), "x_max": Fraction(2),
             "y_min": Fraction(-2), "y_max": Fraction(2),
-            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+            "points": [{"x": Fraction(1), "y": Fraction(1)}],
         },
         LiteralTextMeasurer(),
     )
@@ -503,7 +525,7 @@ def test_a_coordinate_plane_emits_grid_lines_only_when_the_grid_flag_is_set():
         {
             "x_min": Fraction(-2), "x_max": Fraction(2),
             "y_min": Fraction(-2), "y_max": Fraction(2),
-            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+            "points": [{"x": Fraction(1), "y": Fraction(1)}],
             "grid": True,
         },
         LiteralTextMeasurer(),
@@ -576,3 +598,104 @@ def test_a_coordinate_plane_rejects_points_that_leave_no_free_label_quadrant():
         )
 
     assert "cannot place its label" in exc_info.value.failure.observed
+
+
+def test_a_coordinate_plane_point_label_avoids_the_axis_corridor():
+    """A point plotted at (0, 2) has its default above-quadrant label rectangle
+    centered on the y-axis stroke; the picker used to only avoid tick labels
+    and prior point labels, so the label rendered on top of the axis.
+    Placement now treats the axis as a corridor obstacle so a non-crossing
+    quadrant is chosen instead."""
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-3), "x_max": Fraction(5),
+            "y_min": Fraction(-3), "y_max": Fraction(5),
+            "points": [{"x": Fraction(0), "y": Fraction(2)}],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    from app.meta.v3.visual_registry import (
+        COORDINATE_PLANE_AXIS_STROKE_HALF,
+        _rects_overlap,
+    )
+    payload = measured.payload
+    p = payload["points"][0]
+    y_axis_rect = (
+        payload["axis_zero_u"] - COORDINATE_PLANE_AXIS_STROKE_HALF,
+        payload["axis_zero_u"] + COORDINATE_PLANE_AXIS_STROKE_HALF,
+        -payload["extent_y"], payload["extent_y"],
+    )
+    label_rect = (
+        p["x"] + p["label_dx"] - p["label_width"] / 2,
+        p["x"] + p["label_dx"] + p["label_width"] / 2,
+        p["y"] + p["label_dy"] - p["label_height"] / 2,
+        p["y"] + p["label_dy"] + p["label_height"] / 2,
+    )
+    assert not _rects_overlap(label_rect, y_axis_rect)
+
+
+def test_a_coordinate_plane_point_label_avoids_covering_other_dots():
+    """Two points at the same x with y one apart -- (3, 2) and (3, 3) -- have
+    above-quadrant label rectangles that cover the neighbouring dot because
+    labels render above dots. Placement now checks every other point's dot
+    as an obstacle, so a non-covering quadrant wins."""
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-5), "x_max": Fraction(5),
+            "y_min": Fraction(-5), "y_max": Fraction(5),
+            "points": [
+                {"x": Fraction(3), "y": Fraction(2)},
+                {"x": Fraction(3), "y": Fraction(3)},
+            ],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    from app.meta.v3.visual_registry import (
+        COORDINATE_PLANE_DOT_RADIUS,
+        _rects_overlap,
+    )
+    payload = measured.payload
+    dot_rects = [
+        (
+            p["x"] - COORDINATE_PLANE_DOT_RADIUS,
+            p["x"] + COORDINATE_PLANE_DOT_RADIUS,
+            p["y"] - COORDINATE_PLANE_DOT_RADIUS,
+            p["y"] + COORDINATE_PLANE_DOT_RADIUS,
+        )
+        for p in payload["points"]
+    ]
+    for index, p in enumerate(payload["points"]):
+        label_rect = (
+            p["x"] + p["label_dx"] - p["label_width"] / 2,
+            p["x"] + p["label_dx"] + p["label_width"] / 2,
+            p["y"] + p["label_dy"] - p["label_height"] / 2,
+            p["y"] + p["label_dy"] + p["label_height"] / 2,
+        )
+        for other_index, dot_rect in enumerate(dot_rects):
+            if other_index == index:
+                continue
+            assert not _rects_overlap(label_rect, dot_rect)
+
+
+def test_a_coordinate_plane_rejects_a_point_whose_label_cannot_clear_the_axes():
+    """Point (0, 0) sits at the axis intersection: every candidate quadrant
+    rect straddles either the x-axis or the y-axis. With axis corridors
+    treated as hard obstacles the plane refuses, so a fixture that plots
+    directly on the origin surfaces the problem instead of rendering glyphs
+    stacked on the axis stroke."""
+    with pytest.raises(V3ValidationError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-3), "x_max": Fraction(3),
+                "y_min": Fraction(-3), "y_max": Fraction(3),
+                "points": [{"x": Fraction(0), "y": Fraction(0)}],
+            },
+            LiteralTextMeasurer(),
+        )
+
+    assert exc_info.value.failure.code == "visual_extent_unrenderable"
