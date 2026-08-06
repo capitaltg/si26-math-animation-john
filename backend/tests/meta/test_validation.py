@@ -84,6 +84,34 @@ def test_validate_fixture_tracks_the_failed_guard_predicate_for_a_negative_fixtu
     assert result.failed_predicate_indexes == frozenset({0})
 
 
+def test_validate_fixture_rejects_duplicated_grounded_value_against_single_source():
+    """A positive fixture whose params duplicate a numeric that the source
+    excerpt has only once must fail grounding under the new logic."""
+    params_document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="a", label="A", description="", minimum=0, maximum=10),
+            IntegerFieldSpec(name="b", label="B", description="", minimum=0, maximum=10),
+        ],
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[PositivePredicate(value=FieldRefNode(field="a"))],
+    )
+    answer_expression = FieldRefNode(field="a")
+    compiled = compile_draft_documents(
+        params_document, guard_document, answer_expression, teaching_plan_document=None,
+    )
+    fixture = _Fixture("fx-dup", json.dumps({"a": 3, "b": 3}), "accept", "positive")
+
+    result = validate_fixture(
+        fixture, compiled, source_excerpt="A box has 3 red balls and 5 blue balls."
+    )
+
+    assert result.passed is False
+    assert "not grounded" in result.detail
+
+
 def test_older_runtime_versions_make_their_validation_reports_stale():
     stale_report = {"compiler_version": 3, "renderer_version": 3}
 
