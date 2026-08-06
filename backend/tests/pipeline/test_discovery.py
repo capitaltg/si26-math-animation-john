@@ -272,6 +272,27 @@ def test_grounding_rejects_number_spliced_across_two_tables():
     assert not _is_grounded(item, slide_blocks, start_index=0)
 
 
+def test_grounding_rejects_splice_built_from_two_cells_in_same_table():
+    """Regression guard for the table-cell variant of the P0 splice: prose
+    living in two cells of one table, spliced the same way as the
+    text-block P0, must not ground just because both real words appear
+    somewhere in that table's pooled cell tokens.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Mia has 3 oranges.",
+        slide_index=0,
+        one_line_summary="Mia's oranges",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="Mia has 3 apples."),
+        Block(kind="cell", table_ord=0, text="Noah has 5 oranges."),
+    ]]
+
+    assert not _is_grounded(item, slide_blocks, start_index=0)
+
+
 @pytest.mark.parametrize(
     ("slide_text", "source_excerpt"),
     [

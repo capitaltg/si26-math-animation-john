@@ -35,14 +35,25 @@ class _DiscoveryEnvelope(BaseModel):
     candidates: list[Any]
 
 
-def _is_ordered_subsequence(needle: list[str], haystack: list[str]) -> bool:
-    if not needle:
+def _suffix_from_whole_cells(suffix: list[str], cell_token_lists: list[list[str]]) -> bool:
+    """True iff `suffix` equals the exact concatenation, in order, of some
+    subset of `cell_token_lists`'s own whole entries (a cell contributes all
+    of its tokens or none — never a partial slice), so a suffix can only be
+    built from that table's actual cell contents, not from arbitrary tokens
+    scattered across its cells."""
+    if not suffix:
         return False
-    haystack_iter = iter(haystack)
-    return all(
-        any(candidate == token for candidate in haystack_iter)
-        for token in needle
-    )
+    reachable = {0}
+    for cell_tokens in cell_token_lists:
+        if not cell_tokens:
+            continue
+        n = len(cell_tokens)
+        reachable |= {
+            position + n
+            for position in reachable
+            if suffix[position:position + n] == cell_tokens
+        }
+    return len(suffix) in reachable
 
 
 def _contiguous_in_any_block(prefix: list[str], text_blocks: list[Block]) -> bool:
@@ -62,10 +73,10 @@ def _is_excerpt_grounded(excerpt_tokens: list[str], blocks: list[Block]) -> bool
         return False
 
     text_blocks = [block for block in blocks if block.kind == "text"]
-    tables: dict[int, list[str]] = {}
+    tables: dict[int, list[list[str]]] = {}
     for block in blocks:
         if block.kind == "cell":
-            tables.setdefault(block.table_ord, []).extend(
+            tables.setdefault(block.table_ord, []).append(
                 tokenize_for_grounding(block.text)
             )
 
@@ -76,8 +87,8 @@ def _is_excerpt_grounded(excerpt_tokens: list[str], blocks: list[Block]) -> bool
         if not suffix:
             return True
         if any(
-            _is_ordered_subsequence(suffix, table_tokens)
-            for table_tokens in tables.values()
+            _suffix_from_whole_cells(suffix, cell_token_lists)
+            for cell_token_lists in tables.values()
         ):
             return True
     return False
