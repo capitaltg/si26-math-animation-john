@@ -957,3 +957,50 @@ def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():
     # straddle an axis when the point sits on it).
     assert point["label_dx"] != 0.0
     assert point["label_dy"] != 0.0
+
+
+def test_inverse_operation_partition_spans_a_wrapped_percent_bar_grid_correctly():
+    """`maximum == 100` is the one bar size where `inverse_operation`'s equation
+    partition and the percent bar's 20-column grid wrap can collide: the bar
+    wraps into 5 rows, and `x_region` / `constant_region` must union every
+    segment they cover rather than just their first and last segment's
+    bounds, or a region that wraps onto a new row reads as a rectangle that
+    skips the rows in between.
+
+    x + 30 = 100 puts `x_region` on segments 0-69 (rows 0-2 full, row 3
+    partial) and `constant_region` on segments 70-99 (row 3 partial, row 4
+    full) -- each spans a row it only partially covers, so first/last corners
+    alone would undercount its width.
+    """
+    visual = default_visual_registry().measure(
+        SimpleNamespace(kind="bar", ref="tape"),
+        {
+            "value": Fraction(100), "maximum": Fraction(100),
+            "constant": Fraction(30), "coefficient": Fraction(1),
+        },
+        LiteralTextMeasurer(),
+        strategy="inverse_operation",
+    )
+
+    row0 = visual.parts[("segment", 0)].bounds
+    row3_last_x = visual.parts[("segment", 69)].bounds
+    row3_first_constant = visual.parts[("segment", 70)].bounds
+    row4_last = visual.parts[("segment", 99)].bounds
+    x_region = visual.parts[("x_region", 0)].bounds
+    constant_region = visual.parts[("constant_region", 0)].bounds
+
+    # `x_region` covers rows 0-3, reaching the grid's full width even though
+    # its last row (3) only runs to column 9 -- rows 0-2 are full rows.
+    assert x_region.top == row0.top
+    assert x_region.bottom == row3_last_x.bottom
+    assert x_region.left == visual.bounds.left
+    assert x_region.right == visual.bounds.right
+    assert row3_last_x.right < visual.bounds.right
+
+    # `constant_region` covers rows 3-4, reaching the grid's full width
+    # because row 4 is a full row even though row 3 only starts at column 10.
+    assert constant_region.top == row3_first_constant.top
+    assert constant_region.bottom == row4_last.bottom
+    assert constant_region.left == visual.bounds.left
+    assert constant_region.right == visual.bounds.right
+    assert row3_first_constant.left > visual.bounds.left
