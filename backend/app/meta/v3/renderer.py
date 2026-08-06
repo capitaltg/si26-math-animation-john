@@ -829,8 +829,16 @@ def _line_for_bounds(bounds: Bounds):
 def _build_relation(relation, palette: str):
     target = _array(relation.target)
     label = Text(relation.text, font_size=FONT_SIZES["label"])
-    label.next_to(target, direction=np.array([0, -1, 0]))
-    arrow = Arrow(label.get_top(), target, buff=0.08)
+    # `top` anchors touch the anchor part's upper edge; the label has to sit
+    # above so the arrow can reach down to the tip. `bottom` (the default)
+    # puts the label below. Everything else falls back to below so a novel
+    # anchor name reads consistently rather than silently disappearing.
+    if relation.anchor == "top":
+        label.next_to(target, direction=np.array([0, 1, 0]))
+        arrow = Arrow(label.get_bottom(), target, buff=0.08)
+    else:
+        label.next_to(target, direction=np.array([0, -1, 0]))
+        arrow = Arrow(label.get_top(), target, buff=0.08)
     relation_mobject = VGroup(arrow, label)
     _apply_style(relation_mobject, resolve_semantic_style(palette, "focus"))
     return relation_mobject

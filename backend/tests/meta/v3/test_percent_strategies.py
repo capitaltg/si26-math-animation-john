@@ -5,6 +5,13 @@ from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
+from app.meta.v3.layout import CALLOUT_ENVELOPE, MIN_TEXT_SCALE, SAFE_FRAME
+from app.meta.v3.resolver import resolve_scene
+
+
+class _LiteralTextMeasurer:
+    def measure(self, text: str, font_role: str):
+        return len(text) * 0.2, 0.4
 
 
 @pytest.fixture
@@ -460,3 +467,54 @@ def test_percent_change_refuses_delta_beyond_action_budget(compile_context):
         compile_teaching_plan(
             plan, LiteralNode(value=45), frozenset(), compile_context,
         )
+
+
+def test_percent_of_whole_resolves_a_lesson_that_fits_the_safe_frame(compile_context):
+    """End-to-end acceptance: a 100-unit percent bar must reach a resolved
+    scene that fits the safe frame. Rendered as a 100-cell horizontal row
+    the bar measured 64.95 units wide and layout rejected it at
+    `below_minimum_text_scale`, so no percent lesson could ever be
+    rendered. The compact grid layout has to solve for a uniform scale of
+    at least MIN_TEXT_SCALE with every visual inside the safe frame.
+    """
+    plan = _percent_of_whole_plan(value=30)
+
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=30), frozenset(), compile_context,
+    )
+
+    scene = resolve_scene(program, {}, _LiteralTextMeasurer())
+
+    bar = next(visual for visual in scene.visuals if visual.measured.ref == "percent_bar")
+    assert bar.scale >= MIN_TEXT_SCALE
+    assert SAFE_FRAME.left <= bar.bounds.left
+    assert bar.bounds.right <= SAFE_FRAME.right
+    assert SAFE_FRAME.bottom <= bar.bounds.bottom
+    assert bar.bounds.top <= SAFE_FRAME.top
+    assert len([part for part in bar.measured.parts if part[0] == "segment"]) == 100
+
+
+def test_percent_change_ribbon_reserves_safe_frame_clearance(compile_context):
+    """The Δ ribbon anchors `top` on the after-bar. Without the
+    outer-callout reservation on supporting visuals, the ribbon's label
+    would render past the safe frame's top edge and fail render-probe's
+    `frame_out_of_bounds` check. Verify the layout reserves an envelope
+    above the column when a top-anchored callout targets a non-primary
+    visual.
+    """
+    plan = _percent_change_plan(before=40, after=50)
+
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=50), frozenset(), compile_context,
+    )
+
+    scene = resolve_scene(program, {}, _LiteralTextMeasurer())
+
+    ribbon = next(relation for relation in scene.relations if relation.ref == "delta_ribbon")
+    assert ribbon.anchor == "top"
+    assert ribbon.target.y + CALLOUT_ENVELOPE <= SAFE_FRAME.top + 1e-9, (
+        "the anchor's callout envelope must land inside the safe frame"
+    )
+    for visual in scene.visuals:
+        assert visual.bounds.top <= SAFE_FRAME.top
+        assert visual.bounds.bottom >= SAFE_FRAME.bottom

@@ -23,6 +23,11 @@ class ResolvedRelation:
     kind: str
     target: Point
     text: str
+    #: Which side of the anchor part the tip touches. Renderer places the label
+    #: on the opposite side so `top` labels sit above the anchor and `bottom`
+    #: labels sit below. Layout mirrors this to reserve safe-frame clearance in
+    #: the direction the label actually renders (see `_callout_room_per_scale`).
+    anchor: str
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,7 @@ def resolve_relation(
         kind=relation.kind,
         target=target,
         text=relation.text,
+        anchor=relation.target.anchor,
     )
 
 
