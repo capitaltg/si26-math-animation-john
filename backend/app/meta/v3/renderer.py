@@ -205,6 +205,8 @@ def _build_visual(placed, palette: str):
         root.add(*edges.values(), *dimension_labels.values())
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
+    elif "x_ticks" in payload:
+        root, children = _build_coordinate_plane(measured, placed)
     elif "markers" in payload:
         root, children = _line_visual(placed, "marker")
         root.add(*_number_line_labels(measured, placed))
@@ -337,6 +339,97 @@ def _number_line_labels(measured, placed):
         for (part_name, index), part in sorted(measured.parts.items(), key=lambda item: item[0][1])
         if part_name == "marker"
     ]
+
+
+def _build_coordinate_plane(measured, placed):
+    """Axes projected through the world origin, plus dots and labels.
+
+    Axis endpoints and tick coordinates come from payload (unscaled) and are
+    multiplied by `placed.scale` explicitly, matching how `_line_visual`
+    handles the number line. Point dots come from `measured.parts`, which
+    layout has already scaled. Tick labels sit under the x-axis / left of the
+    y-axis; each point label sits above its dot. Labels are added to the root
+    group but NOT registered as children -- nothing in the compiler addresses
+    them, and inventing target keys for glyphs would let a plan target a
+    label the archetype does not expose (mirrors `_number_line_labels`).
+    """
+    payload = measured.payload
+    scale, offset = placed.scale, placed.offset
+    cx, cy = offset.x, offset.y
+    extent_x = payload["extent_x"] * scale
+    extent_y = payload["extent_y"] * scale
+    zero_u = payload["axis_zero_u"] * scale
+    zero_v = payload["axis_zero_v"] * scale
+    axis_y = cy + zero_v
+    axis_x = cx + zero_u
+    grid_lines = []
+    if payload.get("grid"):
+        for u_value in payload.get("x_grid_lines", ()):
+            u = u_value * scale + cx
+            grid_lines.append(Line(
+                _array(Point(u, cy - extent_y)),
+                _array(Point(u, cy + extent_y)),
+            ).set_opacity(0.25))
+        for v_value in payload.get("y_grid_lines", ()):
+            v = v_value * scale + cy
+            grid_lines.append(Line(
+                _array(Point(cx - extent_x, v)),
+                _array(Point(cx + extent_x, v)),
+            ).set_opacity(0.25))
+    x_axis = Line(
+        _array(Point(cx - extent_x, axis_y)),
+        _array(Point(cx + extent_x, axis_y)),
+    )
+    y_axis = Line(
+        _array(Point(axis_x, cy - extent_y)),
+        _array(Point(axis_x, cy + extent_y)),
+    )
+    tick_len = 0.08 * scale
+    tick_gap = payload["tick_label_gap"] * scale
+    tick_mobjects = []
+    tick_labels = []
+    for tick in payload["x_ticks"]:
+        u = tick["u"] * scale + cx
+        tick_mobjects.append(Line(
+            _array(Point(u, axis_y - tick_len)),
+            _array(Point(u, axis_y + tick_len)),
+        ))
+        # An empty label means the measurer suppressed it because a point label
+        # would have drawn over it -- keep the tick mark, drop the glyph.
+        if tick["label"]:
+            label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
+            tick_labels.append(_text(tick["label"], "label", Point(u, label_y), scale))
+    for tick in payload["y_ticks"]:
+        v = tick["v"] * scale + cy
+        tick_mobjects.append(Line(
+            _array(Point(axis_x - tick_len, v)),
+            _array(Point(axis_x + tick_len, v)),
+        ))
+        if tick["label"]:
+            label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
+            tick_labels.append(_text(tick["label"], "label", Point(label_x, v), scale))
+    children = _parts_as_dots(measured, offset, "point")
+    point_labels = []
+    for point in payload["points"]:
+        u = point["x"] * scale + cx
+        v = point["y"] * scale + cy
+        # Quadrant offset is chosen at measurement so the label rectangle
+        # cannot collide with any tick label rectangle or with a prior point
+        # label; a legacy payload written before the collision search shipped
+        # falls back to the historical above-the-dot placement.
+        if "label_dx" in point:
+            label_x = u + point["label_dx"] * scale
+            label_y = v + point["label_dy"] * scale
+        else:
+            point_offset = payload["point_label_offset"]
+            label_x = u
+            label_y = v + (point_offset + point["label_height"] / 2) * scale
+        point_labels.append(_text(point["label"], "label", Point(label_x, label_y), scale))
+    root = VGroup(
+        *grid_lines, x_axis, y_axis, *tick_mobjects, *tick_labels,
+        *children.values(), *point_labels,
+    )
+    return root, children
 
 
 def _parts_as_dots(measured, offset: Point, part_name: str):

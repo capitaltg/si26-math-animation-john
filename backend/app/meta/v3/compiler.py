@@ -24,6 +24,7 @@ _EXPRESSION_FIELDS = {
     "object_set": ("count",),
     "label": (),
     "unit_tape": ("value", "per_unit"),
+    "coordinate_plane": ("x_min", "x_max", "y_min", "y_max"),
 }
 
 _PART_CARDINALITY = {
@@ -45,6 +46,7 @@ _PART_CARDINALITY = {
         "source_label": lambda spec: _literal_ceiling(spec.value),
         "target_label": lambda spec: _literal_ceiling(spec.value),
     },
+    "coordinate_plane": {"point": lambda spec: len(spec.points)},
 }
 
 _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
@@ -96,6 +98,10 @@ def expressions_from_plan(plan):
         for field_name in _EXPRESSION_FIELDS[spec.kind]:
             value = getattr(spec, field_name)
             yield from value if isinstance(value, list) else (value,)
+        if spec.kind == "coordinate_plane":
+            for point in spec.points:
+                yield point.x
+                yield point.y
 
 
 def validate_unique_visual_refs(plan):

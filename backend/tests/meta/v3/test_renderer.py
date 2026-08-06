@@ -233,6 +233,14 @@ _MEASURABLE_VALUES = {
         "value": Fraction(11, 4), "per_unit": Fraction(1000),
         "source_unit": "km", "target_unit": "m",
     },
+    "coordinate_plane": {
+        "x_min": Fraction(-3), "x_max": Fraction(5),
+        "y_min": Fraction(-3), "y_max": Fraction(5),
+        "points": [
+            {"x": Fraction(2), "y": Fraction(3)},
+            {"x": Fraction(-1), "y": Fraction(4)},
+        ],
+    },
 }
 
 

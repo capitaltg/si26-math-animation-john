@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 
 from app.meta.dsl.scene_program import (
-    AnswerProgramVisual, BarProgramVisual, CalloutRelation, DrawAction,
-    GridProgramVisual, LabelProgramVisual, MoveAction, NumberLineProgramVisual,
+    AnswerProgramVisual, BarProgramVisual, CalloutRelation,
+    CoordinatePlaneProgramVisual, DrawAction, GridProgramVisual,
+    LabelProgramVisual, MoveAction, NumberLineProgramVisual,
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
     ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
     ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
@@ -32,6 +33,7 @@ _PROGRAM_VISUALS = {
     "object_set": (ObjectSetProgramVisual, "structure"),
     "label": (LabelProgramVisual, "neutral"),
     "unit_tape": (UnitTapeProgramVisual, "structure"),
+    "coordinate_plane": (CoordinatePlaneProgramVisual, "structure"),
 }
 
 _BEAT_TIMING = {
