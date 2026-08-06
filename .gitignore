@@ -49,6 +49,9 @@ node_modules/
 
 # Skill files (local tooling, not project code)
 .claude/skills/
+.claude/scripts/
+.claude/commands/
+.claude/worktrees/
 .github/skills/
 .github/agents/impeccable-*.agent.md
 .github/hooks/impeccable.json
