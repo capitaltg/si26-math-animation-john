@@ -1,5 +1,5 @@
 from fractions import Fraction
-from math import ceil, cos, floor, sin, tau
+from math import ceil, cos, floor, isfinite, sin, tau
 from typing import Protocol
 
 from app.meta.v3.errors import V3Failure, V3ValidationError
@@ -580,6 +580,12 @@ COORDINATE_PLANE_DOT_RADIUS = 0.08
 #: quadrant over is not.
 COORDINATE_PLANE_AXIS_STROKE_HALF = 0.02
 
+#: Half-length of a tick mark drawn perpendicular to its axis. Matches the
+#: renderer's `tick_len` (see backend/app/meta/v3/renderer.py). Bounds have
+#: to include this half-length around the projected axis position so ticks
+#: on an axis clamped to an outer edge don't stick past the reported box.
+COORDINATE_PLANE_TICK_HALF_LENGTH = 0.08
+
 
 def _measure_coordinate_plane(*, spec, values, measurer):
     """Axes projected through the world origin, with plotted points and labels.
@@ -665,12 +671,56 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     span_y_q = y_max_q - y_min_q
     span_x = float(span_x_q)
     span_y = float(span_y_q)
+    # A schema-valid positive span can underflow to 0.0 during the Fraction
+    # -> float narrowing (e.g. Fraction(1, 10**309) - Fraction(0)), which
+    # would fall into a ZeroDivisionError below. Refuse with a named failure
+    # instead of the raw arithmetic error.
+    for axis, span, low, high in (
+        ("x", span_x, x_min, x_max),
+        ("y", span_y, y_min, y_max),
+    ):
+        if span <= 0.0 or not isfinite(span):
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}",
+                expected=(
+                    f"a {axis} span whose float width is a positive finite "
+                    "number"
+                ),
+                observed=(
+                    f"{spec.ref} {axis} span [{format_number(low)}, "
+                    f"{format_number(high)}] narrows to {span!r} in float "
+                    "precision"
+                ),
+                hint=(
+                    f"widen the {axis} span -- an axis narrower than float "
+                    "precision projects to a single scene coordinate"
+                ),
+            ))
     # One scale drawn from whichever axis is tighter, so a unit step in world
     # coords covers the same scene distance on both axes.
     unit_scale = min(
         (2 * COORDINATE_PLANE_HALF_WIDTH) / span_x,
         (2 * COORDINATE_PLANE_HALF_HEIGHT) / span_y,
     )
+    # A subnormal-but-positive span survives the check above yet still drives
+    # the scale to infinity, which contaminates every downstream projected
+    # value. Refuse rather than paint an unbounded plane.
+    if not isfinite(unit_scale) or unit_scale <= 0.0:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected="a coordinate_plane whose uniform unit scale is finite",
+            observed=(
+                f"{spec.ref} unit scale computes to {unit_scale!r} from "
+                f"x span [{format_number(x_min)}, {format_number(x_max)}] "
+                f"and y span [{format_number(y_min)}, {format_number(y_max)}]"
+            ),
+            hint=(
+                "widen both spans so the projected scale stays finite -- a "
+                "span near float precision has no representable projection"
+            ),
+        ))
     extent_x = span_x * unit_scale / 2
     extent_y = span_y * unit_scale / 2
     # Uniform scale drawn from the tighter axis collapses the looser axis when
@@ -790,6 +840,21 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         )
         for pu, pv in projected_points
     ]
+    # A plotted dot can land on top of a tick label rectangle: e.g. (2, -0.6)
+    # on [-3, 5]^2 puts the dot directly over the x-axis "2" label. Point
+    # labels avoid dots, but the tick label glyph would still render under
+    # the dot. Suppress any tick label whose rect a dot intersects so no
+    # glyph is drawn beneath a rendered dot.
+    for xi, xr in enumerate(x_tick_rects):
+        if x_tick_suppressed[xi]:
+            continue
+        if any(_rects_overlap(xr, dr) for dr in dot_rects):
+            x_tick_suppressed[xi] = True
+    for yi, yr in enumerate(y_tick_rects):
+        if y_tick_suppressed[yi]:
+            continue
+        if any(_rects_overlap(yr, dr) for dr in dot_rects):
+            y_tick_suppressed[yi] = True
     # Axes as thin obstacle corridors: a coordinate label centered over the
     # y-axis (e.g. above the point (0, 2)) renders glyphs on top of the axis
     # stroke. The corridor is the axis stroke half-width, so a label a full
@@ -1153,8 +1218,15 @@ def _coordinate_plane_bounds(
     labels contribute their chosen quadrant's rectangle; suppressed tick
     labels contribute nothing because the renderer skips them.
     """
-    left, right = -extent_x, extent_x
-    bottom, top = -extent_y, extent_y
+    # Tick marks stick out perpendicular to their axis by the shared half-
+    # length. When an axis is clamped to an outer edge (both axes on a
+    # [-1.4, -0.6]^2 plane, for example) that overhang lands outside the
+    # raw axis rectangle, so seed the union with it.
+    tick_half = COORDINATE_PLANE_TICK_HALF_LENGTH
+    left = min(-extent_x, zero_u - tick_half)
+    right = max(extent_x, zero_u + tick_half)
+    bottom = min(-extent_y, zero_v - tick_half)
+    top = max(extent_y, zero_v + tick_half)
     for point in point_payload:
         label_center_x = point["x"] + point["label_dx"]
         label_center_y = point["y"] + point["label_dy"]
