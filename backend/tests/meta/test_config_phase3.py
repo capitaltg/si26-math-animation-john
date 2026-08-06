@@ -74,5 +74,14 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # `label_dx`/`label_dy` quadrant offsets, and skipping tick labels the
     # measurer suppressed to avoid overlapping a point label -- a version-7
     # renderer would overlay glyphs the newer measurer already resolved.
-    assert DSL_COMPILER_VERSION == 8
-    assert DYNAMIC_RENDERER_VERSION == 8
+    #
+    # DSL_COMPILER_VERSION 9 adds the `data_display` visual kind (M19: single
+    # kind with a `display_style` variant selector covering bar_graph,
+    # line_plot, dot_plot, histogram, box_plot). A version-8 compiler cannot
+    # deserialize the new kind.
+    #
+    # DYNAMIC_RENDERER_VERSION 9 covers building each of the five
+    # `data_display` styles as a rendered visual -- a version-8 renderer has
+    # no branch for the new kind.
+    assert DSL_COMPILER_VERSION == 9
+    assert DYNAMIC_RENDERER_VERSION == 9

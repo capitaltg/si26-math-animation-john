@@ -59,6 +59,7 @@ _SUPPORTED_STRATEGIES = {
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
     "coordinate_plane": {"group_reveal"},
+    "data_display": {"group_reveal", "short_stagger"},
 }
 
 
@@ -1251,6 +1252,488 @@ def _coordinate_plane_bounds(
     return Bounds(left, right, bottom, top)
 
 
+#: Base horizontal extent every data_display style paints its axis in. Fixed
+#: so downstream tickets that reuse the kind land marks at the same fraction
+#: of the frame across variants and lessons.
+DATA_DISPLAY_AXIS_WIDTH = 9.0
+#: Vertical room reserved above the axis for bars / marks. Same for every
+#: style so the safe-frame fit check reads the same intent regardless of the
+#: chosen display style.
+DATA_DISPLAY_PLOT_HEIGHT = 2.8
+#: Vertical gap between the axis line and a category label / tick label.
+DATA_DISPLAY_AXIS_LABEL_GAP = 0.18
+#: Vertical gap between a bar's top and its numeric count label.
+DATA_DISPLAY_COUNT_LABEL_GAP = 0.12
+#: Minimum whitespace between two adjacent category labels below the axis.
+DATA_DISPLAY_LABEL_INTER_GAP = 0.1
+#: Radius of a dot in a dot_plot. Matches Manim's default Dot radius.
+DATA_DISPLAY_DOT_RADIUS = 0.09
+#: Stacking pitch between adjacent dots at the same value in a dot_plot.
+DATA_DISPLAY_DOT_PITCH = 0.22
+#: X mark drawn at each line_plot value: a crossed pair of line segments of
+#: this half-length. Kept small so a mark reads as a single glyph.
+DATA_DISPLAY_MARK_HALF = 0.13
+#: Stacking pitch between adjacent X marks at the same value in a line_plot.
+DATA_DISPLAY_MARK_PITCH = 0.30
+#: Vertical thickness of a box_plot's box.
+DATA_DISPLAY_BOX_HEIGHT = 0.9
+
+
+def _measure_data_display(*, spec, values, measurer):
+    """Axis-based data display -- one of five styles selected by `display_style`.
+
+    Every style plants an axis strip at the bottom of the visual and draws its
+    marks above it. Bar-based styles (`bar_graph`, `histogram`) map categories
+    to axis segments and derive a numeric extent from category counts. Number-
+    line-based styles (`line_plot`, `dot_plot`, `box_plot`) place marks by
+    projecting the value onto a fixed-width axis spanning [axis_min, axis_max].
+
+    Refuses:
+    - a numeric axis whose max is not strictly greater than its min (all
+      number-line-based styles);
+    - a `values` entry outside the declared axis range (line_plot / dot_plot);
+    - a `box_plot` five-number summary that is not monotonic;
+    - a `dot_plot` whose tallest stack overruns the plot height.
+    """
+    style = values["display_style"]
+    if style in {"bar_graph", "histogram"}:
+        return _measure_data_display_bars(
+            spec=spec, values=values, measurer=measurer, contiguous=(style == "histogram"),
+        )
+    if style in {"line_plot", "dot_plot"}:
+        return _measure_data_display_number_line_points(
+            spec=spec, values=values, measurer=measurer, style=style,
+        )
+    if style == "box_plot":
+        return _measure_data_display_box_plot(spec=spec, values=values, measurer=measurer)
+    raise ValueError(f"unsupported data_display style {style!r}")
+
+
+def _measure_data_display_bars(*, spec, values, measurer, contiguous: bool):
+    categories = values["categories"]
+    raw_counts = [category["count"] for category in categories]
+    counts = [float(count) for count in raw_counts]
+    if any(count < 0 for count in counts):
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected="non-negative category counts",
+            observed=f"{spec.ref} carries a negative count",
+            hint="use non-negative counts -- a bar cannot fall below the axis",
+        ))
+    peak = max(counts) if counts else 0.0
+    if peak <= 0:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected="at least one category with a positive count",
+            observed=f"{spec.ref} draws bars all at zero height",
+            hint="raise at least one category count above zero, or use a different display",
+        ))
+    width = DATA_DISPLAY_AXIS_WIDTH
+    gap = 0.0 if contiguous else 0.24
+    n = len(categories)
+    # Bar width chosen so N bars plus (N-1) gaps span `DATA_DISPLAY_AXIS_WIDTH`
+    # exactly. Fixed axis width means downstream tickets reading this kind's
+    # extent get the same layout regardless of category count.
+    bar_width = (width - gap * (n - 1)) / n
+    if bar_width <= 0:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=f"at most {int(width // (gap or 1))} categories",
+            observed=f"{spec.ref} declares {n} categories that leave no room per bar",
+            hint="reduce `categories` -- adjacent bars have no room at this density",
+        ))
+    left = -width / 2
+    axis_y = 0.0
+    parts = {}
+    payload_bars = []
+    label_widths = []
+    for index, (category, count, raw_count) in enumerate(zip(categories, counts, raw_counts)):
+        bar_left = left + index * (bar_width + gap)
+        bar_right = bar_left + bar_width
+        bar_height = (count / peak) * DATA_DISPLAY_PLOT_HEIGHT if peak > 0 else 0.0
+        parts[("mark", index)] = SemanticPart(
+            "mark", index,
+            Bounds(bar_left, bar_right, axis_y, axis_y + bar_height),
+        )
+        label_w, _label_h = measurer.measure(category["label"], "label")
+        count_text = format_number(raw_count)
+        count_w, count_h = measurer.measure(count_text, "label")
+        label_widths.append(label_w)
+        payload_bars.append({
+            "label": category["label"], "count": count,
+            "count_text": count_text,
+            "count_width": count_w,
+            "count_height": count_h,
+            "left": bar_left, "right": bar_right,
+            "height": bar_height,
+        })
+    _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths)
+    label_h = max(
+        (measurer.measure(bar["label"], "label")[1] for bar in payload_bars),
+        default=0.0,
+    )
+    count_label_top = axis_y + max(bar["height"] for bar in payload_bars) + DATA_DISPLAY_COUNT_LABEL_GAP + label_h
+    bottom = axis_y - DATA_DISPLAY_AXIS_LABEL_GAP - label_h - _axis_title_room(values, measurer)
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(-width / 2, width / 2, bottom, count_label_top),
+        parts=parts,
+        payload={
+            "display_style": values["display_style"],
+            "axis_label": values.get("axis_label", ""),
+            "axis_y": axis_y,
+            "axis_left": -width / 2,
+            "axis_right": width / 2,
+            "bars": tuple(payload_bars),
+            "label_center_y": axis_y - DATA_DISPLAY_AXIS_LABEL_GAP - label_h / 2,
+            "count_label_gap": DATA_DISPLAY_COUNT_LABEL_GAP,
+        },
+    )
+
+
+def _measure_data_display_number_line_points(*, spec, values, measurer, style: str):
+    axis_min, axis_max = values["axis_min"], values["axis_max"]
+    if axis_max <= axis_min:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected="axis_max strictly greater than axis_min",
+            observed=(
+                f"{spec.ref} axis [{format_number(axis_min)}, "
+                f"{format_number(axis_max)}] is empty or inverted"
+            ),
+            hint="raise axis_max above axis_min so the axis has a positive span",
+        ))
+    width = DATA_DISPLAY_AXIS_WIDTH
+    left, right = -width / 2, width / 2
+    axis_y = 0.0
+    parts = {}
+    payload_values = []
+    from collections import Counter
+    stack_index = Counter()
+    for index, value in enumerate(values["values"]):
+        if not (axis_min <= value <= axis_max):
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}.values[{index}]",
+                expected=(
+                    f"a value inside [{format_number(axis_min)}, "
+                    f"{format_number(axis_max)}]"
+                ),
+                observed=f"{spec.ref} carries {format_number(value)} outside the axis span",
+                hint="move the value inside the axis range, or widen the axis span",
+            ))
+        u = left + (right - left) * float((value - axis_min) / (axis_max - axis_min))
+        stack_level = stack_index[value]
+        stack_index[value] += 1
+        if style == "dot_plot":
+            cy = axis_y + DATA_DISPLAY_DOT_RADIUS + stack_level * DATA_DISPLAY_DOT_PITCH
+            parts[("mark", index)] = SemanticPart(
+                "mark", index,
+                Bounds(u - DATA_DISPLAY_DOT_RADIUS, u + DATA_DISPLAY_DOT_RADIUS,
+                       cy - DATA_DISPLAY_DOT_RADIUS, cy + DATA_DISPLAY_DOT_RADIUS),
+            )
+            payload_values.append({"value": value, "u": u, "cy": cy})
+        else:  # line_plot -- stack repeated values so the same X mark does
+               # not stamp on itself and hide the frequency the plot claims to
+               # show. Height check below rejects a stack that overruns the
+               # reserved plot band.
+            cy = axis_y + DATA_DISPLAY_MARK_HALF + 0.05 + stack_level * DATA_DISPLAY_MARK_PITCH
+            parts[("mark", index)] = SemanticPart(
+                "mark", index,
+                Bounds(u - DATA_DISPLAY_MARK_HALF, u + DATA_DISPLAY_MARK_HALF,
+                       cy - DATA_DISPLAY_MARK_HALF, cy + DATA_DISPLAY_MARK_HALF),
+            )
+            payload_values.append({"value": value, "u": u, "cy": cy})
+    top = axis_y
+    for part in parts.values():
+        if part.bounds.top > top:
+            top = part.bounds.top
+    if top - axis_y > DATA_DISPLAY_PLOT_HEIGHT:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"a display whose tallest stack fits {DATA_DISPLAY_PLOT_HEIGHT:g} scene units"
+            ),
+            observed=(
+                f"{spec.ref} stacks marks {top - axis_y:.2f} units tall"
+            ),
+            hint=(
+                "drop values so no single number is repeated more than fits the "
+                "plot height, or widen the axis so repeats spread across values"
+            ),
+        ))
+    tick_ticks = _data_display_axis_ticks(axis_min, axis_max, measurer)
+    tick_label_h = max((h for _v, _t, _w, h in tick_ticks), default=0.0)
+    tick_label_top = axis_y - DATA_DISPLAY_AXIS_LABEL_GAP
+    tick_label_bottom = tick_label_top - tick_label_h
+    axis_title_h = _axis_title_room(values, measurer)
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(left - 0.1, right + 0.1, tick_label_bottom - axis_title_h, top + 0.1),
+        parts=parts,
+        payload={
+            "display_style": style,
+            "axis_label": values.get("axis_label", ""),
+            "axis_y": axis_y,
+            "axis_left": left,
+            "axis_right": right,
+            "axis_min": axis_min,
+            "axis_max": axis_max,
+            "values": tuple(payload_values),
+            "ticks": tuple(
+                {"value": value, "text": text, "u": _project(value, axis_min, axis_max, left, right),
+                 "label_width": w, "label_height": h}
+                for value, text, w, h in tick_ticks
+            ),
+            "tick_label_gap": DATA_DISPLAY_AXIS_LABEL_GAP,
+            "dot_radius": DATA_DISPLAY_DOT_RADIUS,
+            "mark_half": DATA_DISPLAY_MARK_HALF,
+        },
+    )
+
+
+def _measure_data_display_box_plot(*, spec, values, measurer):
+    axis_min, axis_max = values["axis_min"], values["axis_max"]
+    if axis_max <= axis_min:
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected="axis_max strictly greater than axis_min",
+            observed=(
+                f"{spec.ref} axis [{format_number(axis_min)}, "
+                f"{format_number(axis_max)}] is empty or inverted"
+            ),
+            hint="raise axis_max above axis_min so the axis has a positive span",
+        ))
+    summary = values["summary"]
+    ordered = [summary["minimum"], summary["q1"], summary["median"], summary["q3"], summary["maximum"]]
+    for a, b in zip(ordered, ordered[1:]):
+        if b < a:
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}.summary",
+                expected="a monotonic five-number summary (min <= q1 <= median <= q3 <= max)",
+                observed=(
+                    f"{spec.ref} summary out of order: "
+                    f"min={format_number(summary['minimum'])}, "
+                    f"q1={format_number(summary['q1'])}, "
+                    f"median={format_number(summary['median'])}, "
+                    f"q3={format_number(summary['q3'])}, "
+                    f"max={format_number(summary['maximum'])}"
+                ),
+                hint="reorder the summary so each value is at least the previous one",
+            ))
+    for name, value in summary.items():
+        if not (axis_min <= value <= axis_max):
+            raise V3ValidationError(V3Failure(
+                code="visual_extent_unrenderable",
+                path=f"visuals.{spec.ref}.summary.{name}",
+                expected=(
+                    f"a summary value inside [{format_number(axis_min)}, "
+                    f"{format_number(axis_max)}]"
+                ),
+                observed=f"{spec.ref} summary.{name} = {format_number(value)} outside the axis span",
+                hint=f"move summary.{name} inside the axis range, or widen the axis span",
+            ))
+    width = DATA_DISPLAY_AXIS_WIDTH
+    left, right = -width / 2, width / 2
+    axis_y = 0.0
+    projected = {
+        name: _project(value, axis_min, axis_max, left, right)
+        for name, value in summary.items()
+    }
+    box_top = axis_y + DATA_DISPLAY_BOX_HEIGHT / 2 + 0.4
+    box_bottom = axis_y + 0.4 - DATA_DISPLAY_BOX_HEIGHT / 2
+    # `mark[0]` addresses the whole box; the plan can point at the box as one
+    # semantic element instead of picking a specific whisker or quartile.
+    parts = {
+        ("mark", 0): SemanticPart(
+            "mark", 0,
+            Bounds(projected["q1"], projected["q3"], box_bottom, box_top),
+        ),
+    }
+    tick_ticks = _data_display_axis_ticks(axis_min, axis_max, measurer)
+    tick_label_h = max((h for _v, _t, _w, h in tick_ticks), default=0.0)
+    tick_label_bottom = axis_y - DATA_DISPLAY_AXIS_LABEL_GAP - tick_label_h
+    axis_title_h = _axis_title_room(values, measurer)
+    return _measured_visual(
+        ref=spec.ref,
+        bounds=Bounds(left - 0.1, right + 0.1, tick_label_bottom - axis_title_h, box_top + 0.1),
+        parts=parts,
+        payload={
+            "display_style": "box_plot",
+            "axis_label": values.get("axis_label", ""),
+            "axis_y": axis_y,
+            "axis_left": left,
+            "axis_right": right,
+            "axis_min": axis_min,
+            "axis_max": axis_max,
+            "summary": {name: float(value) for name, value in summary.items()},
+            "projected": projected,
+            "box_top": box_top,
+            "box_bottom": box_bottom,
+            "ticks": tuple(
+                {"value": value, "text": text, "u": _project(value, axis_min, axis_max, left, right),
+                 "label_width": w, "label_height": h}
+                for value, text, w, h in tick_ticks
+            ),
+            "tick_label_gap": DATA_DISPLAY_AXIS_LABEL_GAP,
+        },
+    )
+
+
+def _project(value, axis_min, axis_max, left, right) -> float:
+    return left + (right - left) * float((value - axis_min) / (axis_max - axis_min))
+
+
+def _axis_title_room(values, measurer) -> float:
+    """Vertical room the optional axis title needs below the tick labels."""
+    title = values.get("axis_label", "")
+    if not title:
+        return 0.0
+    _w, h = measurer.measure(title, "label")
+    return h + DATA_DISPLAY_AXIS_LABEL_GAP
+
+
+def _data_display_axis_ticks(axis_min, axis_max, measurer):
+    """At most eight numeric ticks along a data_display's number line.
+
+    The finest stride from a fixed set of fractional / integer candidates that
+    keeps tick count within `max_ticks` AND whose measured labels leave at
+    least `DATA_DISPLAY_LABEL_INTER_GAP` between adjacent labels. Fractional
+    candidates (1/8, 1/4, 1/2) are what make 5.MD.B.2 line plots on a
+    sub-unit axis (e.g. [1/4, 3/4]) render labelled ticks -- integer-only
+    stride would skip the whole span. Width-based thinning stops wide integer
+    labels (13-digit counts, long fractions) from stamping on their neighbours.
+    """
+    axis_min_f = Fraction(axis_min)
+    axis_max_f = Fraction(axis_max)
+    if axis_max_f <= axis_min_f:
+        return []
+    max_ticks = 8
+    width = DATA_DISPLAY_AXIS_WIDTH
+    left, right = -width / 2, width / 2
+    candidates = [Fraction(1, 8), Fraction(1, 4), Fraction(1, 2)]
+    span = axis_max_f - axis_min_f
+    decade = Fraction(1)
+    while True:
+        candidates.extend([decade, 2 * decade, 5 * decade])
+        if decade >= span:
+            break
+        decade *= 10
+    fallback = None
+    for step in candidates:
+        first = int(ceil(axis_min_f / step))
+        last = int(floor(axis_max_f / step))
+        if last < first:
+            continue
+        if last - first + 1 > max_ticks:
+            continue
+        measured = []
+        for k in range(first, last + 1):
+            value = Fraction(k) * step
+            text = format_number(value)
+            w, h = measurer.measure(text, "label")
+            u = _project(value, axis_min_f, axis_max_f, left, right)
+            measured.append((value, text, w, h, u))
+        if _tick_labels_do_not_overlap(measured, DATA_DISPLAY_LABEL_INTER_GAP):
+            return [(v, t, w, h) for v, t, w, h, _u in measured]
+        if fallback is None:
+            fallback = measured
+    if fallback is None:
+        return []
+    for skip in range(2, len(fallback) + 1):
+        thinned = fallback[::skip]
+        if _tick_labels_do_not_overlap(thinned, DATA_DISPLAY_LABEL_INTER_GAP):
+            return [(v, t, w, h) for v, t, w, h, _u in thinned]
+    endpoints = [fallback[0]] + ([fallback[-1]] if len(fallback) > 1 else [])
+    if _tick_labels_do_not_overlap(endpoints, DATA_DISPLAY_LABEL_INTER_GAP):
+        return [(v, t, w, h) for v, t, w, h, _u in endpoints]
+    return [(fallback[0][0], fallback[0][1], fallback[0][2], fallback[0][3])]
+
+
+def _tick_labels_do_not_overlap(measured, min_gap):
+    for a, b in zip(measured, measured[1:]):
+        _va, _ta, wa, _ha, ua = a
+        _vb, _tb, wb, _hb, ub = b
+        if (ub - wb / 2) - (ua + wa / 2) < min_gap:
+            return False
+    return True
+
+
+def _require_data_display_labels_do_not_collide(spec, payload_bars, label_widths):
+    """Reject a bar_graph / histogram whose category or count labels would overlap.
+
+    Two symmetric checks: category labels below the axis, and numeric count
+    labels above each bar. Wide counts (e.g. three 13-digit values) can collide
+    even when short category names fit, so measuring both keeps the display
+    honest instead of silently stamping labels on top of each other.
+    """
+    def bar_center(bar):
+        return bar["left"] + (bar["right"] - bar["left"]) / 2
+
+    for a, b in zip(range(len(payload_bars) - 1), range(1, len(payload_bars))):
+        gap = (bar_center(payload_bars[b]) - label_widths[b] / 2) - (
+            bar_center(payload_bars[a]) + label_widths[a] / 2
+        )
+        if gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"category labels separated by at least "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP:g} units"
+            ),
+            observed=(
+                f"labels {payload_bars[a]['label']!r} and "
+                f"{payload_bars[b]['label']!r} overlap by "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP - gap:.2f} units"
+            ),
+            hint=(
+                f"shorten {payload_bars[a]['label']!r} or "
+                f"{payload_bars[b]['label']!r}, or reduce `categories`"
+            ),
+        ))
+
+    for a, b in zip(range(len(payload_bars) - 1), range(1, len(payload_bars))):
+        ba, bb = payload_bars[a], payload_bars[b]
+        x_gap = (bar_center(bb) - bb["count_width"] / 2) - (
+            bar_center(ba) + ba["count_width"] / 2
+        )
+        if x_gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+            continue
+        ya_bot = ba["height"] + DATA_DISPLAY_COUNT_LABEL_GAP
+        ya_top = ya_bot + ba["count_height"]
+        yb_bot = bb["height"] + DATA_DISPLAY_COUNT_LABEL_GAP
+        yb_top = yb_bot + bb["count_height"]
+        y_gap = max(ya_bot, yb_bot) - min(ya_top, yb_top)
+        if y_gap >= DATA_DISPLAY_LABEL_INTER_GAP:
+            continue
+        raise V3ValidationError(V3Failure(
+            code="visual_extent_unrenderable",
+            path=f"visuals.{spec.ref}",
+            expected=(
+                f"count labels separated by at least "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP:g} units"
+            ),
+            observed=(
+                f"counts {ba['count_text']!r} and "
+                f"{bb['count_text']!r} above adjacent bars overlap by "
+                f"{DATA_DISPLAY_LABEL_INTER_GAP - min(x_gap, y_gap):.2f} units"
+            ),
+            hint=(
+                "reduce `categories`, or use smaller counts -- adjacent count "
+                "labels have no room at this density"
+            ),
+        ))
+
+
 def _measure_ordered_values(*, spec, values, measurer):
     return measure_ordered_values(
         ref=spec.ref, values=values["values"], measurer=measurer, gap=0.45,
@@ -1278,4 +1761,5 @@ def default_visual_registry() -> VisualRegistry:
     registry.register("label", _measure_label)
     registry.register("answer_expression", _measure_answer)
     registry.register("coordinate_plane", _measure_coordinate_plane)
+    registry.register("data_display", _measure_data_display)
     return registry

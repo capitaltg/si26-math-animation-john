@@ -25,6 +25,7 @@ _EXPRESSION_FIELDS = {
     "label": (),
     "unit_tape": ("value", "per_unit"),
     "coordinate_plane": ("x_min", "x_max", "y_min", "y_max"),
+    "data_display": (),
 }
 
 _PART_CARDINALITY = {
@@ -47,7 +48,34 @@ _PART_CARDINALITY = {
         "target_label": lambda spec: _literal_ceiling(spec.value),
     },
     "coordinate_plane": {"point": lambda spec: len(spec.points)},
+    "data_display": {
+        # `mark` covers every per-data-point primitive across styles: `bar_graph`
+        # bars, `histogram` bins, `line_plot` / `dot_plot` per-value marks, and
+        # `box_plot`'s single box. A single part name lets a plan address a
+        # specific display element without branching on `display_style`; the
+        # cardinality is whichever collection the style uses.
+        "mark": lambda spec: _data_display_mark_count(spec),
+    },
 }
+
+
+def _data_display_mark_count(spec):
+    """How many `mark` parts the display exposes at compile time.
+
+    Category-based styles read from the plan directly; number-line-based styles
+    return the length of their `values` list. `box_plot` exposes exactly one
+    mark -- the box itself. `None` when the count is not known at compile time
+    (a category count that is a field reference), letting the resolver bound
+    the index instead.
+    """
+    style = spec.display_style
+    if style in {"bar_graph", "histogram"}:
+        return len(spec.categories)
+    if style in {"line_plot", "dot_plot"}:
+        return len(spec.values)
+    if style == "box_plot":
+        return 1
+    return None
 
 _DECLARED_PATHS = {"rectangle_measurement": {"perimeter"}}
 
@@ -102,6 +130,30 @@ def expressions_from_plan(plan):
             for point in spec.points:
                 yield point.x
                 yield point.y
+        if spec.kind == "data_display":
+            yield from _data_display_expressions(spec)
+
+
+def _data_display_expressions(spec):
+    """Every ExpressionNode a data_display carries, in schema-declared order.
+
+    Kept out of `_EXPRESSION_FIELDS` because the fields differ by
+    `display_style` -- a flat mapping cannot express "expose `values` only for
+    line_plot / dot_plot"; hard-coding the union would validate expressions
+    the plan schema will reject at model_validator time anyway.
+    """
+    for category in spec.categories:
+        yield category.count
+    yield from spec.values
+    for bound in (spec.axis_min, spec.axis_max):
+        if bound is not None:
+            yield bound
+    if spec.summary is not None:
+        yield spec.summary.minimum
+        yield spec.summary.q1
+        yield spec.summary.median
+        yield spec.summary.q3
+        yield spec.summary.maximum
 
 
 def validate_unique_visual_refs(plan):

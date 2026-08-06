@@ -137,6 +137,8 @@ def evaluate_program_visual(
             "source_unit": visual.source_unit,
             "target_unit": visual.target_unit,
         }
+    if kind == "data_display":
+        return _evaluated_spec(visual), _evaluate_data_display(visual, values)
     if kind == "coordinate_plane":
         return _evaluated_spec(visual), {
             "x_min": _evaluate(visual.x_min, values),
@@ -311,6 +313,34 @@ def _action_target_items(action, index):
     if action.kind == "transform":
         return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]
     return []
+
+
+def _evaluate_data_display(visual, values):
+    """Realise every ExpressionNode a data_display carries.
+
+    Categories carry both a literal label (unchanged) and an expression count
+    (evaluated). `line_plot` / `dot_plot` / `box_plot` carry their axis bounds
+    and per-value expressions the same way `number_line.markers` does.
+    """
+    out = {
+        "display_style": visual.display_style,
+        "axis_label": visual.axis_label,
+        "categories": [
+            {"label": category.label, "count": _evaluate(category.count, values)}
+            for category in visual.categories
+        ],
+        "values": [_evaluate(node, values) for node in visual.values],
+    }
+    if visual.axis_min is not None:
+        out["axis_min"] = _evaluate(visual.axis_min, values)
+    if visual.axis_max is not None:
+        out["axis_max"] = _evaluate(visual.axis_max, values)
+    if visual.summary is not None:
+        out["summary"] = {
+            name: _evaluate(getattr(visual.summary, name), values)
+            for name in ("minimum", "q1", "median", "q3", "maximum")
+        }
+    return out
 
 
 def _evaluated_spec(visual):
