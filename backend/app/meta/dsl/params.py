@@ -260,6 +260,14 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
         def grounding_number_tokens(self) -> list[str]:
             tokens = default_number_tokens(self)
             values = self.model_dump()
+            # A single numerator/denominator fraction can be the top-level
+            # expression of more than one predicate (e.g. a range check and a
+            # separate positivity check on the same fraction). Requesting the
+            # "n/d" token once per predicate that mentions it would demand
+            # that many literal occurrences in the source for a fraction
+            # written there only once, so dedupe on the field-ref pair rather
+            # than the predicate.
+            seen_field_pairs: set[tuple] = set()
             for predicate in compiled_guard.document.predicates:
                 for expression in predicate_expressions(predicate):
                     if (
@@ -269,6 +277,13 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                             for operand in expression.operands
                         )
                     ):
+                        field_pair = tuple(
+                            (operand.field, operand.index, operand.item_field)
+                            for operand in expression.operands
+                        )
+                        if field_pair in seen_field_pairs:
+                            continue
+                        seen_field_pairs.add(field_pair)
                         numerator, denominator = (
                             _evaluate(operand, values) for operand in expression.operands
                         )

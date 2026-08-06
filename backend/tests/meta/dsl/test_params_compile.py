@@ -337,6 +337,47 @@ def test_grounding_number_tokens_includes_a_field_ref_fraction_pair():
     assert "4" in tokens
 
 
+def test_grounding_number_tokens_does_not_duplicate_a_fraction_referenced_by_two_predicates():
+    """The same numerator/denominator fraction can be the top-level expression
+    of more than one predicate (e.g. a range check and a positivity check).
+    Under multiset grounding, requesting the "n/d" token once per predicate
+    that mentions it demands two literal occurrences in the source for a
+    fraction that is written there only once -- a real, singly-written
+    fraction must not be flagged as ungrounded.
+    """
+    from app.meta.dsl.guard import GuardDocument, RangePredicate
+    from app.meta.dsl.expression import LiteralNode
+    from app.pipeline.grounding import check_params_grounded
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="numerator", label="Numerator", description="", minimum=1, maximum=20),
+            IntegerFieldSpec(name="denominator", label="Denominator", description="", minimum=1, maximum=20),
+        ],
+    )
+    fraction = lambda: FractionNode(
+        operands=[FieldRefNode(field="numerator"), FieldRefNode(field="denominator")]
+    )
+    guard_document = GuardDocument(
+        guard_version=1,
+        predicates=[
+            RangePredicate(value=fraction(), minimum=LiteralNode(value=0), maximum=LiteralNode(value=1)),
+            PositivePredicate(value=fraction()),
+        ],
+    )
+    compiled_guard = compile_guard(guard_document, known_fields=frozenset({"numerator", "denominator"}))
+    Params = compile_template_params(document, compiled_guard)
+
+    params = Params(numerator=3, denominator=4)
+    tokens = params.grounding_number_tokens()
+
+    assert tokens.count("3/4") == 1
+
+    source = "Out of 4 slices, 3 are shaded: that is 3/4 of the pizza."
+    assert check_params_grounded(params, source) == []
+
+
 def test_grounding_derived_totals_covers_sum_equals_predicates():
     from app.meta.dsl.guard import GuardDocument, SumEqualsPredicate
 
