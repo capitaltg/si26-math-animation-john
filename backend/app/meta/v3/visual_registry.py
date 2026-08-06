@@ -939,11 +939,21 @@ def _tick_label_rect_y(v, zero_u, w, h):
 
 def _point_label_candidates(label_w, label_h):
     off = COORDINATE_POINT_LABEL_OFFSET
+    dx = off + label_w / 2
+    dy = off + label_h / 2
+    # Cardinals first (natural reading); diagonals fall back for points on an
+    # axis (e.g. the origin), where every cardinal rect straddles the other
+    # axis. A diagonal rect sits fully inside one quadrant so it clears both
+    # axis corridors at once.
     return (
-        (0.0, off + label_h / 2),          # above
-        (off + label_w / 2, 0.0),          # right
-        (-(off + label_w / 2), 0.0),       # left
-        (0.0, -(off + label_h / 2)),       # below
+        (0.0, dy),         # above
+        (dx, 0.0),         # right
+        (-dx, 0.0),        # left
+        (0.0, -dy),        # below
+        (dx, dy),          # upper-right
+        (-dx, dy),         # upper-left
+        (dx, -dy),         # lower-right
+        (-dx, -dy),        # lower-left
     )
 
 

@@ -579,20 +579,22 @@ def test_a_coordinate_plane_rejects_duplicate_point_coordinates():
 
 
 def test_a_coordinate_plane_rejects_points_that_leave_no_free_label_quadrant():
-    """Three points clustered within one world unit exhaust every quadrant for
-    the third label's rectangle -- the earlier fallback silently overlaid it
-    on the second label. Refuse so the crowding surfaces before render."""
+    """A tight cluster of points near the origin exhausts every candidate
+    quadrant for the trailing label's rectangle -- the earlier fallback
+    silently overlaid it on a neighbour's label. Refuse so the crowding
+    surfaces before render. The cluster spans both axes so cardinal and
+    diagonal candidates alike are blocked."""
+    points = [
+        {"x": Fraction(x, 100), "y": Fraction(y, 100)}
+        for x in (-5, 0, 5) for y in (-5, 0, 5)
+    ]
     with pytest.raises(V3ValidationError) as exc_info:
         default_visual_registry().measure(
             SimpleNamespace(kind="coordinate_plane", ref="plane"),
             {
                 "x_min": Fraction(-3), "x_max": Fraction(5),
                 "y_min": Fraction(-3), "y_max": Fraction(5),
-                "points": [
-                    {"x": Fraction(0), "y": Fraction(0)},
-                    {"x": Fraction(1, 20), "y": Fraction(0)},
-                    {"x": Fraction(0), "y": Fraction(1, 20)},
-                ],
+                "points": points,
             },
             LiteralTextMeasurer(),
         )
@@ -681,21 +683,28 @@ def test_a_coordinate_plane_point_label_avoids_covering_other_dots():
             assert not _rects_overlap(label_rect, dot_rect)
 
 
-def test_a_coordinate_plane_rejects_a_point_whose_label_cannot_clear_the_axes():
-    """Point (0, 0) sits at the axis intersection: every candidate quadrant
-    rect straddles either the x-axis or the y-axis. With axis corridors
-    treated as hard obstacles the plane refuses, so a fixture that plots
-    directly on the origin surfaces the problem instead of rendering glyphs
-    stacked on the axis stroke."""
-    with pytest.raises(V3ValidationError) as exc_info:
-        default_visual_registry().measure(
-            SimpleNamespace(kind="coordinate_plane", ref="plane"),
-            {
-                "x_min": Fraction(-3), "x_max": Fraction(3),
-                "y_min": Fraction(-3), "y_max": Fraction(3),
-                "points": [{"x": Fraction(0), "y": Fraction(0)}],
-            },
-            LiteralTextMeasurer(),
-        )
+def test_a_coordinate_plane_places_the_origin_label_in_a_diagonal_quadrant():
+    """Point (0, 0) sits at the axis intersection: every cardinal candidate
+    rect straddles either the x-axis or the y-axis, but a diagonal quadrant
+    clears both corridors, so the origin -- fundamental to 5.G.A.1 coordinate
+    planes -- measures and renders successfully instead of being rejected."""
+    visual = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-3), "x_max": Fraction(3),
+            "y_min": Fraction(-3), "y_max": Fraction(3),
+            "points": [{"x": Fraction(0), "y": Fraction(0)}],
+        },
+        LiteralTextMeasurer(),
+    )
 
-    assert exc_info.value.failure.code == "visual_extent_unrenderable"
+    assert all(isfinite(v) for v in (
+        visual.bounds.left, visual.bounds.right,
+        visual.bounds.bottom, visual.bounds.top,
+    ))
+    (point,) = visual.payload["points"]
+    # A diagonal quadrant is the only placement that clears both axis
+    # corridors, so neither offset may be zero (cardinal candidates all
+    # straddle an axis when the point sits on it).
+    assert point["label_dx"] != 0.0
+    assert point["label_dy"] != 0.0
