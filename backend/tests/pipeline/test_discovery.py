@@ -274,19 +274,27 @@ def test_grounding_rejects_number_spliced_across_two_tables():
 
 def test_grounding_accepts_table_suffix_requiring_skip_not_greedy_match():
     """Regression guard for _suffix_from_whole_cells: a greedy leftmost-match
-    (consume the first cell that matches at the current position) would
-    wrongly reject this. The correct DP must consider skipping a cell that
-    matches now in favor of a later cell whose whole content is the exact
-    suffix, since committing to the first match forecloses that option.
+    (consume the first cell that matches at the current position, then
+    never reconsider it) would wrongly fail here. A text-block prefix
+    forces the excerpt through the split-loop's suffix-DP path rather than
+    the whole-excerpt-in-one-cell shortcut (the excerpt doesn't fit inside
+    either single cell, so that shortcut doesn't fire). The suffix "width
+    value" is directly matched by the second cell alone — a greedy walker
+    that commits to the first cell ("width") because it matches at
+    position 0 would advance past it and then fail to match the remaining
+    one-token gap against the two-token second cell, wrongly rejecting.
+    The DP must keep position 0 reachable (the option of not consuming the
+    first cell) so the second cell can still match there.
     """
     from app.pipeline.discovery import _DiscoveredItem, _is_grounded
 
     item = _DiscoveredItem(
-        source_excerpt="width value",
+        source_excerpt="Find the width value.",
         slide_index=0,
         one_line_summary="summary",
     )
     slide_blocks = [[
+        Block(kind="text", table_ord=None, text="Find the"),
         Block(kind="cell", table_ord=0, text="width"),
         Block(kind="cell", table_ord=0, text="width value"),
     ]]
