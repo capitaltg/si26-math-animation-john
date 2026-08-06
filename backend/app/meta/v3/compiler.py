@@ -6,7 +6,7 @@ from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import (
-    expand_beats, magnitude_sweep_beat_id, regroup_beat_id,
+    expand_beats, magnitude_sweep_beat_id, percent_sweep_beat_id, regroup_beat_id,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
@@ -294,6 +294,10 @@ def validate_strategy_compatibility(plan):
         _validate_inverse_operation_compatibility(plan)
     if plan.strategy == "ray_shade":
         _validate_ray_shade_compatibility(plan)
+    if plan.strategy == "percent_of_whole":
+        _validate_percent_of_whole_compatibility(plan)
+    if plan.strategy == "percent_change":
+        _validate_percent_change_compatibility(plan)
 
 
 def _validate_inverse_operation_compatibility(plan):
@@ -511,6 +515,22 @@ def _reveals_primary_whole(beat, primary_ref):
 def _validate_magnitude_comparison_compatibility(plan):
     spec = plan.primary_visual
     if spec.kind == "bar":
+        maximum = _literal_integer(spec.maximum)
+        if maximum == 100:
+            # A bar drawn at maximum 100 IS a percent bar: the count of
+            # segments and the ratio are the same number, so a sweep here
+            # is teaching "N percent of the whole" whether the plan says so
+            # or not. `percent_of_whole` names that intent explicitly and
+            # gates on a value in [1, 99]; `magnitude_comparison` would let
+            # a plan claim "sweep to 40" for what a learner reads as "40%".
+            # Steer the plan to the strategy that matches the semantic.
+            _fail(
+                "magnitude_comparison_on_percent_bar",
+                "strategy",
+                "percent_of_whole when the bar's maximum is 100 (percent semantic)",
+                f"magnitude_comparison on bar with maximum=100",
+                "use percent_of_whole for a percent-of-whole bar, or lower maximum",
+            )
         value = _literal_integer(spec.value)
         if value is None:
             _fail(
@@ -605,6 +625,165 @@ def _require_owned_sweep_beat(plan):
             "no focus/derive beat names the primary visual",
             "add a focus or derive beat whose targets include the primary visual",
         )
+
+
+def _validate_percent_of_whole_compatibility(plan):
+    """A percent bar is a 100-unit bar with a whole-number percent as its value.
+
+    Constraining `maximum` to 100 keeps "part-of-whole" reasoning legible:
+    each segment represents exactly one percent, so a `value` of 30 reads as
+    "30% of the whole" without a separate axis. `value` in [1, 99] leaves
+    both the "part" and the "whole minus part" on screen: 0 would sweep
+    nothing (same shape as `magnitude_comparison`'s zero-value refusal) and
+    100 would put the whole bar in `focus`, losing the two-region contrast
+    the strategy exists to teach.
+
+    `supporting_visuals` are left free -- a label naming "30%" is a common
+    supporting visual and the strategy does not stage it.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "bar":
+        _fail(
+            "percent_of_whole_requires_bar_primary", "primary_visual.kind",
+            "a bar primary visual (percent-of-whole is only defined on a bar)",
+            spec.kind,
+            "make the primary visual a bar with maximum=100, or use a different strategy",
+        )
+    maximum = _literal_integer(spec.maximum)
+    if maximum != 100:
+        _fail(
+            "percent_of_whole_requires_hundred_maximum", "primary_visual.maximum",
+            "a literal maximum of 100 so one segment reads as one percent",
+            _describe_expression(spec.maximum),
+            "set maximum to the literal 100, or use magnitude_comparison for a non-percent bar",
+        )
+    value = _literal_integer(spec.value)
+    if value is None:
+        _fail(
+            "percent_of_whole_requires_literal_value", "primary_visual.value",
+            "a literal whole-number percent (1..99) so the sweep addresses specific segments",
+            _describe_expression(spec.value),
+            "set value to a literal integer in [1, 99], or use a different strategy",
+        )
+    if value < 1 or value > 99:
+        _fail(
+            "percent_of_whole_requires_value_in_range", "primary_visual.value",
+            "a percent value in [1, 99] so both the part and the remainder stay on screen",
+            str(value),
+            "set value to a whole percent between 1 and 99, or use a different strategy",
+        )
+    if percent_sweep_beat_id(plan) is None:
+        _fail(
+            "percent_of_whole_requires_sweep_beat", "beats",
+            f"a focus or derive beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the sweep on",
+            "no focus/derive beat names the primary visual",
+            "add a focus or derive beat whose targets include the primary visual",
+        )
+
+
+def _validate_percent_change_compatibility(plan):
+    """A percent-change lesson needs a before bar and an after bar.
+
+    Both bars share a maximum (the axis against which the delta reads),
+    so the after-bar's segments align one-to-one with the before-bar's --
+    the delta the strategy sweeps has to fall inside the same segment
+    span. Distinct literal values give the strategy a delta to sweep;
+    equal values are the `group_reveal` shape (two identical bars, no
+    change to teach). Both values sit inside [1, maximum-1] so the
+    delta has room and the bars read as partial fills of the same axis.
+    """
+    primary = plan.primary_visual
+    if primary.kind != "bar":
+        _fail(
+            "percent_change_requires_bar_primary", "primary_visual.kind",
+            "a bar primary visual (percent_change stages a before/after bar pair)",
+            primary.kind,
+            "make the primary visual the 'before' bar, or use a different strategy",
+        )
+    supporting_bars = [
+        spec for spec in plan.supporting_visuals if spec.kind == "bar"
+    ]
+    if len(plan.supporting_visuals) != 1 or len(supporting_bars) != 1:
+        _fail(
+            "percent_change_requires_one_supporting_bar", "supporting_visuals",
+            "exactly one supporting bar visual (the 'after' bar)",
+            f"{len(plan.supporting_visuals)} supporting visuals "
+            f"({len(supporting_bars)} of them bars)",
+            "declare one supporting bar with matching maximum to hold the after value",
+        )
+    after = supporting_bars[0]
+    primary_max = _literal_integer(primary.maximum)
+    after_max = _literal_integer(after.maximum)
+    if primary_max is None or after_max is None:
+        _fail(
+            "percent_change_requires_literal_maxima", "primary_visual.maximum",
+            "literal whole-number maxima on both bars so the delta sweeps a known span",
+            f"before={_describe_expression(primary.maximum)}, "
+            f"after={_describe_expression(after.maximum)}",
+            "set both bars' maximum to a literal integer, or use a different strategy",
+        )
+    if primary_max != after_max:
+        _fail(
+            "percent_change_requires_matching_maxima",
+            f"supporting_visuals[0].maximum",
+            "the same literal maximum on both bars so the delta lands on the same axis",
+            f"before={primary_max}, after={after_max}",
+            "set the supporting bar's maximum equal to the primary bar's",
+        )
+    before_value = _literal_integer(primary.value)
+    after_value = _literal_integer(after.value)
+    if before_value is None or after_value is None:
+        _fail(
+            "percent_change_requires_literal_values", "primary_visual.value",
+            "literal whole-number values on both bars so the delta segments are known at compile time",
+            f"before={_describe_expression(primary.value)}, "
+            f"after={_describe_expression(after.value)}",
+            "set both bars' value to a literal integer, or use a different strategy",
+        )
+    if before_value == after_value:
+        _fail(
+            "percent_change_requires_distinct_values",
+            f"supporting_visuals[0].value",
+            "a non-zero delta between the two bars so the sweep has segments to animate",
+            f"before={before_value}, after={after_value}",
+            "make the after value different from the before value, or use a different strategy",
+        )
+    for label, value in (("before", before_value), ("after", after_value)):
+        if value < 1 or value > primary_max - 1:
+            _fail(
+                "percent_change_requires_value_in_range",
+                (
+                    "primary_visual.value" if label == "before"
+                    else "supporting_visuals[0].value"
+                ),
+                f"a {label} value in [1, {primary_max - 1}] so the bar reads as a partial fill",
+                str(value),
+                "set the value between 1 and one less than maximum, or use a different strategy",
+            )
+    _require_percent_change_sweep_beat(plan, after.ref)
+
+
+def _require_percent_change_sweep_beat(plan, after_ref):
+    """The compiler stages `percent_change`'s delta sweep on the after-bar.
+
+    Mirrors `_require_owned_sweep_beat` but pins to the supporting bar's
+    ref -- the sweep colours the delta segments on the after-bar, so the
+    beat that owns the sweep is the first focus/derive beat naming it, not
+    the primary.
+    """
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == after_ref for target in beat.targets):
+            return
+    _fail(
+        "percent_change_requires_sweep_beat", "beats",
+        f"a focus or derive beat targeting {after_ref!r}, "
+        "which the compiler stages the delta sweep on",
+        "no focus/derive beat names the after bar",
+        "add a focus or derive beat whose targets include the after bar",
+    )
 
 
 def _describe_expression(expression):

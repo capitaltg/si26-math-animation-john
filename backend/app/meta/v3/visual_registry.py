@@ -54,7 +54,10 @@ _SUPPORTED_STRATEGIES = {
     "number_line": {"group_reveal", "short_stagger", "magnitude_comparison", "ray_shade"},
     "grid": {"group_reveal", "short_stagger", "regroup"},
     "partition": {"group_reveal", "partition"},
-    "bar": {"group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation"},
+    "bar": {
+        "group_reveal", "short_stagger", "magnitude_comparison", "inverse_operation",
+        "percent_of_whole", "percent_change",
+    },
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
