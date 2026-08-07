@@ -469,3 +469,19 @@ def test_multi_word_string_token_grounds_each_word_independently():
 
     params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
     assert check_params_grounded(params, "Sarah has a red balloon.") == []
+
+
+def test_derived_total_allowance_does_not_launder_a_coincidentally_numeric_string_token():
+    from app.pipeline.grounding import check_params_grounded
+
+    # A numeric derived total (7 <- 3 + 4) is unrelated to a source-owned
+    # string/enum field whose value happens to be the digit string "7".
+    # Derived-total allowance is a numeric-only concept; it must not exempt
+    # a string token merely because it shares a canonical key with an
+    # allowed numeric total.
+    params = _StubParams(
+        tokens=["3", "4"],
+        derived_totals=[("7", ["3", "4"])],
+        string_tokens=["7"],
+    )
+    assert check_params_grounded(params, "3 and 4 make what?") == ["7"]
