@@ -20,6 +20,7 @@ from app.models.scene import (
     TemplateVersionMismatchError,
 )
 from app.pipeline.classification import ClassificationResult, classify_candidate
+from app.pipeline.compile import compile_scene_program
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
@@ -124,6 +125,12 @@ class SceneOut(BaseModel):
     stated_answer_source: str | None = None
     mismatch: dict | None = None
     mismatch_acknowledged: bool = False
+    # Deterministic compile of (template, params) → executable scene program.
+    # Same inputs always yield the same hash; audiences can rerun to verify.
+    scene_program: dict | None = None
+    scene_program_hash: str | None = None
+    compile_ms: float | None = None
+    program_size: int | None = None
 
 
 class StoryboardRequest(BaseModel):
@@ -351,6 +358,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         format_answer(scene.stated_answer) if scene.stated_answer is not None else None
     )
     mismatch = scene_mismatch(scene)
+    program, program_hash, program_size, compile_ms = compile_scene_program(scene)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -369,6 +377,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         stated_answer_source=scene.stated_answer_source,
         mismatch=mismatch,
         mismatch_acknowledged=scene.mismatch_acknowledged,
+        scene_program=program,
+        scene_program_hash=program_hash,
+        compile_ms=compile_ms,
+        program_size=program_size,
     )
 
 

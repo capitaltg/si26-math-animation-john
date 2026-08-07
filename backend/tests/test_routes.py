@@ -530,6 +530,13 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     assert scene["source_excerpt"]
     assert scene["detected_summary"] == "Detected: 4 + 3"
     assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
+    # Compile artifact — surfaces the pure params → scene-program step.
+    assert isinstance(scene["scene_program_hash"], str)
+    assert len(scene["scene_program_hash"]) == 64
+    assert scene["program_size"] > 0
+    assert scene["compile_ms"] is not None
+    assert scene["scene_program"]["params"] == scene["params"]
+    assert scene["scene_program"]["template"]["name"] == "number_line"
 
 
 def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
