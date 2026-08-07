@@ -42,6 +42,10 @@ class Scene(BaseModel):
     params: dict = Field(default_factory=dict)
     stated_answer: Fraction | None = None
     status: Literal["pending_review", "approved", "rejected", "fallback"] = "pending_review"
+    #: Bumped on every render-affecting write; lets approve/edit detect a
+    #: concurrent write and lets render detect a stale approval.
+    revision: int = 0
+    approved_revision: int | None = None
     fallback_reason: str | None = None
     failure_kind: Literal["render_failure"] | None = None
     thumbnail_path: Path | None = None
