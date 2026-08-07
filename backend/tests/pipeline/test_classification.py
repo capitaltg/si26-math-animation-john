@@ -357,6 +357,7 @@ def test_classify_drops_an_option_outside_the_snapshot(mock_call, monkeypatch):
 @patch("app.pipeline.classification.call_with_tool")
 def test_classify_without_a_session_ignores_dynamic_templates_even_if_flag_enabled(mock_call, monkeypatch):
     from app.config import get_settings
+    from app.models.scene import TemplateName
     from app.pipeline.classification import classify_candidate
 
     monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", True)
@@ -369,8 +370,28 @@ def test_classify_without_a_session_ignores_dynamic_templates_even_if_flag_enabl
 
     called_kwargs = mock_call.call_args.kwargs
     schema = called_kwargs["tools"][0]["schema"]
-    # No session was passed, so the snapshot was never loaded and the schema
-    # is left completely unpatched -- byte-identical to today's schema, which
-    # has no "enum" constraint on the (already-widened-to-str) template field.
-    template_property = schema["$defs"]["TemplateOption"]["properties"]["template"]
-    assert "enum" not in template_property
+    # No snapshot was loaded, but the tool schema is still enum-constrained to
+    # the static TemplateName vocabulary so the model cannot return a name that
+    # would blow up static_ref downstream.
+    template_enum = schema["$defs"]["TemplateOption"]["properties"]["template"]["enum"]
+    assert set(template_enum) == {member.value for member in TemplateName}
+
+
+@patch("app.pipeline.classification.call_with_tool")
+def test_classify_with_dynamic_flag_disabled_constrains_schema_to_static_enum(mock_call, monkeypatch):
+    from app.config import get_settings
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import classify_candidate
+
+    monkeypatch.setattr(get_settings(), "meta_dynamic_classifier_enabled", False)
+    mock_call.return_value = (
+        "classify_problem",
+        {"options": [], "grade_level": 1, "ambiguous": False},
+    )
+
+    classify_candidate("6 + 3 = ?")
+
+    called_kwargs = mock_call.call_args.kwargs
+    schema = called_kwargs["tools"][0]["schema"]
+    template_enum = schema["$defs"]["TemplateOption"]["properties"]["template"]["enum"]
+    assert set(template_enum) == {member.value for member in TemplateName}

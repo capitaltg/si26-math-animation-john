@@ -204,6 +204,9 @@ def test_options_returns_ranked_templates_and_caches_result():
 
     assert resp.status_code == 200
     item = resp.json()["options"][0]
+    static_vocab = {member.value for member in TemplateName}
+    matched = {"balance_scale", "number_line", "text_card"}
+    expected_rejected = sorted(static_vocab - matched)
     assert item == {
         "candidate_id": "c1",
         "grade_level": 1,
@@ -224,6 +227,11 @@ def test_options_returns_ranked_templates_and_caches_result():
                 "version_id": static_ref(TemplateName.TEXT_CARD).version_id,
                 "rationale": "always-compatible fallback",
             },
+        ],
+        "vocabulary_size": len(static_vocab),
+        "rejected": [
+            {"template": name, "reason": "not_applicable"}
+            for name in expected_rejected
         ],
     }
     session = store.get(upload.json()["session_id"])
@@ -265,6 +273,83 @@ def test_options_response_includes_a_static_version_id():
         t for t in resp.json()["options"][0]["templates"] if t["template"] == "number_line"
     )
     assert number_line["version_id"] == number_line_ref.version_id
+
+
+def test_options_marks_all_structural_templates_low_confidence_when_ambiguous():
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.templates.registry import static_ref
+
+    client = _client()
+    _upload_candidate(client)
+
+    # Ambiguity forces classify_candidate to strip structural options and keep
+    # only the text_card fallback, so every non-text_card template in the vocab
+    # ends up rejected with reason=low_confidence.
+    text_card_ref = static_ref(TemplateName.TEXT_CARD)
+    classification = ClassificationResult(
+        options=[
+            TemplateOption(
+                template=TemplateName.TEXT_CARD,
+                rationale="always-compatible fallback",
+                version_id=text_card_ref.version_id,
+            ),
+        ],
+        grade_level=2,
+        ambiguous=True,
+    )
+    with patch("app.routes.classify_candidate", return_value=classification):
+        resp = client.post("/options", json={"candidate_ids": ["c1"]})
+
+    assert resp.status_code == 200
+    item = resp.json()["options"][0]
+    static_vocab = {member.value for member in TemplateName}
+    assert item["vocabulary_size"] == len(static_vocab)
+    expected = sorted(static_vocab - {"text_card"})
+    assert item["rejected"] == [
+        {"template": name, "reason": "low_confidence"} for name in expected
+    ]
+
+
+def test_options_includes_dynamic_templates_in_vocabulary_when_enabled():
+    from app.config import get_settings
+    from app.meta.dynamic_templates import DynamicSnapshotEntry, EnabledSnapshot
+
+    client = _client()
+    _upload_candidate(client)
+
+    entries = {
+        name: DynamicSnapshotEntry(
+            version_id=f"{name}-v1",
+            artifact_hash=f"{name}-hash",
+            classifier_bullet=f"- {name}: fake",
+        )
+        for name in ("custom_bar", "custom_grid")
+    }
+    snapshot = EnabledSnapshot(_entries=entries)
+
+    settings = get_settings()
+    settings.meta_dynamic_classifier_enabled = True
+    try:
+        with patch("app.routes.meta_session") as mock_meta_session, patch(
+            "app.routes.load_enabled_snapshot", return_value=snapshot
+        ), patch(
+            "app.routes.classify_candidate", return_value=_classification()
+        ):
+            mock_meta_session.return_value.__enter__.return_value = object()
+            resp = client.post("/options", json={"candidate_ids": ["c1"]})
+    finally:
+        settings.meta_dynamic_classifier_enabled = False
+
+    assert resp.status_code == 200
+    item = resp.json()["options"][0]
+    from app.models.scene import TemplateName
+
+    expected_vocab = {m.value for m in TemplateName} | set(entries)
+    assert item["vocabulary_size"] == len(expected_vocab)
+    rejected_names = {r["template"] for r in item["rejected"]}
+    # The dynamic templates the model did not pick appear as rejected.
+    assert set(entries) <= rejected_names
 
 
 def test_options_passes_no_session_when_dynamic_classifier_flag_is_off():
