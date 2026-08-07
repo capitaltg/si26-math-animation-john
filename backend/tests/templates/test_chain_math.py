@@ -19,15 +19,16 @@ def test_run_multiplicative_chain_applies_multiply_and_exact_divide():
     assert run_multiplicative_chain(4, [("multiply", 6), ("divide", 3)]) == [4, 24, 8]
 
 
-def test_run_multiplicative_chain_rejects_non_exact_division():
-    with pytest.raises(ValueError):
-        run_multiplicative_chain(10, [("divide", 3)])
+def test_run_multiplicative_chain_allows_non_exact_division():
+    # Non-exact division is now allowed and will be represented as a fraction in compute_answer
+    result = run_multiplicative_chain(10, [("divide", 3)])
+    assert result == [10, 3]  # 10 // 3 = 3
 
 
 def test_run_multiplicative_chain_rejects_zero_divisor():
     with pytest.raises(
         ValueError,
-        match=r"^Division by zero: 10 / 0 is not a whole number$",
+        match=r"^Division by zero: 10 / 0$",
     ):
         run_multiplicative_chain(10, [("divide", 0)])
 

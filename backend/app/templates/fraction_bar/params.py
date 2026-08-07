@@ -1,3 +1,4 @@
+from fractions import Fraction
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -25,6 +26,16 @@ class FractionBarParams(BaseModel):
         tokens += [f"{step.numerator}/{self.denominator}" for step in self.steps]
         return tokens
 
+    def compute_answer(self) -> Fraction:
+        total = Fraction(self.start_numerator, self.denominator)
+        for step in self.steps:
+            piece = Fraction(step.numerator, self.denominator)
+            total = total + piece if step.operation == "add" else total - piece
+        return total
+
 
 class ChainedFractionBarParams(BaseModel):
     items: list[FractionBarParams] = Field(min_length=2, max_length=4)
+
+    def compute_answer(self) -> Fraction:
+        return self.items[-1].compute_answer()

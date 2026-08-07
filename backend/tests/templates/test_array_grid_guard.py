@@ -72,13 +72,14 @@ def test_valid_multiplicative_chain_passes():
     assert len(params.steps) == 2
 
 
-def test_non_exact_division_in_chain_is_rejected():
+def test_non_exact_division_in_chain_is_allowed():
     from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
 
-    with pytest.raises(ValidationError):
-        ArrayGridParams(
-            rows=2, cols=3, steps=[ArrayGridStep(operation="divide", factor=4)]
-        )
+    # Non-exact divisions are now allowed and handled as fractions in compute_answer
+    params = ArrayGridParams(
+        rows=2, cols=3, steps=[ArrayGridStep(operation="divide", factor=4)]
+    )
+    assert params is not None
 
 
 def test_chain_total_can_reflow_away_from_fixed_cols():

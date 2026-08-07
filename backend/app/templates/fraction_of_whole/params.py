@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 from pydantic import BaseModel, Field, model_validator
 
 from app.templates.fraction_of_whole.guard import check_fraction_of_whole_compatibility
@@ -15,6 +17,12 @@ class FractionOfWholeParams(BaseModel):
     def grounding_number_tokens(self) -> list[str]:
         return [f"{self.numerator}/{self.denominator}"]
 
+    def compute_answer(self) -> Fraction | None:
+        return None
+
 
 class ChainedFractionOfWholeParams(BaseModel):
     items: list[FractionOfWholeParams] = Field(min_length=2, max_length=4)
+
+    def compute_answer(self) -> Fraction | None:
+        return None
