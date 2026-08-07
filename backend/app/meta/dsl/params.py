@@ -89,6 +89,11 @@ class StringFieldSpec(BaseModel):
     required: bool = True
     default: str | None = Field(default=None, max_length=MAX_STRING_LENGTH)
     max_length: int = Field(gt=0, le=MAX_STRING_LENGTH)
+    # Whether this field's value is copied from the source problem text (and
+    # so must be grounded) versus an internal/layout constant the template
+    # controls itself. Defaults to source-owned: a field a template author
+    # forgets to classify fails closed into grounding, not silently past it.
+    source_owned: bool = True
 
     @model_validator(mode="after")
     def _default_within_max_length(self):
@@ -108,6 +113,8 @@ class EnumFieldSpec(BaseModel):
     required: bool = True
     default: str | None = None
     choices: list[str] = Field(min_length=2, max_length=MAX_ENUM_CHOICES)
+    # See StringFieldSpec.source_owned.
+    source_owned: bool = True
 
     @model_validator(mode="after")
     def _default_in_choices(self):
@@ -290,6 +297,35 @@ def compile_template_params(document: ParamsDocument, compiled_guard: CompiledGu
                         tokens.append(
                             f"{_format_fraction_component(numerator)}/{_format_fraction_component(denominator)}"
                         )
+            return tokens
+
+        def grounding_string_tokens(self) -> list[str]:
+            """String/enum leaf values a template author declared source-owned.
+
+            Contract-owned fields (source_owned=False), unset optional fields,
+            and non-string/enum fields never contribute a token.
+            """
+            values = self.model_dump()
+            tokens: list[str] = []
+            for spec in document.fields:
+                if spec.type in ("string", "enum"):
+                    if not spec.source_owned:
+                        continue
+                    value = values.get(spec.name)
+                    if value is not None:
+                        tokens.append(str(value))
+                elif spec.type == "array":
+                    owned_item_specs = [
+                        item for item in spec.item_fields
+                        if item.type in ("string", "enum") and item.source_owned
+                    ]
+                    if not owned_item_specs:
+                        continue
+                    for item_value in values.get(spec.name) or []:
+                        for item_spec in owned_item_specs:
+                            value = item_value.get(item_spec.name)
+                            if value is not None:
+                                tokens.append(str(value))
             return tokens
 
         def grounding_derived_totals(self) -> list[tuple[str, list[str]]]:

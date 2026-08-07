@@ -54,6 +54,22 @@ def params_number_tokens(params) -> list[str]:
     return default_number_tokens(params)
 
 
+def params_string_tokens(params) -> list[str]:
+    """Source-owned string/enum values a template declares via the hook.
+
+    No generic default here (unlike numbers): a hand-written template's
+    string/enum leaves are as likely to be internal contract fields (e.g. an
+    `operation: Literal["add", "subtract"]`) as source-copied text, so
+    blindly walking every string leaf would demand a literal source span for
+    values that were never meant to appear in the problem text. Absent the
+    hook, no string tokens are checked.
+    """
+    hook = getattr(params, "grounding_string_tokens", None)
+    if callable(hook):
+        return list(hook())
+    return []
+
+
 def params_derived_totals(params) -> list[tuple[str, list[str], str]]:
     """Derived-total declarations a template vouches for.
 
@@ -145,7 +161,15 @@ def check_params_grounded(params, source_text: str) -> list[str]:
     original_occurrences = _build_source_occurrences(source_text)
     consuming = copy.deepcopy(original_occurrences)
 
-    tokens = params_number_tokens(params)
+    # A source-owned string value is tokenized the same way the source text
+    # is, so a multi-word value (e.g. "red balloon") grounds one source
+    # occurrence per word rather than requiring the exact phrase verbatim.
+    string_tokens = [
+        word
+        for value in params_string_tokens(params)
+        for word in tokenize_for_grounding(value)
+    ]
+    tokens = params_number_tokens(params) + string_tokens
     ungrounded_pending: list[str] = []
     for token in tokens:
         spans = consuming.get(_canonical_key(token))
