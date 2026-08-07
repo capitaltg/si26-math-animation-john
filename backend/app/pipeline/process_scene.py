@@ -13,7 +13,7 @@ from app.pipeline.extraction import (
     extract_stated_answer,
 )
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
-from app.templates.registry import get_template, static_ref
+from app.templates.registry import get_template, is_static_template_name, static_ref
 from app.templates.text_card.params import TextCardParams
 
 BACKOFF_SECONDS = 0.5
@@ -140,8 +140,11 @@ def assemble_scene(
             candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, thumbnail=True
         )
 
-    stated: tuple = extract_stated_answer(candidate.source_excerpt) or (None, None)
-    stated_answer_value, stated_answer_source = stated
+    if is_static_template_name(template.name):
+        stated: tuple = extract_stated_answer(candidate.source_excerpt) or (None, None)
+        stated_answer_value, stated_answer_source = stated
+    else:
+        stated_answer_value, stated_answer_source = None, None
 
     thumb_path = _unique_thumbnail_path(candidate, output_dir)
     try:

@@ -1,7 +1,8 @@
 from unittest.mock import patch
 
 
-def test_assemble_scene_returns_pending_review_with_thumbnail(tmp_path):
+@patch("app.pipeline.process_scene.extract_stated_answer", return_value=None)
+def test_assemble_scene_returns_pending_review_with_thumbnail(mock_stated, tmp_path):
     from unittest.mock import patch
 
     from app.models.candidate import Candidate
@@ -127,7 +128,8 @@ def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
     assert scene.thumbnail_path is None
 
 
-def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path):
+@patch("app.pipeline.process_scene.extract_stated_answer", return_value=None)
+def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(mock_stated, tmp_path):
     from unittest.mock import patch
 
     from app.models.candidate import Candidate
@@ -229,3 +231,35 @@ def test_assemble_scene_stated_answer_extractor_failure_is_non_fatal(
 
     assert scene.stated_answer is None
     assert scene.stated_answer_source is None
+
+
+@patch("app.pipeline.process_scene.extract_stated_answer")
+@patch("app.pipeline.process_scene.extract_params")
+@patch("app.pipeline.process_scene.is_static_template_name")
+def test_assemble_scene_skips_stated_answer_for_dynamic_templates(
+    mock_is_static, mock_extract, mock_answer, tmp_path
+):
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+    from app.templates.registry import static_ref
+
+    mock_is_static.return_value = False
+    mock_extract.return_value = NumberLineParams(
+        start=3, steps=[NumberLineStep(operation="add", amount=5)]
+    )
+
+    candidate = Candidate(
+        candidate_id="c1",
+        slide_index=0,
+        source_excerpt="What is 3 + 5?",
+        one_line_summary="Add small",
+    )
+    template = static_ref(TemplateName.NUMBER_LINE)
+
+    scene = assemble_scene(candidate, tmp_path, template=template, grade=2)
+
+    assert scene.stated_answer is None
+    assert scene.stated_answer_source is None
+    mock_answer.assert_not_called()
