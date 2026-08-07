@@ -602,8 +602,48 @@ def get_thumbnail(thumb_id: str):
     return FileResponse(path, media_type="image/png", filename=path.name)
 
 
+# Pydantic tags every @model_validator / @field_validator raise as
+# value_error / assertion_error; everything else is a primitive schema check.
+_SEMANTIC_ERROR_TYPES = frozenset({"value_error", "assertion_error"})
+
+
+def _semantic_rule_id(err: dict) -> str:
+    # For a `raise ValueError("<msg>")` in a validator, pydantic sets
+    # ctx.error to the original exception and prepends "Value error, " to
+    # `msg`. The exception's own string is the stable per-rule identifier
+    # (the literal we typed at the raise site); fall back to the prefixed
+    # `msg` if pydantic omitted the ctx.
+    ctx = err.get("ctx") or {}
+    exc = ctx.get("error")
+    if exc is not None:
+        return str(exc)
+    return err.get("msg", err["type"])
+
+
+def _classify_error(err: dict) -> tuple[str, str]:
+    err_type = err["type"]
+    if err_type in _SEMANTIC_ERROR_TYPES:
+        return "semantic", _semantic_rule_id(err)
+    return "schema", err_type
+
+
 def _field_errors(exc: ValidationError) -> dict:
-    return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
+    # Each entry carries the raw pydantic `type`, plus `category`
+    # (schema|semantic) and a stable `rule` label — the UI routes by
+    # category and renders `rule` instead of a shared "value_error" tag.
+    out = []
+    for e in exc.errors():
+        category, rule = _classify_error(e)
+        out.append(
+            {
+                "loc": list(e["loc"]),
+                "msg": e["msg"],
+                "type": e["type"],
+                "rule": rule,
+                "category": category,
+            }
+        )
+    return {"errors": out}
 
 
 def _write_scene_cas(
@@ -646,11 +686,19 @@ def edit_scene(
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
 
     if request.grade_level is not None and not (0 <= request.grade_level <= 8):
+        # Route range check, not a cross-field rule — the UI splits by
+        # category and treats this as a Schema failure.
         raise HTTPException(
             status_code=422,
             detail={
                 "errors": [
-                    {"loc": ["grade_level"], "msg": "grade_level must be between 0 and 8"}
+                    {
+                        "loc": ["grade_level"],
+                        "msg": "grade_level must be between 0 and 8",
+                        "type": "grade_range",
+                        "rule": "grade_range",
+                        "category": "schema",
+                    }
                 ]
             },
         )

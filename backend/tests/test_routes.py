@@ -880,7 +880,14 @@ def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
         )
 
     assert resp.status_code == 422
-    assert resp.json()["detail"]["errors"]
+    errors = resp.json()["detail"]["errors"]
+    assert errors
+    # The @model_validator guard rejects, so pydantic tags this value_error —
+    # UI uses `category` to route to the "Semantic check" stamp and `rule`
+    # as the per-rule identifier (rather than a shared value_error label).
+    assert errors[0]["type"] == "value_error"
+    assert errors[0]["category"] == "semantic"
+    assert errors[0]["rule"] and errors[0]["rule"] != "value_error"
     thumb.assert_not_called()
 
 
@@ -920,6 +927,27 @@ def test_patch_grade_sets_overridden(tmp_path):
     assert resp.json()["grade_overridden"] is True
 
 
+def test_patch_wrong_param_type_returns_schema_type_error(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    with patch("app.routes.render_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": "not-an-int", "steps": []}},
+        )
+
+    assert resp.status_code == 422
+    errors = resp.json()["detail"]["errors"]
+    assert errors
+    # Wrong scalar type is a schema-level failure; UI routes non-value_error /
+    # non-assertion_error entries to the "Schema check" stamp.
+    types = {e["type"] for e in errors}
+    assert any(t not in {"value_error", "assertion_error"} for t in types)
+    thumb.assert_not_called()
+
+
 def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
     client = _client()
     _upload_candidate(client)
@@ -933,6 +961,10 @@ def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
     assert errors
     assert "loc" in errors[0]
     assert "msg" in errors[0]
+    assert "type" in errors[0]
+    # Grade range is a range/schema check, not a cross-field rule.
+    assert errors[0]["category"] == "schema"
+    assert errors[0]["rule"] == "grade_range"
     thumb.assert_not_called()
 
 
