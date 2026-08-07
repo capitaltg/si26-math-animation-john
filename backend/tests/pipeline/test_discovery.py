@@ -2,6 +2,12 @@ from unittest.mock import patch
 
 import pytest
 
+from app.pipeline.parsing import Block
+
+
+def _text_blocks(texts: list[str]) -> list[list[Block]]:
+    return [[Block(kind="text", table_ord=None, text=text)] for text in texts]
+
 
 @patch("app.pipeline.discovery.call_with_tool")
 def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
@@ -16,7 +22,7 @@ def test_discover_candidates_wraps_bedrock_response_into_candidates(mock_call):
         },
     )
 
-    candidates = discover_candidates(["The problem is 4 + 3."])
+    candidates = discover_candidates(_text_blocks(["The problem is 4 + 3."]))
 
     assert len(candidates) == 1
     assert candidates[0].source_excerpt == "4 + 3"
@@ -43,7 +49,7 @@ def test_discover_candidates_drops_out_of_chunk_slide_index(mock_call):
         },
     )
 
-    assert discover_candidates(["The problem is 4 + 3."]) == []
+    assert discover_candidates(_text_blocks(["The problem is 4 + 3."])) == []
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -63,7 +69,7 @@ def test_discover_candidates_drops_excerpt_not_on_reported_slide(mock_call):
         },
     )
 
-    assert discover_candidates(["The problem is 4 + 3."]) == []
+    assert discover_candidates(_text_blocks(["The problem is 4 + 3."])) == []
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -84,7 +90,7 @@ def test_discover_candidates_normalizes_whitespace_when_grounding(mock_call):
     )
 
     candidates = discover_candidates(
-        ["Sarah has 4 apples\nand buys 3 more."], start_index=25
+        _text_blocks(["Sarah has 4 apples\nand buys 3 more."]), start_index=25
     )
 
     assert len(candidates) == 1
@@ -116,20 +122,23 @@ def test_discover_candidates_for_document_applies_global_slide_offset(mock_call)
         )
 
     mock_call.side_effect = fake_call_with_tool
-    slide_texts = [f"slide {i}" for i in range(50)]
+    slide_blocks = _text_blocks([f"slide {i}" for i in range(50)])
 
-    candidates = discover_candidates_for_document(slide_texts, chunk_size=25)
+    candidates = discover_candidates_for_document(slide_blocks, chunk_size=25)
 
     assert mock_call.call_count == 2
-    # Chunk-local numbering (the bug) would report [0, 0] for both chunks since
-    # discover_candidates always started counting at 0 within each chunk.
+    # Chunk-local numbering (a past bug) would report [0, 0] for both chunks.
     # Correct global numbering must report the first slide of each chunk: 0 and 25.
     assert [c.slide_index for c in candidates] == [0, 25]
     assert candidates[1].slide_index >= 25
 
 
 @patch("app.pipeline.discovery.call_with_tool")
-def test_discover_candidates_accepts_ordered_noncontiguous_slide_tokens(mock_call):
+def test_discover_candidates_accepts_table_completion_with_header_and_data_cells(mock_call):
+    """The legitimate noncontiguous case: a table's cells get flattened onto
+    separate lines by parsing, but a reformatted "6 | 3"-style excerpt that
+    reassembles header + data cells from that one table must still ground.
+    """
     from app.pipeline.discovery import discover_candidates
 
     mock_call.return_value = (
@@ -149,16 +158,169 @@ def test_discover_candidates_accepts_ordered_noncontiguous_slide_tokens(mock_cal
             ]
         },
     )
-    slide_text = (
-        "ACTIVITY 1\n"
-        "A recipe says that 6 spring rolls will serve 3 people. Complete the table.\n"
-        "Source: page 2 of 5.\n"
-        "number of spring rolls\nnumber of people\n6\n3\n30\n40\n28"
-    )
+    slide_blocks = [[
+        Block(kind="text", table_ord=None, text="ACTIVITY 1"),
+        Block(
+            kind="text",
+            table_ord=None,
+            text="A recipe says that 6 spring rolls will serve 3 people. Complete the table.",
+        ),
+        Block(kind="text", table_ord=None, text="Source: page 2 of 5."),
+        Block(kind="cell", table_ord=0, text="number of spring rolls"),
+        Block(kind="cell", table_ord=0, text="number of people"),
+        Block(kind="cell", table_ord=0, text="6"),
+        Block(kind="cell", table_ord=0, text="3"),
+        Block(kind="cell", table_ord=0, text="30"),
+        Block(kind="cell", table_ord=0, text=""),
+        Block(kind="cell", table_ord=0, text=""),
+        Block(kind="cell", table_ord=0, text="40"),
+        Block(kind="cell", table_ord=0, text="28"),
+        Block(kind="cell", table_ord=0, text=""),
+    ]]
 
-    candidates = discover_candidates([slide_text])
+    candidates = discover_candidates(slide_blocks)
 
     assert len(candidates) == 1
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_cross_sentence_splice_without_table(mock_call):
+    """The reported P0: a candidate excerpt stitched from two unrelated
+    sentences, using real tokens from both, must not ground just because the
+    tokens appear in the same relative order somewhere on the slide.
+    """
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Mia has 3 oranges.",
+                    "slide_index": 0,
+                    "one_line_summary": "Mia's oranges",
+                }
+            ]
+        },
+    )
+
+    candidates = discover_candidates(
+        _text_blocks(["Mia has 3 apples. The class takes a break. Noah has 5 oranges."])
+    )
+
+    assert candidates == []
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_rejects_cross_sentence_splice_with_unrelated_table_present(
+    mock_call,
+):
+    """Same splice as above, but the slide also has an unrelated table. The
+    word "oranges" must not be able to ride the table-suffix allowance just
+    because a table exists somewhere on the slide.
+    """
+    from app.pipeline.discovery import discover_candidates
+
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": "Mia has 3 oranges.",
+                    "slide_index": 0,
+                    "one_line_summary": "Mia's oranges",
+                }
+            ]
+        },
+    )
+    slide_blocks = [[
+        Block(
+            kind="text",
+            table_ord=None,
+            text="Mia has 3 apples. The class takes a break. Noah has 5 oranges.",
+        ),
+        Block(kind="cell", table_ord=0, text="width"),
+        Block(kind="cell", table_ord=0, text="4"),
+        Block(kind="cell", table_ord=0, text="height"),
+        Block(kind="cell", table_ord=0, text="6"),
+    ]]
+
+    candidates = discover_candidates(slide_blocks)
+
+    assert candidates == []
+
+
+def test_grounding_rejects_number_spliced_across_two_tables():
+    """Two tables on one slide; a suffix built from one table's number plus
+    another table's number must not ground by treating both tables as one
+    merged pool of tokens.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="6 20",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="6"),
+        Block(kind="cell", table_ord=0, text="3"),
+        Block(kind="cell", table_ord=1, text="10"),
+        Block(kind="cell", table_ord=1, text="20"),
+    ]]
+
+    assert not _is_grounded(item, slide_blocks, start_index=0)
+
+
+def test_grounding_accepts_table_suffix_requiring_skip_not_greedy_match():
+    """Regression guard for _suffix_from_whole_cells: a greedy leftmost-match
+    (consume the first cell that matches at the current position, then
+    never reconsider it) would wrongly fail here. A text-block prefix
+    forces the excerpt through the split-loop's suffix-DP path rather than
+    the whole-excerpt-in-one-cell shortcut (the excerpt doesn't fit inside
+    either single cell, so that shortcut doesn't fire). The suffix "width
+    value" is directly matched by the second cell alone — a greedy walker
+    that commits to the first cell ("width") because it matches at
+    position 0 would advance past it and then fail to match the remaining
+    one-token gap against the two-token second cell, wrongly rejecting.
+    The DP must keep position 0 reachable (the option of not consuming the
+    first cell) so the second cell can still match there.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Find the width value.",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+    slide_blocks = [[
+        Block(kind="text", table_ord=None, text="Find the"),
+        Block(kind="cell", table_ord=0, text="width"),
+        Block(kind="cell", table_ord=0, text="width value"),
+    ]]
+
+    assert _is_grounded(item, slide_blocks, start_index=0)
+
+
+def test_grounding_rejects_splice_built_from_two_cells_in_same_table():
+    """Regression guard for the table-cell variant of the P0 splice: prose
+    living in two cells of one table, spliced the same way as the
+    text-block P0, must not ground just because both real words appear
+    somewhere in that table's pooled cell tokens.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Mia has 3 oranges.",
+        slide_index=0,
+        one_line_summary="Mia's oranges",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="Mia has 3 apples."),
+        Block(kind="cell", table_ord=0, text="Noah has 5 oranges."),
+    ]]
+
+    assert not _is_grounded(item, slide_blocks, start_index=0)
 
 
 @pytest.mark.parametrize(
@@ -189,7 +351,26 @@ def test_grounding_rejects_changed_reordered_or_empty_content(
         one_line_summary="summary",
     )
 
-    assert not _is_grounded(item, [slide_text], start_index=0)
+    assert not _is_grounded(item, _text_blocks([slide_text]), start_index=0)
+
+
+def test_grounding_accepts_unspaced_letter_hyphen_digit_against_spaced_excerpt():
+    """Regression guard for the shared _GROUNDING_TOKEN_RE: a slide that
+    renders "x-5" unspaced must still ground an excerpt that spells the same
+    expression with spaces ("x - 5"), since a narrower lookbehind on the
+    negative-number branch could tokenize "x-5" as ['x', '-5'] (letter
+    swallowed into the operand) instead of ['x', '-', '5'], breaking the
+    contiguous match here in discovery.py.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="Solve x - 5 = 12.",
+        slide_index=0,
+        one_line_summary="Solve for x",
+    )
+
+    assert _is_grounded(item, _text_blocks(["Solve x-5=12."]), start_index=0)
 
 
 def test_grounding_rejects_omitted_standalone_division_operator():
@@ -201,7 +382,7 @@ def test_grounding_rejects_omitted_standalone_division_operator():
         one_line_summary="summary",
     )
 
-    assert not _is_grounded(item, ["Use 6 3 = 2."], start_index=0)
+    assert not _is_grounded(item, _text_blocks(["Use 6 3 = 2."]), start_index=0)
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -223,7 +404,7 @@ def test_discover_candidates_rejects_omitted_standalone_multiplication_operator(
         },
     )
 
-    assert discover_candidates(["Use 6 3 = 18."]) == []
+    assert discover_candidates(_text_blocks(["Use 6 3 = 18."])) == []
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -243,7 +424,7 @@ def test_discover_candidates_rejects_omitted_exponentiation_symbol(mock_call):
         },
     )
 
-    assert discover_candidates(["Use 2 3 = 8."]) == []
+    assert discover_candidates(_text_blocks(["Use 2 3 = 8."])) == []
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -263,7 +444,7 @@ def test_discover_candidates_rejects_omitted_percent_symbol(mock_call):
         },
     )
 
-    assert discover_candidates(["Find 50 of 20."]) == []
+    assert discover_candidates(_text_blocks(["Find 50 of 20."])) == []
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -283,7 +464,7 @@ def test_discover_candidates_rejects_omitted_grouping_symbol(mock_call):
         },
     )
 
-    assert discover_candidates(["Use 2 + 3 * 4."]) == []
+    assert discover_candidates(_text_blocks(["Use 2 + 3 * 4."])) == []
 
 
 @pytest.mark.parametrize(
@@ -300,7 +481,7 @@ def test_grounding_rejects_changed_leading_dot_decimal(slide_text):
         one_line_summary="Measure sugar",
     )
 
-    assert not _is_grounded(item, [slide_text], start_index=0)
+    assert not _is_grounded(item, _text_blocks([slide_text]), start_index=0)
 
 
 @patch("app.pipeline.discovery.call_with_tool")
@@ -323,7 +504,7 @@ def test_discover_candidates_filters_malformed_item_without_dropping_valid_item(
         },
     )
 
-    candidates = discover_candidates(["The problem is 4 + 3."])
+    candidates = discover_candidates(_text_blocks(["The problem is 4 + 3."]))
 
     assert [candidate.source_excerpt for candidate in candidates] == ["4 + 3"]
     candidate_schema = mock_call.call_args.kwargs["tools"][0]["schema"]["$defs"][
@@ -345,4 +526,4 @@ def test_discover_candidates_rejects_malformed_top_level_envelope(mock_call):
     mock_call.return_value = ("report_candidates", {"candidates": {"source_excerpt": "4 + 3"}})
 
     with pytest.raises(ValidationError):
-        discover_candidates(["The problem is 4 + 3."])
+        discover_candidates(_text_blocks(["The problem is 4 + 3."]))

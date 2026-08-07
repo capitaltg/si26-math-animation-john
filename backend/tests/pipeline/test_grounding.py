@@ -173,3 +173,241 @@ def test_array_grid_chain_grounds_start_and_factors_without_dimensions():
         params,
         "Start with 24 counters, divide by 3, then multiply by 2.",
     ) == []
+
+
+def test_duplicate_param_token_requires_duplicate_source_occurrence():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Source has one "3"; params want two.
+    params = _StubParams(tokens=["3", "3"], derived_totals=[])
+    assert check_params_grounded(
+        params,
+        "A box has 3 red balls and 5 blue balls.",
+    ) == ["3"]
+
+
+# ---------------------------------------------------------------------------
+# Multiset + occurrence-binding coverage (spec 2026-08-06)
+# ---------------------------------------------------------------------------
+
+
+def test_two_source_occurrences_allow_two_duplicate_params():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3", "3"], derived_totals=[])
+    assert check_params_grounded(params, "3 red balls and 3 blue balls") == []
+
+
+def test_single_param_still_grounded_against_single_source_occurrence():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3"], derived_totals=[])
+    assert check_params_grounded(params, "A box has 3 red balls and 5 blue balls.") == []
+
+
+def test_out_of_order_param_tokens_still_ground():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["5", "3"], derived_totals=[])
+    assert check_params_grounded(params, "3 red balls and 5 blue balls") == []
+
+
+def test_derived_total_uses_fresh_multiset_independent_of_literal_pass():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Literal pass consumes the source 3 and 5; the derived total's
+    # components must still ground because the derived pass uses a fresh copy.
+    params = _StubParams(
+        tokens=["3", "5", "8"],
+        derived_totals=[("8", ["3", "5"])],
+    )
+    assert check_params_grounded(params, "3 red balls and 5 blue balls") == []
+
+
+def test_duplicated_component_in_derived_total_requires_two_source_occurrences():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Abuse case: `[3, 3, 6]` with derived `6 <- [3, 3]` against a source
+    # that has one 3. Literal consumes source 3, second param 3 stays
+    # ungrounded. Derived total's components need two source 3s — fresh
+    # multiset has one — so `6` cannot be vouched for as a derived total.
+    params = _StubParams(
+        tokens=["3", "3", "6"],
+        derived_totals=[("6", ["3", "3"])],
+    )
+    assert check_params_grounded(params, "3 red balls and 5 blue balls") == ["3", "6"]
+
+
+def test_derived_product_total_grounds_when_components_do():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["2", "3", "6"],
+        derived_totals=[("6", ["2", "3"], "product")],
+    )
+    assert check_params_grounded(params, "2 rows and 3 columns") == []
+
+
+def test_source_with_extra_occurrence_grounds_repeated_components_and_total():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["3", "3", "6"],
+        derived_totals=[("6", ["3", "3"])],
+    )
+    assert check_params_grounded(params, "3 and 3 more give what, out of 5?") == []
+
+
+def test_integer_and_float_forms_of_same_value_collide():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3"], derived_totals=[])
+    assert check_params_grounded(params, "The mass is 3.0 kilograms.") == []
+
+
+def test_half_as_fraction_and_decimal_collide():
+    from app.pipeline.grounding import check_params_grounded
+
+    params_frac_source = _StubParams(tokens=["0.5"], derived_totals=[])
+    assert check_params_grounded(params_frac_source, "One 1/2 remains.") == []
+
+    params_decimal_source = _StubParams(tokens=["1/2"], derived_totals=[])
+    assert check_params_grounded(params_decimal_source, "One 0.5 remains.") == []
+
+
+def test_negative_values_ground_against_negative_source():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["-3", "5"], derived_totals=[])
+    assert check_params_grounded(params, "Start at -3 and add 5.") == []
+
+
+def test_two_negative_params_need_two_negative_source_occurrences():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["-3", "-3"], derived_totals=[])
+    assert check_params_grounded(params, "Start at -3 and add 5.") == ["-3"]
+
+
+def test_unicode_minus_sign_normalizes_to_ascii_hyphen():
+    from app.pipeline.grounding import check_params_grounded, tokenize_for_grounding
+
+    assert tokenize_for_grounding("Start at −3 and add 5.") == ["start", "at", "-3", "and", "add", "5"]
+
+    params = _StubParams(tokens=["-3", "5"], derived_totals=[])
+    assert check_params_grounded(params, "Start at −3 and add 5.") == []
+
+
+def test_distinct_fractions_ground_against_matching_source():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["1/2", "1/4"], derived_totals=[])
+    assert check_params_grounded(params, "Combine 1/2 and 1/4.") == []
+
+
+def test_duplicate_fraction_param_requires_duplicate_source():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["1/2", "1/2"], derived_totals=[])
+    assert check_params_grounded(params, "Combine 1/2 and 1/4.") == ["1/2"]
+
+
+def test_atomic_decimal_grounds_end_to_end():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3.14"], derived_totals=[])
+    assert check_params_grounded(params, "The value is 3.14 exactly.") == []
+
+
+def test_cross_problem_boundary_is_documented_not_prevented():
+    """Multiset alone cannot separate two problems that share numbers on
+    the same excerpt. This test pins the current limit; solving it fully
+    would require shape/cell coord binding (see spec's Future work).
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    # Excerpt contains both problems. Params for Problem A ask for four
+    # tokens; source multiset has 2×3 + 1×5 + 1×7 = four occurrences, so
+    # they all bind. The binding is not necessarily to Problem A's numbers.
+    params = _StubParams(tokens=["3", "5", "3", "7"], derived_totals=[])
+    assert check_params_grounded(
+        params,
+        "Problem A: 3 + 5. Problem B: 3 + 7.",
+    ) == []
+
+
+def test_word_token_falls_through_canonical_key_untouched():
+    from app.pipeline.grounding import _canonical_key
+
+    # Sanity: word tokens (value is None) key on themselves; distinct
+    # words never collide with numeric canonicals.
+    assert _canonical_key("three") == "three"
+    assert _canonical_key("three") != _canonical_key("3")
+
+
+def test_unspaced_hyphen_between_digits_stays_operator_and_operand():
+    from app.pipeline.grounding import tokenize_for_grounding
+
+    # Regression: unspaced hyphens between digits must stay as separate tokens
+    # (operator + operand), not collapse into a single negative number token.
+    # This protects range notation "10-20" and subtraction "5-3" in discovery.py
+    # and other callsites.
+    assert tokenize_for_grounding("5-3") == ["5", "-", "3"]
+    assert tokenize_for_grounding("10-20") == ["10", "-", "20"]
+
+
+def test_unspaced_hyphen_after_letter_stays_operator_and_operand():
+    from app.pipeline.grounding import tokenize_for_grounding
+
+    # Regression: the digit-only lookbehind let a preceding LETTER through,
+    # so "x-5" tokenized as ['x', '-5'] instead of ['x', '-', '5']. Widening
+    # the lookbehind to exclude any word char or "." fixes this while
+    # preserving the digit-digit and negative-number behavior above.
+    assert tokenize_for_grounding("x-5") == ["x", "-", "5"]
+    assert tokenize_for_grounding("grade-3") == ["grade", "-", "3"]
+
+
+def test_legitimate_repeated_value_written_once_is_rejected_by_design():
+    """Multiset semantics cannot distinguish 'source legitimately repeats a
+    value the extractor also legitimately repeats, but the source text only
+    spells it out once' from a hallucinated duplicate operand. This is an
+    accepted false-positive: the security goal (reject params claiming more
+    occurrences than the source contains) takes priority. See spec's Risk
+    table / migration audit for the intended mitigation path.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["3", "3", "6"],
+        derived_totals=[("6", ["3", "3"])],
+    )
+    # Source text says "3" once even though two boxes of 3 pounds are meant.
+    # "6" grounds literally (source has "6-pound" once); the derived-total
+    # pass for 6 <- [3, 3] needs a fresh copy with two "3"s but only finds
+    # one, so it is not vouched for as a derived total either. Only the
+    # second "3" is left ungrounded.
+    assert check_params_grounded(
+        params,
+        "Two boxes of 3 pounds each balance a 6-pound box.",
+    ) == ["3"]
+
+
+def test_negative_decimal_and_fraction_forms_collide():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["-0.5"], derived_totals=[])
+    assert check_params_grounded(params, "The change is -1/2 a unit.") == []
+
+
+def test_duplicate_derived_total_claim_is_not_multiset_checked():
+    """allowed_totals is a set of canonical keys, not a multiset — claiming
+    the same derived total twice both ground even though only one component
+    pair exists in the source. Accepted: derived totals are computed values,
+    not literal source quotes, so multiset-binding doesn't apply to them."""
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["8", "8"],
+        derived_totals=[("8", ["3", "5"])],
+    )
+    assert check_params_grounded(params, "3 apples and 5 oranges.") == []

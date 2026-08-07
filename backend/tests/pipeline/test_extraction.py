@@ -343,6 +343,24 @@ def test_dynamic_template_extraction_is_not_judged_by_static_schema_criteria(moc
 
 
 @patch("app.pipeline.extraction.call_with_tool")
+def test_extract_params_rejects_duplicated_operand_not_in_source(mock_call):
+    """LLM emitting a duplicated numeric that the source only has once
+    must now raise TemplateMismatchError instead of silently passing."""
+    import pytest
+
+    from app.pipeline.extraction import TemplateMismatchError, extract_params
+    from app.templates.balance_scale.params import BalanceScaleParams
+
+    mock_call.return_value = ("report_params", {"left_terms": [3, 3], "right_total": 6})
+
+    with pytest.raises(TemplateMismatchError, match="not grounded"):
+        extract_params(
+            "A box has 3 red balls and 5 blue balls. How many balls?",
+            BalanceScaleParams,
+        )
+
+
+@patch("app.pipeline.extraction.call_with_tool")
 def test_static_template_extraction_keeps_its_tuned_prompt(mock_call):
     """The six static templates keep the prompt their extraction was tuned against."""
     from app.pipeline.extraction import _EXTRACTION_SYSTEM_PROMPT, extract_params
