@@ -73,13 +73,16 @@ def test_valid_multiplicative_chain_passes():
 
 
 def test_non_exact_division_in_chain_is_allowed():
+    from fractions import Fraction
+
     from app.templates.array_grid.params import ArrayGridParams, ArrayGridStep
 
     # Non-exact divisions are now allowed and handled as fractions in compute_answer
     params = ArrayGridParams(
         rows=2, cols=3, steps=[ArrayGridStep(operation="divide", factor=4)]
     )
-    assert params is not None
+    # 2*3=6, then 6/4 = 3/2
+    assert params.compute_answer() == Fraction(3, 2)
 
 
 def test_chain_total_can_reflow_away_from_fixed_cols():

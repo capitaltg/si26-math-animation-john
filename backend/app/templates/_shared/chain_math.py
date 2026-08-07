@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 OPERATION_SYMBOLS = {"add": "+", "subtract": "-", "multiply": "×", "divide": "÷"}
 
 
@@ -10,12 +12,12 @@ def run_additive_chain(start: int, ops: list[tuple[str, int]]) -> list[int]:
     return values
 
 
-def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[int]:
+def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[Fraction]:
     if start <= 0:
         raise ValueError(f"Multiplicative chain must start from a positive value ({start})")
 
-    values = [start]
-    running = start
+    values: list[Fraction] = [Fraction(start)]
+    running = Fraction(start)
     for operation, factor in ops:
         if operation == "multiply":
             running = running * factor
@@ -24,8 +26,8 @@ def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[int
                 raise ValueError(
                     f"Division by zero: {running} / {factor}"
                 )
-            # Allow non-exact division; compute_answer will handle Fraction results
-            running = running // factor
+            # Allow non-exact division; Fraction will handle exact representation
+            running = running / factor
         if running <= 0:
             raise ValueError(
                 f"Multiplicative chain produced a non-positive value ({running})"
@@ -36,4 +38,8 @@ def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[int
 
 def format_operation_caption(a, operation: str, b, result) -> str:
     symbol = OPERATION_SYMBOLS[operation]
-    return f"{a} {symbol} {b} = {result}"
+    # Convert Fractions to string representation (int if whole number, "n/d" otherwise)
+    a_str = str(int(a)) if isinstance(a, Fraction) and a.denominator == 1 else str(a)
+    b_str = str(int(b)) if isinstance(b, Fraction) and b.denominator == 1 else str(b)
+    result_str = str(int(result)) if isinstance(result, Fraction) and result.denominator == 1 else str(result)
+    return f"{a_str} {symbol} {b_str} = {result_str}"

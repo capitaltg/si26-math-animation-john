@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 import pytest
 
 from app.templates._shared.chain_math import (
@@ -16,13 +18,17 @@ def test_run_additive_chain_with_no_ops_returns_just_the_start():
 
 
 def test_run_multiplicative_chain_applies_multiply_and_exact_divide():
-    assert run_multiplicative_chain(4, [("multiply", 6), ("divide", 3)]) == [4, 24, 8]
+    assert run_multiplicative_chain(4, [("multiply", 6), ("divide", 3)]) == [
+        Fraction(4),
+        Fraction(24),
+        Fraction(8),
+    ]
 
 
 def test_run_multiplicative_chain_allows_non_exact_division():
-    # Non-exact division is now allowed and will be represented as a fraction in compute_answer
+    # Non-exact division is now allowed and returned as Fraction
     result = run_multiplicative_chain(10, [("divide", 3)])
-    assert result == [10, 3]  # 10 // 3 = 3
+    assert result == [Fraction(10), Fraction(10, 3)]
 
 
 def test_run_multiplicative_chain_rejects_zero_divisor():
@@ -49,3 +55,20 @@ def test_format_operation_caption_with_fraction_strings():
 def test_format_operation_caption_uses_multiplication_and_division_symbols():
     assert format_operation_caption(24, "divide", 3, 8) == "24 ÷ 3 = 8"
     assert format_operation_caption(4, "multiply", 6, 24) == "4 × 6 = 24"
+
+
+def test_format_operation_caption_with_fractional_result():
+    # Non-exact division produces fractional captions
+    assert (
+        format_operation_caption(Fraction(7), "divide", 2, Fraction(7, 2))
+        == "7 ÷ 2 = 7/2"
+    )
+
+
+def test_run_multiplicative_chain_caption_with_non_exact_division():
+    # Test that captions are truthful for non-exact divisions
+    totals = run_multiplicative_chain(7, [("divide", 2)])
+    caption = format_operation_caption(totals[0], "divide", 2, totals[1])
+    assert caption == "7 ÷ 2 = 7/2"
+    # Verify the result is the correct Fraction
+    assert totals[1] == Fraction(7, 2)
