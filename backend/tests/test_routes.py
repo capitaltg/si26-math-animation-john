@@ -447,6 +447,44 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
 
 
+def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
+    from fractions import Fraction
+
+    from app.models.scene import Scene, TemplateName
+    from app.templates.registry import static_ref
+
+    client = _client()
+    _upload_candidate(client)
+    _options_then(client)
+
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"png")
+    fake = Scene(
+        scene_id="s1",
+        candidate_id="c1",
+        template=static_ref(TemplateName.NUMBER_LINE),
+        grade_level=1,
+        params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
+        status="pending_review",
+        thumbnail_path=thumb,
+        stated_answer=Fraction(9),
+        stated_answer_source="= 9",
+    )
+
+    with patch("app.routes.assemble_scene", return_value=fake):
+        resp = client.post(
+            "/storyboard",
+            json={"picks": [{"candidate_id": "c1", "template": "number_line"}]},
+        )
+
+    assert resp.status_code == 200
+    scene = resp.json()["scenes"][0]
+    assert scene["stated_answer"] == "9"
+    assert scene["stated_answer_source"] == "= 9"
+    assert scene["mismatch"] == {"stated": "9", "computed": "7"}
+    assert scene["mismatch_acknowledged"] is False
+
+
 def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
     # meta_templates_enabled defaults to False, so the storyboard route must behave
     # exactly as before — record_unsupported_shape returns immediately. We

@@ -2,7 +2,7 @@ from fractions import Fraction
 
 from app.models.scene import Scene
 from app.pipeline.mismatch import (
-    _format_answer,
+    format_answer,
     compute_answer_for,
     scene_mismatch,
 )
@@ -29,14 +29,14 @@ def _number_line_scene(
     )
 
 
-def test_format_answer_integer_valued():
-    assert _format_answer(Fraction(9)) == "9"
-    assert _format_answer(Fraction(-3)) == "-3"
+def testformat_answer_integer_valued():
+    assert format_answer(Fraction(9)) == "9"
+    assert format_answer(Fraction(-3)) == "-3"
 
 
-def test_format_answer_proper_fraction():
-    assert _format_answer(Fraction(1, 2)) == "1/2"
-    assert _format_answer(Fraction(2, 4)) == "1/2"  # reduced
+def testformat_answer_proper_fraction():
+    assert format_answer(Fraction(1, 2)) == "1/2"
+    assert format_answer(Fraction(2, 4)) == "1/2"  # reduced
 
 
 def test_compute_answer_for_number_line():

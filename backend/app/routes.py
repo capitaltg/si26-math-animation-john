@@ -19,6 +19,7 @@ from app.models.scene import (
 )
 from app.pipeline.classification import ClassificationResult, classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
+from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
@@ -110,6 +111,10 @@ class SceneOut(BaseModel):
     thumbnail_url: str | None = None
     source_excerpt: str
     detected_summary: str
+    stated_answer: str | None = None
+    stated_answer_source: str | None = None
+    mismatch: dict | None = None
+    mismatch_acknowledged: bool = False
 
 
 class StoryboardRequest(BaseModel):
@@ -313,6 +318,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
     else:
         source_excerpt = scene.manual_source_text or ""
         detected_summary = ""
+    stated_answer_display = (
+        format_answer(scene.stated_answer) if scene.stated_answer is not None else None
+    )
+    mismatch = scene_mismatch(scene)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -327,6 +336,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         thumbnail_url=thumbnail_url,
         source_excerpt=source_excerpt,
         detected_summary=detected_summary,
+        stated_answer=stated_answer_display,
+        stated_answer_source=scene.stated_answer_source,
+        mismatch=mismatch,
+        mismatch_acknowledged=scene.mismatch_acknowledged,
     )
 
 

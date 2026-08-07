@@ -4,7 +4,7 @@ from app.models.scene import Scene
 from app.templates.registry import get_chained_template, get_template
 
 
-def _format_answer(value: Fraction) -> str:
+def format_answer(value: Fraction) -> str:
     if value.denominator == 1:
         return str(value.numerator)
     return f"{value.numerator}/{value.denominator}"
@@ -33,6 +33,6 @@ def scene_mismatch(scene: Scene) -> dict | None:
     if computed == scene.stated_answer:
         return None
     return {
-        "stated": _format_answer(scene.stated_answer),
-        "computed": _format_answer(computed),
+        "stated": format_answer(scene.stated_answer),
+        "computed": format_answer(computed),
     }
