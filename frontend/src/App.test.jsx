@@ -47,6 +47,13 @@ const pendingScene = {
   thumbnail_url: null,
   source_excerpt: candidate.source_excerpt,
   detected_summary: candidate.one_line_summary,
+  scene_program: {
+    template: { name: 'number_line', version_id: 'v1', artifact_hash: 'a' },
+    params: { start: 4, steps: [{ operation: 'add', amount: 3 }] },
+  },
+  scene_program_hash: 'a4f2b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f80917263544352617abcde',
+  compile_ms: 0.12,
+  program_size: 128,
 }
 
 const pendingScene2 = {
@@ -540,6 +547,21 @@ it('surfaces the schema table under a View schema toggle', async () => {
   const startRow = screen.getByRole('row', { name: /^start\s+integer/ })
   expect(within(startRow).getByText('4')).not.toBeNull()
   expect(screen.getByRole('button', { name: 'Hide schema' })).not.toBeNull()
+})
+
+it('surfaces the deterministic compile step with a hash and program toggle', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  const stamp = screen.getByText('Compiled deterministically').closest('li')
+  expect(stamp.getAttribute('data-state')).toBe('done')
+
+  const badge = screen.getByTestId('compile-badge')
+  expect(within(badge).getByText(/^sha256:a4f2b7c8…$/)).not.toBeNull()
+
+  fireEvent.click(within(badge).getByRole('button', { name: 'View compiled program' }))
+  expect(within(badge).getByLabelText('Compiled scene program').textContent).toContain('"number_line"')
+  expect(within(badge).getByRole('button', { name: 'Hide compiled program' })).not.toBeNull()
 })
 
 it('flags Semantic check failed and leaves Schema check passing for a cross-field 422', async () => {

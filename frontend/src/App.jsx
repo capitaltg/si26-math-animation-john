@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CompileBadge from './CompileBadge'
 import MetaReviewPanel from './MetaReviewPanel'
 import SchemaForm from './SchemaForm'
 import TemplateWorkshop from './TemplateWorkshop'
@@ -507,6 +508,9 @@ function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
       : extracted
         ? 'done'
         : 'todo'
+  // Compile is a pure function of (template, params); the backend runs it and
+  // exposes the hash so the audience can see this step is not model output.
+  const compiled = !!scene.scene_program_hash
   const stamps = [
     { label: 'Values extracted', state: extracted ? 'done' : 'todo' },
     {
@@ -514,6 +518,10 @@ function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
       state: schemaFailed ? 'failed' : extracted ? 'done' : 'todo',
     },
     { label: 'Semantic check', state: semanticState },
+    {
+      label: 'Compiled deterministically',
+      state: compiled && !semanticFailed && !schemaFailed ? 'done' : 'todo',
+    },
     { label: 'Preview rendered', state: scene.thumbnail_url ? 'done' : 'todo' },
     {
       label: rejected ? 'Rejected — will not render' : 'Approved for render',
@@ -529,6 +537,7 @@ function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
           <Stamp key={stamp.label} label={stamp.label} state={stamp.state} />
         ))}
       </ul>
+      <CompileBadge scene={scene} />
     </div>
   )
 }
