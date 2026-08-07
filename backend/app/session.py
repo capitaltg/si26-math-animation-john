@@ -1,4 +1,5 @@
 import shutil
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,6 +47,9 @@ class Session:
     scene_requested_template: dict[str, TemplateRef] = field(default_factory=dict)
     scene_chain_members: dict[str, list[str]] = field(default_factory=dict)
     template_requests: dict[str, TemplateRequest] = field(default_factory=dict)
+    #: Guards read-modify-write of `scenes` so a concurrent edit and approve
+    #: can't silently overwrite one another; see `_write_scene_cas` in routes.py.
+    scenes_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
 
 class SessionStore:

@@ -761,6 +761,31 @@ def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
     thumb.assert_not_called()
 
 
+def test_patch_failed_thumbnail_regen_leaves_old_approval_intact(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    with patch("app.routes.render_scene_thumbnail", side_effect=RuntimeError("boom")):
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
+        )
+
+    assert resp.status_code == 500
+
+    from app.routes import store
+
+    session = store.get(client.cookies["session_id"])
+    scene = session.scenes["s1"]
+    assert scene.status == "approved"
+    assert scene.params["start"] == 4  # original params, edit never committed
+    assert scene.revision == 0
+
+
 def test_patch_grade_sets_overridden(tmp_path):
     client = _client()
     _upload_candidate(client)
@@ -910,6 +935,188 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
     )
     assert body["detected_summary"] == "Detected: 4 + 3 / Detected: 4 + 3"
     assert body["params_schema"]["properties"]["items"]["type"] == "array"
+
+
+def test_patch_params_resets_approved_scene_to_pending_review(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    with patch("app.routes.render_scene_thumbnail"):
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending_review"
+
+
+def test_patch_grade_resets_approved_scene_to_pending_review(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": 5})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending_review"
+
+
+def test_patch_empty_body_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    resp = client.patch("/storyboard/s1", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=lambda t, p, out: out.write_bytes(b"mp4")):
+        render_resp = client.post("/render")
+    assert render_resp.status_code == 200
+
+
+def test_patch_same_grade_level_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": approved.grade_level})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
+def test_patch_same_params_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    with patch("app.routes.render_scene_thumbnail"):
+        resp = client.patch("/storyboard/s1", json={"params": approved.params})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
+def test_patch_resets_rejected_scene_to_pending_review(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    rejected = _number_line_scene(tmp_path).model_copy(update={"status": "rejected"})
+    _seed_scene(client, rejected)
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": 5})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending_review"
+
+
+def test_edited_approved_scene_cannot_render_until_reapproved(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    with patch("app.routes.render_scene_thumbnail"):
+        client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
+        )
+
+    resp = client.post("/render")
+    assert resp.status_code == 400  # nothing approved
+
+
+def test_approve_records_revision_edit_after_approve_does_not_authorize_render(tmp_path):
+    """An approval for an old revision cannot authorize a newer, unapproved revision.
+
+    Simulates a hypothetical mutation path that changes render-affecting scene
+    content without resetting status (defense in depth beyond the PATCH-side
+    status reset already covered above).
+    """
+    from app.routes import store
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    approve_resp = client.post("/storyboard/s1/approve")
+    assert approve_resp.status_code == 200
+
+    session = store.get(client.cookies["session_id"])
+    stale = session.scenes["s1"]
+    assert stale.approved_revision == stale.revision
+    session.scenes["s1"] = stale.model_copy(
+        update={"params": {"start": 99, "steps": []}, "revision": stale.revision + 1}
+    )
+
+    def fake_render(template, params, out):
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=fake_render):
+        resp = client.post("/render")
+
+    assert resp.status_code == 400  # approval no longer matches current revision
+
+
+def test_concurrent_edit_and_approve_conflicts(tmp_path, monkeypatch):
+    """A late edit and a simultaneous approve must not silently pick a winner."""
+    import threading
+
+    from app import routes
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_cas = routes._write_scene_cas
+
+    def delayed_cas(session, scene_id, base_revision, updates):
+        started.set()
+        assert proceed.wait(timeout=5)
+        return original_cas(session, scene_id, base_revision, updates)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", delayed_cas)
+
+    results = {}
+
+    def do_approve():
+        results["approve"] = client.post("/storyboard/s1/approve")
+
+    thread = threading.Thread(target=do_approve)
+    thread.start()
+    assert started.wait(timeout=5)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", original_cas)
+    edit_resp = client.patch("/storyboard/s1", json={"grade_level": 6})
+    assert edit_resp.status_code == 200
+
+    proceed.set()
+    thread.join(timeout=5)
+
+    assert results["approve"].status_code == 409
 
 
 def test_chain_combines_two_scenes_into_one(tmp_path):

@@ -233,6 +233,14 @@ def get_options(
     return OptionsResponse(options=results)
 
 
+def _is_render_ready(scene: Scene) -> bool:
+    if scene.status != "approved":
+        return False
+    # `approved_revision` is only absent for scenes that never went through the
+    # approve endpoint (e.g. seeded directly in tests); those are trusted as-is.
+    return scene.approved_revision is None or scene.approved_revision == scene.revision
+
+
 @router.post("/render", response_model=RenderResponse)
 def render(session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
@@ -242,7 +250,7 @@ def render(session_id: str | None = Cookie(default=None)):
     approved = [
         session.scenes[sid]
         for sid in session.scene_order
-        if session.scenes[sid].status == "approved"
+        if _is_render_ready(session.scenes[sid])
     ]
     if not approved:
         raise HTTPException(status_code=400, detail="No approved scenes to render")
@@ -548,6 +556,31 @@ def _field_errors(exc: ValidationError) -> dict:
     return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
 
 
+def _write_scene_cas(
+    session, scene_id: str, base_revision: int, updates: dict, *, bump_revision: bool = True
+) -> Scene:
+    """Commit `updates` to a scene, rejecting the write if it raced another one.
+
+    Both the initial read and this write must agree on `revision`, so a request
+    that read stale data (e.g. it raced a concurrent edit or approve) gets a 409
+    instead of silently clobbering the other request's change. `bump_revision`
+    is False for writes that don't change render-affecting content (e.g. a
+    no-op PATCH), so they can't drift `revision` away from `approved_revision`
+    and invalidate an approval that nothing actually changed.
+    """
+    with session.scenes_lock:
+        current = session.scenes[scene_id]
+        if current.revision != base_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="Scene was modified by another request; reload and try again",
+            )
+        next_revision = base_revision + 1 if bump_revision else base_revision
+        updated = current.model_copy(update={**updates, "revision": next_revision})
+        session.scenes[scene_id] = updated
+    return updated
+
+
 @router.patch("/storyboard/{scene_id}", response_model=SceneOut)
 def edit_scene(
     scene_id: str,
@@ -574,6 +607,7 @@ def edit_scene(
 
     new_params = scene.params
     new_thumb = scene.thumbnail_path
+    params_changed = False
     if request.params is not None:
         if scene.candidate_ids:
             _, params_cls = get_chained_template(scene.template)
@@ -593,19 +627,28 @@ def edit_scene(
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")
         new_thumb = out
+        params_changed = new_params != scene.params
 
     grade = request.grade_level if request.grade_level is not None else scene.grade_level
     grade_overridden = scene.grade_overridden or request.grade_level is not None
+    grade_changed = request.grade_level is not None and request.grade_level != scene.grade_level
 
-    updated = scene.model_copy(
-        update={
-            "params": new_params,
-            "thumbnail_path": new_thumb,
-            "grade_level": grade,
-            "grade_overridden": grade_overridden,
-        }
+    updates = {
+        "params": new_params,
+        "thumbnail_path": new_thumb,
+        "grade_level": grade,
+        "grade_overridden": grade_overridden,
+    }
+    # A real content change invalidates any prior review decision; the teacher
+    # must re-review before it can render again. A no-op PATCH (empty body, or
+    # a field resent unchanged) must not revoke a standing approval.
+    content_changed = params_changed or grade_changed
+    if content_changed and scene.status in ("approved", "rejected"):
+        updates["status"] = "pending_review"
+
+    updated = _write_scene_cas(
+        session, scene_id, scene.revision, updates, bump_revision=content_changed
     )
-    session.scenes[scene_id] = updated
     return _scene_out(updated, candidates)
 
 
@@ -615,8 +658,12 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
     scene = _lookup_active_scene(session, scene_id)
     candidates = _lookup_candidates(session, scene)
-    updated = scene.model_copy(update={"status": status})
-    session.scenes[scene_id] = updated
+    updates = {"status": status}
+    if status == "approved":
+        # Pins the approval to the revision it was granted for; render checks
+        # this so a later edit (or a lost race) can't ride on a stale approval.
+        updates["approved_revision"] = scene.revision + 1
+    updated = _write_scene_cas(session, scene_id, scene.revision, updates)
     return _scene_out(updated, candidates)
 
 
