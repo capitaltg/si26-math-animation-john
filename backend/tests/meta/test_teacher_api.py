@@ -715,3 +715,155 @@ def test_clearing_a_ready_build_is_refused(client):
     assert client.get("/meta/my/builds").json()[0]["stage"] == "ready"
 
     assert client.delete("/meta/my/builds/c1").status_code == 409
+
+
+# ------------------------------------------ cross-session ownership of status
+#
+# The status band derives its stage from GenerationJob rows keyed by
+# fingerprint. When two sessions file the same problem shape they end up with
+# distinct job rows -- the partial unique index on
+# (fingerprint_key, owner_session_id) is what lets them coexist -- and neither
+# session's status payload may ever surface the other's job id or draft id.
+#
+# These tests seed the other session's row directly rather than driving a
+# second /builds request: request_template_build's real time.now() makes the
+# other-session row *later* than this session's, so the plain "latest by
+# fingerprint" ordering the bug used would pick it deterministically.
+
+
+def _seed_foreign_job(
+    *, owner: str, fingerprint_key: str, job_status: str, later_than=_now(),
+) -> str:
+    """A GenerationJob owned by someone else, created *after* the seeded moment.
+
+    The bug's failure mode depends on ordering: the leaky query took the newest
+    job for a fingerprint regardless of owner, so this row must post-date any
+    row this session may have.
+    """
+    job_id = f"foreign-job-{uuid4().hex}"
+    created_at = later_than + timedelta(seconds=60)
+    with db.meta_session() as session:
+        session.add(models.GenerationJob(
+            id=job_id, fingerprint_key=fingerprint_key,
+            fingerprint_version=1, fingerprint_json=_fingerprint().model_dump_json(),
+            trigger_observation_ids=json.dumps([]),
+            status=job_status, owner_session_id=owner,
+            created_at=created_at, updated_at=created_at,
+        ))
+    return job_id
+
+
+def _inject_template_request(session_id: str, *, candidate_id: str, fingerprint_key: str):
+    """Give this session a filed request that has already been tagged.
+
+    Bypasses the /builds background task so the test controls the timing
+    relative to any foreign job it seeds afterwards.
+    """
+    from app.routes import store
+    from app.session import TemplateRequest
+
+    session = store.get(session_id)
+    session.template_requests[candidate_id] = TemplateRequest(
+        candidate_id=candidate_id,
+        requested_at=_now(),
+        fingerprint_key=fingerprint_key,
+    )
+
+
+@pytest.mark.parametrize(
+    "foreign_job_status",
+    [
+        models.JOB_QUEUED,
+        models.JOB_RUNNING,
+        models.JOB_FAILED,
+        models.JOB_NEEDS_MANUAL,
+        models.JOB_SUCCEEDED,
+    ],
+)
+def test_another_sessions_job_does_not_leak_into_this_sessions_status(
+    client, foreign_job_status
+):
+    """Same fingerprint, another owner: this session must not read that stage."""
+    session_id = _start_session(client)
+    fp_key = canonical_fingerprint_key(_fingerprint())
+    _inject_template_request(session_id, candidate_id="c1", fingerprint_key=fp_key)
+    _seed_foreign_job(
+        owner="someone-else", fingerprint_key=fp_key, job_status=foreign_job_status,
+    )
+
+    build = client.get("/meta/my/builds").json()[0]
+
+    # This session has no owned job for the fingerprint, so the correct stage
+    # is "filed" -- filed_but_not_yet_queued from this session's point of view.
+    assert build["stage"] == "filed"
+    assert build["draft_id"] is None
+
+
+def test_another_sessions_ready_draft_does_not_leak_its_id(client):
+    """The reported bug: session A polls, receives session B's draft id."""
+    session_id = _start_session(client)
+    fp_key = canonical_fingerprint_key(_fingerprint())
+    _inject_template_request(session_id, candidate_id="c1", fingerprint_key=fp_key)
+    # Another session has already reached a reviewable draft for the shape.
+    other_draft_id, _ = _seed_owned_draft(
+        owner="someone-else", fingerprint_key=fp_key, job_status=models.JOB_SUCCEEDED,
+    )
+
+    build = client.get("/meta/my/builds").json()[0]
+
+    assert build["stage"] != "ready"
+    assert build["draft_id"] != other_draft_id
+    assert build["draft_id"] is None
+
+
+def test_another_sessions_approved_draft_does_not_leak_its_id(client):
+    """Terminal states leak too, not just in-flight ones."""
+    session_id = _start_session(client)
+    fp_key = canonical_fingerprint_key(_fingerprint())
+    _inject_template_request(session_id, candidate_id="c1", fingerprint_key=fp_key)
+    other_draft_id, _ = _seed_owned_draft(
+        owner="someone-else", fingerprint_key=fp_key, status=models.DRAFT_APPROVED,
+    )
+
+    build = client.get("/meta/my/builds").json()[0]
+
+    assert build["stage"] != "approved"
+    assert build["draft_id"] != other_draft_id
+    assert build["draft_id"] is None
+
+
+def test_this_sessions_own_status_survives_a_newer_foreign_job(client):
+    """A newer other-session job must not displace this session's own state."""
+    session_id = _start_session(client)
+    fp_key = canonical_fingerprint_key(_fingerprint())
+    # This session's own reviewable draft, created "earlier" via _now().
+    own_draft_id, own_job_id = _seed_owned_draft(
+        owner=session_id, fingerprint_key=fp_key,
+    )
+    _inject_template_request(session_id, candidate_id="c1", fingerprint_key=fp_key)
+    # Another session's newer job for the same shape. Under the bug the query
+    # picked this one and either flipped the stage away from "ready" or lost
+    # the draft id.
+    _seed_foreign_job(
+        owner="someone-else", fingerprint_key=fp_key, job_status=models.JOB_RUNNING,
+    )
+
+    build = client.get("/meta/my/builds").json()[0]
+
+    assert build["stage"] == "ready"
+    assert build["draft_id"] == own_draft_id
+
+
+def test_an_ownerless_threshold_job_is_not_visible_on_the_teacher_band(client):
+    """The ownerless queue is admin-scope, not this session's status."""
+    session_id = _start_session(client)
+    fp_key = canonical_fingerprint_key(_fingerprint())
+    _inject_template_request(session_id, candidate_id="c1", fingerprint_key=fp_key)
+    _seed_foreign_job(
+        owner=None, fingerprint_key=fp_key, job_status=models.JOB_RUNNING,
+    )
+
+    build = client.get("/meta/my/builds").json()[0]
+
+    assert build["stage"] == "filed"
+    assert build["draft_id"] is None

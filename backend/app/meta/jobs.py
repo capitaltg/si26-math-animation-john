@@ -117,6 +117,29 @@ def latest_job(session: Session, fingerprint_key: str) -> GenerationJob | None:
     ).scalar_one_or_none()
 
 
+def latest_owned_job(
+    session: Session, fingerprint_key: str, owner_session_id: str
+) -> GenerationJob | None:
+    """The most recent job for this fingerprint that belongs to this owner.
+
+    Ownership is the isolation boundary for the teacher's build surface: a status
+    lookup that ignored it would let one session read another session's job id
+    and draft id whenever both filed the same problem shape. Strict equality on
+    ``owner_session_id`` (never NULL) because a teacher's on-demand build always
+    carries their session id; the ownerless threshold queue is its own scope and
+    must not be visible here.
+    """
+    return session.execute(
+        select(GenerationJob)
+        .where(
+            GenerationJob.fingerprint_key == fingerprint_key,
+            GenerationJob.owner_session_id == owner_session_id,
+        )
+        .order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def evaluate_and_enqueue(
     session: Session,
     *,
