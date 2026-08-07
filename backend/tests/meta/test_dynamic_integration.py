@@ -86,9 +86,12 @@ def test_approved_dynamic_template_flows_end_to_end(session, tmp_path, monkeypat
 
     extracted_params = {"v1": 3, "v2": 5, "v3": 6, "v4": 8, "v5": 9, "v6": 12, "v7": 15}
     with patch("app.pipeline.extraction.call_with_tool") as mock_extract, patch(
+        "app.pipeline.process_scene.extract_stated_answer"
+    ) as mock_stated, patch(
         "app.render.full_render.subprocess.run"
     ) as mock_run:
         mock_extract.return_value = ("report_params", extracted_params)
+        mock_stated.return_value = None
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         scene = assemble_scene(candidate, tmp_path, template=template_ref, grade=3)
 

@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+
 def test_assemble_scene_returns_pending_review_with_thumbnail(tmp_path):
     from unittest.mock import patch
 
@@ -166,3 +169,63 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(tmp_path)
     }
     assert scene.thumbnail_path is None
     extract.assert_called_once()
+
+
+@patch("app.pipeline.process_scene.extract_stated_answer")
+@patch("app.pipeline.process_scene.extract_params")
+def test_assemble_scene_populates_stated_answer(mock_extract, mock_answer, tmp_path):
+    from fractions import Fraction
+
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+    from app.templates.registry import static_ref
+
+    mock_extract.return_value = NumberLineParams(
+        start=3, steps=[NumberLineStep(operation="add", amount=5)]
+    )
+    mock_answer.return_value = (Fraction(9), "= 9")
+
+    candidate = Candidate(
+        candidate_id="c1",
+        slide_index=0,
+        source_excerpt="What is 3 + 5? = 9",
+        one_line_summary="Add small",
+    )
+    template = static_ref(TemplateName.NUMBER_LINE)
+
+    scene = assemble_scene(candidate, tmp_path, template=template, grade=2)
+
+    assert scene.stated_answer == Fraction(9)
+    assert scene.stated_answer_source == "= 9"
+
+
+@patch("app.pipeline.process_scene.extract_stated_answer")
+@patch("app.pipeline.process_scene.extract_params")
+def test_assemble_scene_stated_answer_extractor_failure_is_non_fatal(
+    mock_extract, mock_answer, tmp_path
+):
+    from app.models.candidate import Candidate
+    from app.models.scene import TemplateName
+    from app.pipeline.process_scene import assemble_scene
+    from app.templates.number_line.params import NumberLineParams, NumberLineStep
+    from app.templates.registry import static_ref
+
+    mock_extract.return_value = NumberLineParams(
+        start=3, steps=[NumberLineStep(operation="add", amount=5)]
+    )
+    mock_answer.return_value = None
+
+    candidate = Candidate(
+        candidate_id="c1",
+        slide_index=0,
+        source_excerpt="What is 3 + 5?",
+        one_line_summary="Add small",
+    )
+    template = static_ref(TemplateName.NUMBER_LINE)
+
+    scene = assemble_scene(candidate, tmp_path, template=template, grade=2)
+
+    assert scene.stated_answer is None
+    assert scene.stated_answer_source is None
