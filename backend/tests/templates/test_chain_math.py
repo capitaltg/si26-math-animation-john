@@ -48,3 +48,5 @@ def test_format_operation_caption_with_fraction_strings():
 def test_format_operation_caption_uses_multiplication_and_division_symbols():
     assert format_operation_caption(24, "divide", 3, 8) == "24 ÷ 3 = 8"
     assert format_operation_caption(4, "multiply", 6, 24) == "4 × 6 = 24"
+
+
