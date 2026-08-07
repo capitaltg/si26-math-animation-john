@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 
 from app.config import get_settings
+from app.meta.jobs import latest_owned_job
 from app.meta.approval import (
     ApprovalConflictError,
     ApprovalPreconditionError,
@@ -230,7 +231,9 @@ def _latest_draft_for(db_session, job_id: str) -> TemplateDraft | None:
     )
 
 
-def _stage_for(db_session, request: TemplateRequest) -> tuple[str, GenerationJob | None, TemplateDraft | None]:
+def _stage_for(
+    db_session, request: TemplateRequest, owner_session_id: str
+) -> tuple[str, GenerationJob | None, TemplateDraft | None]:
     if request.already_available:
         return STAGE_ALREADY_AVAILABLE, None, None
     if request.error:
@@ -238,12 +241,11 @@ def _stage_for(db_session, request: TemplateRequest) -> tuple[str, GenerationJob
     if request.fingerprint_key is None:
         return STAGE_FILED, None, None
 
-    job = (
-        db_session.query(GenerationJob)
-        .filter(GenerationJob.fingerprint_key == request.fingerprint_key)
-        .order_by(GenerationJob.created_at.desc(), GenerationJob.id.desc())
-        .first()
-    )
+    # Owner-scoped: another session that filed the same fingerprint has its own
+    # job row (partial unique index on (fingerprint_key, owner_session_id) makes
+    # that possible), and its job/draft ids must never appear in this session's
+    # status payload.
+    job = latest_owned_job(db_session, request.fingerprint_key, owner_session_id)
     if job is None:
         return STAGE_FILED, None, None
 
@@ -267,8 +269,10 @@ def _stage_for(db_session, request: TemplateRequest) -> tuple[str, GenerationJob
     return STAGE_QUEUED, job, None
 
 
-def _build_out(db_session, request: TemplateRequest, now: datetime) -> BuildOut:
-    stage, job, draft = _stage_for(db_session, request)
+def _build_out(
+    db_session, request: TemplateRequest, now: datetime, owner_session_id: str
+) -> BuildOut:
+    stage, job, draft = _stage_for(db_session, request, owner_session_id)
     error = request.error
     if stage == STAGE_NEEDS_MANUAL:
         error = _GENERATION_GAVE_UP
@@ -371,7 +375,7 @@ def list_builds(session_id: str | None = Cookie(default=None)):
     now = datetime.now(timezone.utc)
     with meta_session() as db_session:
         return [
-            _build_out(db_session, request, now)
+            _build_out(db_session, request, now, session.session_id)
             for request in session.template_requests.values()
         ]
 
@@ -398,7 +402,7 @@ def clear_build(candidate_id: str, session_id: str | None = Cookie(default=None)
         raise HTTPException(status_code=404, detail=f"No build requested for {candidate_id}")
 
     with meta_session() as db_session:
-        stage, _job, _draft = _stage_for(db_session, request)
+        stage, _job, _draft = _stage_for(db_session, request, session.session_id)
     if stage not in CLEARABLE_STAGES:
         raise HTTPException(
             status_code=409,
