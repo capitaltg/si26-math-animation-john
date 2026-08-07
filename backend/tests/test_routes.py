@@ -969,6 +969,53 @@ def test_patch_grade_resets_approved_scene_to_pending_review(tmp_path):
     assert resp.json()["status"] == "pending_review"
 
 
+def test_patch_empty_body_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    resp = client.patch("/storyboard/s1", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=lambda t, p, out: out.write_bytes(b"mp4")):
+        render_resp = client.post("/render")
+    assert render_resp.status_code == 200
+
+
+def test_patch_same_grade_level_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": approved.grade_level})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
+def test_patch_same_params_does_not_revoke_approval(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"status": "approved", "approved_revision": 0}
+    )
+    _seed_scene(client, approved)
+
+    with patch("app.routes.render_scene_thumbnail"):
+        resp = client.patch("/storyboard/s1", json={"params": approved.params})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
 def test_patch_resets_rejected_scene_to_pending_review(tmp_path):
     client = _client()
     _upload_candidate(client)

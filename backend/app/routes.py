@@ -556,12 +556,17 @@ def _field_errors(exc: ValidationError) -> dict:
     return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
 
 
-def _write_scene_cas(session, scene_id: str, base_revision: int, updates: dict) -> Scene:
+def _write_scene_cas(
+    session, scene_id: str, base_revision: int, updates: dict, *, bump_revision: bool = True
+) -> Scene:
     """Commit `updates` to a scene, rejecting the write if it raced another one.
 
     Both the initial read and this write must agree on `revision`, so a request
     that read stale data (e.g. it raced a concurrent edit or approve) gets a 409
-    instead of silently clobbering the other request's change.
+    instead of silently clobbering the other request's change. `bump_revision`
+    is False for writes that don't change render-affecting content (e.g. a
+    no-op PATCH), so they can't drift `revision` away from `approved_revision`
+    and invalidate an approval that nothing actually changed.
     """
     with session.scenes_lock:
         current = session.scenes[scene_id]
@@ -570,7 +575,8 @@ def _write_scene_cas(session, scene_id: str, base_revision: int, updates: dict) 
                 status_code=409,
                 detail="Scene was modified by another request; reload and try again",
             )
-        updated = current.model_copy(update={**updates, "revision": base_revision + 1})
+        next_revision = base_revision + 1 if bump_revision else base_revision
+        updated = current.model_copy(update={**updates, "revision": next_revision})
         session.scenes[scene_id] = updated
     return updated
 
@@ -601,6 +607,7 @@ def edit_scene(
 
     new_params = scene.params
     new_thumb = scene.thumbnail_path
+    params_changed = False
     if request.params is not None:
         if scene.candidate_ids:
             _, params_cls = get_chained_template(scene.template)
@@ -620,9 +627,11 @@ def edit_scene(
             raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
         new_params = params.model_dump(mode="json")
         new_thumb = out
+        params_changed = new_params != scene.params
 
     grade = request.grade_level if request.grade_level is not None else scene.grade_level
     grade_overridden = scene.grade_overridden or request.grade_level is not None
+    grade_changed = request.grade_level is not None and request.grade_level != scene.grade_level
 
     updates = {
         "params": new_params,
@@ -630,12 +639,16 @@ def edit_scene(
         "grade_level": grade,
         "grade_overridden": grade_overridden,
     }
-    # A real edit invalidates any prior review decision; the teacher must
-    # re-review the changed content before it can render again.
-    if scene.status in ("approved", "rejected"):
+    # A real content change invalidates any prior review decision; the teacher
+    # must re-review before it can render again. A no-op PATCH (empty body, or
+    # a field resent unchanged) must not revoke a standing approval.
+    content_changed = params_changed or grade_changed
+    if content_changed and scene.status in ("approved", "rejected"):
         updates["status"] = "pending_review"
 
-    updated = _write_scene_cas(session, scene_id, scene.revision, updates)
+    updated = _write_scene_cas(
+        session, scene_id, scene.revision, updates, bump_revision=content_changed
+    )
     return _scene_out(updated, candidates)
 
 
