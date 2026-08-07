@@ -123,19 +123,18 @@ function humanLoc(loc) {
     .replace(/^./, (c) => c.toUpperCase())
 }
 
-// Pydantic tags every ValidationError with a machine `type`. Anything raised by a
-// @model_validator / @field_validator surfaces as value_error or assertion_error
-// — those are cross-field or domain rules ("semantic"). Everything else is a
-// primitive schema check (int/enum/range/missing/…).
+// Backend `_field_errors` tags each entry with a category (schema|semantic).
+// Fall back to the pydantic `type` slug when an older/mocked response omits it.
 const SEMANTIC_ERROR_TYPES = new Set(['value_error', 'assertion_error'])
 
 function isSemanticError(err) {
+  if (err?.category) return err.category === 'semantic'
   return SEMANTIC_ERROR_TYPES.has(err?.type)
 }
 
-// The rule name the user sees when a check fires — the pydantic error `type`
-// slug, humanised. Not exhaustive; unknown types fall through to the raw slug so
-// nothing is silently hidden.
+// Human labels for pydantic's primitive schema checks. Semantic rules carry
+// their own stable identifier in `err.rule` (the message the validator raised);
+// anything not listed falls through to the raw slug so nothing hides silently.
 const RULE_LABELS = {
   int_type: 'Must be an integer',
   int_parsing: 'Must be an integer',
@@ -154,13 +153,17 @@ const RULE_LABELS = {
   too_long: 'Too many items',
   string_too_short: 'Too short',
   string_too_long: 'Too long',
-  value_error: 'Cross-field rule',
-  assertion_error: 'Cross-field rule',
+  grade_range: 'Grade must be between 0 and 8',
 }
 
 function humanRule(type) {
   if (!type) return 'Rule'
   return RULE_LABELS[type] || type.replace(/_/g, ' ')
+}
+
+function ruleLabel(err) {
+  if (err?.rule) return err.rule
+  return humanRule(err?.type)
 }
 
 // Resolve one { "$ref": "#/$defs/Name" } hop; leaves other nodes untouched.
@@ -172,8 +175,15 @@ function resolveSchemaRef(node, root) {
   return node || {}
 }
 
-function schemaTypeLabel(node, root) {
-  const resolved = resolveSchemaRef(node, root)
+// Pydantic emits `int | None` as `anyOf: [{type: integer, …}, {type: null}]`.
+// Return the resolved branches so type + constraint rendering can merge them.
+function anyOfBranches(node, root) {
+  const branches = node?.anyOf || node?.oneOf
+  if (!branches || !Array.isArray(branches)) return null
+  return branches.map((b) => resolveSchemaRef(b, root))
+}
+
+function singleTypeLabel(resolved, root) {
   if (resolved.enum) return `enum(${resolved.enum.join('|')})`
   if (Array.isArray(resolved.type)) return resolved.type.join(' | ')
   if (resolved.type === 'array') {
@@ -184,6 +194,24 @@ function schemaTypeLabel(node, root) {
     return `array<${inner}>`
   }
   return resolved.type || (resolved.properties ? 'object' : 'any')
+}
+
+function schemaTypeLabel(node, root) {
+  const resolved = resolveSchemaRef(node, root)
+  const branches = anyOfBranches(resolved, root)
+  if (branches) {
+    const seen = new Set()
+    const labels = []
+    for (const b of branches) {
+      const label = singleTypeLabel(b, root)
+      if (!seen.has(label)) {
+        seen.add(label)
+        labels.push(label)
+      }
+    }
+    return labels.join(' | ')
+  }
+  return singleTypeLabel(resolved, root)
 }
 
 // JSON-Schema constraint keys pydantic emits and that we know how to render as
@@ -203,9 +231,25 @@ const CONSTRAINT_KEYS = [
 
 function schemaConstraints(node, root) {
   const resolved = resolveSchemaRef(node, root)
+  // For an `int | None` union the constraints live inside the integer branch,
+  // not on the top-level node — walk the branches and merge, skipping the
+  // pure-null branch which contributes nothing.
+  const branches = anyOfBranches(resolved, root)
+  const sources = branches
+    ? branches.filter((b) => b && b.type !== 'null')
+    : [resolved]
   const parts = []
-  for (const [key, fmt] of CONSTRAINT_KEYS) {
-    if (resolved[key] !== undefined) parts.push(fmt(resolved[key]))
+  const seen = new Set()
+  for (const src of sources) {
+    for (const [key, fmt] of CONSTRAINT_KEYS) {
+      if (src[key] !== undefined) {
+        const rendered = fmt(src[key])
+        if (!seen.has(rendered)) {
+          seen.add(rendered)
+          parts.push(rendered)
+        }
+      }
+    }
   }
   return parts.join(', ')
 }
@@ -1361,7 +1405,8 @@ function MainApp() {
                           <ul className="errors__list">
                             {errors.map((e, i) => (
                               <li key={i}>
-                                {humanLoc(e.loc)} — <strong>{humanRule(e.type)}</strong>: {e.msg}
+                                {humanLoc(e.loc)} — <strong>{ruleLabel(e)}</strong>
+                                {!isSemanticError(e) && e.msg ? `: ${e.msg}` : ''}
                               </li>
                             ))}
                           </ul>

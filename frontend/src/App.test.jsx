@@ -169,7 +169,13 @@ function installFetchMock({
           {
             detail: {
               errors: [
-                { loc: ['start'], msg: 'must be non-negative', type: 'value_error' },
+                {
+                  loc: ['start'],
+                  msg: 'Value error, Number line start must be nonnegative',
+                  type: 'value_error',
+                  rule: 'Number line start must be nonnegative',
+                  category: 'semantic',
+                },
               ],
             },
           },
@@ -308,7 +314,7 @@ it('combines eligible scenes and ungroups them back into their original position
   await screen.findByText(
     (_, node) =>
       node?.tagName === 'LI' &&
-      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+      /Start.*Number line start must be nonnegative/.test(node.textContent || ''),
   )
 
   for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
@@ -330,7 +336,7 @@ it('combines eligible scenes and ungroups them back into their original position
     screen.queryByText(
       (_, node) =>
         node?.tagName === 'LI' &&
-        /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+        /Start.*Number line start must be nonnegative/.test(node.textContent || ''),
     ),
   ).toBeNull()
   expect(
@@ -356,7 +362,7 @@ it('combines eligible scenes and ungroups them back into their original position
     screen.queryByText(
       (_, node) =>
         node?.tagName === 'LI' &&
-        /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+        /Start.*Number line start must be nonnegative/.test(node.textContent || ''),
     ),
   ).toBeNull()
   expect(
@@ -507,7 +513,7 @@ it('surfaces 422 field errors from a PATCH without crashing', async () => {
   await screen.findByText(
     (_, node) =>
       node?.tagName === 'LI' &&
-      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+      /Start.*Number line start must be nonnegative/.test(node.textContent || ''),
   )
 })
 
@@ -544,7 +550,7 @@ it('flags Semantic check failed and leaves Schema check passing for a cross-fiel
   await screen.findByText(
     (_, node) =>
       node?.tagName === 'LI' &&
-      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+      /Start.*Number line start must be nonnegative/.test(node.textContent || ''),
   )
 
   const schemaStamp = screen.getByText('Schema check').closest('li')
