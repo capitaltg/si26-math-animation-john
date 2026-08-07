@@ -236,6 +236,47 @@ function StampColumn({ scene, hasErrors, draft }) {
   )
 }
 
+// The params form is always visible inline (never a modal), so "editing" a
+// mismatch just means scrolling that scene's card into view.
+function focusSceneEditor(sceneId) {
+  document.getElementById(`scene-${sceneId}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+}
+
+// A stated-vs-computed mismatch is a genuine failure — the source text and the
+// recomputed answer disagree — so it gets the same treatment as any other
+// blocking failure in this file: a danger notice with its own recovery actions.
+function MismatchBadge({ scene, onAcknowledge, onEdit }) {
+  if (!scene.mismatch) return null
+  const { stated, computed } = scene.mismatch
+  if (scene.mismatch_acknowledged) {
+    return (
+      <p className="mismatch-ack">
+        Correction acknowledged: source {stated} → shown {computed}
+      </p>
+    )
+  }
+  return (
+    <div className="notice notice--danger" role="alert">
+      <IconAlert />
+      <div>
+        <p className="notice__body">Source says {stated}; computed {computed}</p>
+        <div className="actions">
+          <button type="button" className="btn btn--quiet" onClick={() => onEdit(scene.scene_id)}>
+            Edit values
+          </button>
+          <button
+            type="button"
+            className="btn btn--quiet"
+            onClick={() => onAcknowledge(scene.scene_id)}
+          >
+            Mark as intentional correction
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function RenderDock({ scenes, results, rendering, elapsed, onDismiss }) {
   const templateFor = (ids) =>
     scenes.find((scene) => sceneIds(scene).join(', ') === ids)?.template
@@ -528,6 +569,7 @@ function MainApp() {
   const retryScene = (id) => sceneAction(id, '/retry', { method: 'POST' }, { resetDraft: true })
   const approveScene = (id) => sceneAction(id, '/approve', { method: 'POST' })
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
+  const acknowledgeMismatch = (id) => sceneAction(id, '/acknowledge-mismatch', { method: 'POST' })
 
   function toggleChainSelect(sceneId) {
     setChainSelected((previous) => ({ ...previous, [sceneId]: !previous[sceneId] }))
@@ -968,8 +1010,14 @@ function MainApp() {
               const combinable =
                 scene.status === 'pending_review' && !!scene.candidate_id && !isChain
               const errors = fieldErrors[scene.scene_id]
+              const mismatchUnacked = !!scene.mismatch && !scene.mismatch_acknowledged
               return (
-                <article className="scene" key={scene.scene_id} data-status={scene.status}>
+                <article
+                  className="scene"
+                  key={scene.scene_id}
+                  id={`scene-${scene.scene_id}`}
+                  data-status={scene.status}
+                >
                   {combinable && (
                     <label className="combine">
                       <input
@@ -996,6 +1044,12 @@ function MainApp() {
                   </div>
 
                   <p className="scene__source">{scene.source_excerpt}</p>
+
+                  <MismatchBadge
+                    scene={scene}
+                    onAcknowledge={acknowledgeMismatch}
+                    onEdit={focusSceneEditor}
+                  />
 
                   {scene.fallback_reason && (
                     <div className="notice notice--fallback">
@@ -1086,8 +1140,12 @@ function MainApp() {
                     <button
                       className="btn btn--ok"
                       onClick={() => approveScene(scene.scene_id)}
-                      disabled={loading || isDirty}
-                      title={isDirty ? 'Save edits before approving' : undefined}
+                      disabled={loading || isDirty || mismatchUnacked}
+                      title={
+                        isDirty ? 'Save edits before approving'
+                          : mismatchUnacked ? 'Acknowledge the mismatch or edit values before approving'
+                          : undefined
+                      }
                     >
                       <IconCheck size={16} />
                       Approve
