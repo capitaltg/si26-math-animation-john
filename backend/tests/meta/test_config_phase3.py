@@ -100,5 +100,24 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # DYNAMIC_RENDERER_VERSION 10 draws the bar's partition dividers and the
     # number_line's open/closed boundary circle plus shaded ray -- primitives
     # a version-9 renderer has no branch for.
-    assert DSL_COMPILER_VERSION == 11
+    #
+    # DSL_COMPILER_VERSION 12 adds the `signed_hop` and `distance_from_zero`
+    # strategies to `number_line` (M6) and tightens
+    # `magnitude_comparison`'s compile-time guard so a signed number_line
+    # (negative minimum or negative marker) is refused; a version-11 compiler
+    # accepted such a plan and does not recognise the new strategy literals.
+    #
+    # DSL_COMPILER_VERSION 13 adds the `equivalence_align` and
+    # `common_denominator_bridge` strategies on `partition`; a version-12
+    # compiler rejects the new strategy literals, so a plan that carries
+    # them cannot be validated against the older model.
+    #
+    # DSL_COMPILER_VERSION 14 adds the `percent_of_whole` and `percent_change`
+    # strategies on the `bar` kind (M9), and refuses `magnitude_comparison` on
+    # a bar whose `maximum` literal is 100 -- the percent-of-whole ratio
+    # semantic must use the new strategy so the sweep reads as "part of the
+    # whole" rather than "walk to some capacity". A version-13 compiler both
+    # rejects the new strategy literals and accepts a percent-semantic
+    # magnitude_comparison, so a report stamped 13 for either shape is stale.
+    assert DSL_COMPILER_VERSION == 14
     assert DYNAMIC_RENDERER_VERSION == 10

@@ -23,6 +23,11 @@ class ResolvedRelation:
     kind: str
     target: Point
     text: str
+    #: Which side of the anchor part the tip touches. Renderer places the label
+    #: on the opposite side so `top` labels sit above the anchor and `bottom`
+    #: labels sit below. Layout mirrors this to reserve safe-frame clearance in
+    #: the direction the label actually renders (see `_callout_room_per_scale`).
+    anchor: str
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,7 @@ def evaluate_program_visual(
         return _evaluated_spec(visual), {
             "whole": _evaluate(visual.whole, values),
             "parts": _evaluate(visual.parts, values),
+            "shaded": _evaluate(visual.shaded, values),
         }
     if kind == "bar":
         return _evaluated_spec(visual), {
@@ -198,6 +204,7 @@ def resolve_relation(
         kind=relation.kind,
         target=target,
         text=relation.text,
+        anchor=relation.target.anchor,
     )
 
 
@@ -233,6 +240,10 @@ def action_targets(action: ProgramAction) -> list[TargetRef]:
         return [action.target]
     if action.kind == "transform":
         return [action.source, action.target]
+    if action.kind == "signed_hop_arrow":
+        return [action.source, action.target]
+    if action.kind == "distance_annotation":
+        return [action.origin, action.target]
     return []
 
 
@@ -312,6 +323,10 @@ def _action_target_items(action, index):
         return [(action.target, f"{root}.target")]
     if action.kind == "transform":
         return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]
+    if action.kind == "signed_hop_arrow":
+        return [(action.source, f"{root}.source"), (action.target, f"{root}.target")]
+    if action.kind == "distance_annotation":
+        return [(action.origin, f"{root}.origin"), (action.target, f"{root}.target")]
     return []
 
 

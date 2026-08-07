@@ -1,12 +1,13 @@
 from dataclasses import asdict
 from fractions import Fraction
-from math import ceil
+from math import ceil, gcd
 
 from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import (
-    expand_beats, magnitude_sweep_beat_id, regroup_beat_id,
+    common_denominator_bridge_beat_id, equivalence_align_beat_id,
+    expand_beats, magnitude_sweep_beat_id, percent_sweep_beat_id, regroup_beat_id,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
@@ -19,7 +20,7 @@ _EXPRESSION_FIELDS = {
     "rectangle_measurement": ("length", "width"),
     "number_line": ("minimum", "maximum", "markers"),
     "grid": ("rows", "columns"),
-    "partition": ("whole", "parts"),
+    "partition": ("whole", "parts", "shaded"),
     "bar": ("value", "maximum"),
     "object_set": ("count",),
     "label": (),
@@ -119,6 +120,15 @@ _MOVABLE_TARGETS = {"rectangle_measurement": {None}}
 _TRANSFORM_COMPATIBILITY = {"rectangle_measurement": {"rectangle_measurement"}}
 _ITEM_CALLOUT_ANCHORS = {"bottom"}
 
+#: Upper bound on segments the percent-sweep may emit. Each swept segment is a
+#: `focus` role change with its own `at_seconds` (see `_slot_count` for
+#: percent strategies), so the sweep alone contributes N timeline entries
+#: against the 40-action cap. Values above this cap compiled the plan but
+#: later failed with `too_many_timeline_actions` at scheduling; refusing them
+#: up front turns a hard-to-diagnose scheduler failure into a clear compile
+#: error naming the sweep as the cause.
+_MAX_PERCENT_SWEEP_SEGMENTS = 30
+
 
 def compile_teaching_plan(plan, answer_expression, known_fields, context):
     compile_expression(answer_expression, known_fields)
@@ -126,7 +136,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
         compile_expression(expression, known_fields)
     validate_unique_visual_refs(plan)
     validate_target_refs(plan)
-    validate_strategy_compatibility(plan)
+    validate_strategy_compatibility(plan, answer_expression)
     validate_unit_rate_value_range(plan, known_fields)
     validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
@@ -269,7 +279,7 @@ _MAX_REGROUP_CELLS = 30
 #: beat has emitted one `set_role` per cell.
 
 
-def validate_strategy_compatibility(plan):
+def validate_strategy_compatibility(plan, answer_expression=None):
     supported = _SUPPORTED_STRATEGIES[plan.primary_visual.kind]
     if plan.strategy not in supported:
         _fail(
@@ -294,6 +304,18 @@ def validate_strategy_compatibility(plan):
         _validate_inverse_operation_compatibility(plan)
     if plan.strategy == "ray_shade":
         _validate_ray_shade_compatibility(plan)
+    if plan.strategy == "signed_hop":
+        _validate_signed_hop_compatibility(plan)
+    if plan.strategy == "distance_from_zero":
+        _validate_distance_from_zero_compatibility(plan)
+    if plan.strategy == "equivalence_align":
+        _validate_equivalence_align_compatibility(plan)
+    if plan.strategy == "common_denominator_bridge":
+        _validate_common_denominator_bridge_compatibility(plan, answer_expression)
+    if plan.strategy == "percent_of_whole":
+        _validate_percent_of_whole_compatibility(plan)
+    if plan.strategy == "percent_change":
+        _validate_percent_change_compatibility(plan)
 
 
 def _validate_inverse_operation_compatibility(plan):
@@ -511,6 +533,22 @@ def _reveals_primary_whole(beat, primary_ref):
 def _validate_magnitude_comparison_compatibility(plan):
     spec = plan.primary_visual
     if spec.kind == "bar":
+        maximum = _literal_integer(spec.maximum)
+        if maximum == 100:
+            # A bar drawn at maximum 100 IS a percent bar: the count of
+            # segments and the ratio are the same number, so a sweep here
+            # is teaching "N percent of the whole" whether the plan says so
+            # or not. `percent_of_whole` names that intent explicitly and
+            # gates on a value in [1, 99]; `magnitude_comparison` would let
+            # a plan claim "sweep to 40" for what a learner reads as "40%".
+            # Steer the plan to the strategy that matches the semantic.
+            _fail(
+                "magnitude_comparison_on_percent_bar",
+                "strategy",
+                "percent_of_whole when the bar's maximum is 100 (percent semantic)",
+                f"magnitude_comparison on bar with maximum=100",
+                "use percent_of_whole for a percent-of-whole bar, or lower maximum",
+            )
         value = _literal_integer(spec.value)
         if value is None:
             _fail(
@@ -548,7 +586,456 @@ def _validate_magnitude_comparison_compatibility(plan):
                     _describe_expression(marker),
                     "set every marker to a literal number, or use a different strategy",
                 )
+        # magnitude_comparison sweeps markers left-to-right and reads that order
+        # as "greater magnitude". On a signed range that reading is wrong: -5
+        # sits left of 2 but has the greater magnitude, so the sweep would teach
+        # the opposite. Refuse a plan whose declared span crosses (or lives in)
+        # the negatives; the M6 strategies `signed_hop` and `distance_from_zero`
+        # handle signed number lines.
+        minimum = _literal_number(spec.minimum)
+        if minimum is not None and minimum < 0:
+            _fail(
+                "magnitude_comparison_requires_nonnegative_range", "primary_visual.minimum",
+                "a number_line whose minimum is at least 0",
+                _describe_expression(spec.minimum),
+                "raise minimum to 0 or above, or use signed_hop / distance_from_zero for a signed line",
+            )
+        for index, marker in enumerate(spec.markers):
+            if float(marker.value) < 0:
+                _fail(
+                    "magnitude_comparison_requires_nonnegative_markers",
+                    f"primary_visual.markers[{index}]",
+                    "markers on a nonnegative number_line",
+                    _describe_expression(marker),
+                    "drop the negative marker, or use signed_hop / distance_from_zero for a signed line",
+                )
     _require_owned_sweep_beat(plan)
+
+
+def _validate_signed_hop_compatibility(plan):
+    """`signed_hop` teaches directed motion on a signed number_line.
+
+    An addition or subtraction of signed integers reads as a hop that goes
+    right for a positive addend and left for a negative one. The line has to
+    carry a signed context -- either its minimum is negative or one of its
+    markers is negative -- or the strategy is indistinguishable from a
+    positive-only walk that `magnitude_comparison` already covers. Two markers
+    is the floor: one hop needs a starting point and an ending point.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "number_line":
+        # `_SUPPORTED_STRATEGIES` already rejects a non-number_line primary.
+        return
+    if len(spec.markers) < 2:
+        _fail(
+            "signed_hop_requires_at_least_two_markers", "primary_visual.markers",
+            "at least two markers so the hop has a start and an end",
+            f"{len(spec.markers)} marker(s)",
+            "declare the start and end (and any intermediate) of the hop, "
+            "or use a different strategy",
+        )
+    for index, marker in enumerate(spec.markers):
+        if marker.node != "literal":
+            _fail(
+                "signed_hop_requires_literal_markers",
+                f"primary_visual.markers[{index}]",
+                "a literal marker position so the hop sequence is fixed at compile time",
+                _describe_expression(marker),
+                "set every marker to a literal number, or use a different strategy",
+            )
+    minimum = _literal_number(spec.minimum)
+    has_negative_marker = any(float(marker.value) < 0 for marker in spec.markers)
+    if (minimum is None or minimum >= 0) and not has_negative_marker:
+        _fail(
+            "signed_hop_requires_signed_context", "primary_visual",
+            "a signed number_line (negative minimum or a negative marker)",
+            f"minimum={_describe_expression(spec.minimum)}, "
+            f"markers={[_describe_expression(m) for m in spec.markers]}",
+            "widen the range to include negatives or add a negative marker, "
+            "or use magnitude_comparison for a nonnegative line",
+        )
+
+
+def _validate_distance_from_zero_compatibility(plan):
+    """`distance_from_zero` annotates a value's distance to the origin.
+
+    The teaching move is "how far is this from 0", which only reads when 0
+    is drawn on the line and at least one other marker sits away from it.
+    A plan without a 0 marker cannot land the annotation on the origin, and
+    a plan with only 0 has nothing to measure distance to.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "number_line":
+        return
+    literal_markers = []
+    for index, marker in enumerate(spec.markers):
+        if marker.node != "literal":
+            _fail(
+                "distance_from_zero_requires_literal_markers",
+                f"primary_visual.markers[{index}]",
+                "a literal marker position so the origin and the measured point are fixed",
+                _describe_expression(marker),
+                "set every marker to a literal number, or use a different strategy",
+            )
+        literal_markers.append(float(marker.value))
+    if 0.0 not in literal_markers:
+        _fail(
+            "distance_from_zero_requires_zero_marker", "primary_visual.markers",
+            "a marker at 0 so the origin is drawn on the line",
+            f"markers={literal_markers}",
+            "add a literal marker at 0, or use a different strategy",
+        )
+    if not any(value != 0.0 for value in literal_markers):
+        _fail(
+            "distance_from_zero_requires_nonzero_marker", "primary_visual.markers",
+            "at least one nonzero marker so there is a distance to measure",
+            f"markers={literal_markers}",
+            "add the value whose distance from zero the lesson teaches, "
+            "or use a different strategy",
+        )
+
+
+def _validate_equivalence_align_compatibility(plan):
+    """Fraction equivalence needs a second partition of the same whole.
+
+    The strategy teaches "these two partitions describe the same amount": one
+    partition alone shows only its own fraction, and the alignment is what the
+    lesson turns on. The compiler enforces the shape here so a plan that names
+    the strategy but omits the equivalent partition fails at compile time
+    rather than as a decorative animation later.
+    """
+    if plan.primary_visual.kind != "partition":
+        # `_SUPPORTED_STRATEGIES` already rejects a non-partition primary, so
+        # reaching here means the supported-strategy check let the plan through
+        # for a kind that should not carry this strategy.
+        return
+    supporting_partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if len(supporting_partitions) != 1:
+        _fail(
+            "equivalence_align_requires_one_supporting_partition", "supporting_visuals",
+            "exactly one supporting partition visual carrying the equivalent fraction",
+            f"{len(supporting_partitions)} supporting partition(s)",
+            "add one supporting partition whose parts count is the equivalent denominator, "
+            "or use a different strategy",
+        )
+    primary_fraction = _partition_fraction(plan.primary_visual, "primary_visual")
+    support_fraction = _partition_fraction(
+        supporting_partitions[0],
+        f"supporting_visuals.{supporting_partitions[0].ref}",
+    )
+    _require_same_whole(
+        [plan.primary_visual, *supporting_partitions], "equivalence_align",
+    )
+    if primary_fraction != support_fraction:
+        _fail(
+            "equivalence_align_requires_equal_fractions",
+            f"supporting_visuals.{supporting_partitions[0].ref}",
+            "a supporting partition whose shaded/parts fraction equals the primary's",
+            f"primary {primary_fraction.numerator}/{primary_fraction.denominator} "
+            f"vs supporting {support_fraction.numerator}/{support_fraction.denominator}",
+            "set the supporting partition's shaded and parts so shaded/parts equals "
+            "the primary's, or use a different strategy",
+        )
+    _require_owned_equivalence_align_beat(plan)
+
+
+def _require_owned_equivalence_align_beat(plan):
+    """`equivalence_align` needs a focus/derive beat that targets BOTH partitions.
+
+    `equivalence_align_beat_id` selects the beat that owns the alignment walk;
+    if none exists, `_beat_kind_actions` falls through to the generic role
+    change and the shaded-wedge focus never lands. `check_strategy_affordance`
+    would then see a compiled plan that never actually animates the alignment,
+    so it is refused here at compile time instead.
+    """
+    if equivalence_align_beat_id(plan) is None:
+        supporting_partitions = [
+            spec for spec in plan.supporting_visuals if spec.kind == "partition"
+        ]
+        support_ref = supporting_partitions[0].ref if supporting_partitions else "<supporting>"
+        _fail(
+            "equivalence_align_requires_alignment_beat", "beats",
+            f"a focus or derive beat targeting both {plan.primary_visual.ref!r} "
+            f"and {support_ref!r}, which the compiler stages the alignment walk on",
+            "no focus/derive beat targets both partitions together",
+            "add a focus or derive beat whose targets include both partitions",
+        )
+
+
+def _validate_common_denominator_bridge_compatibility(plan, answer_expression):
+    """Fraction arithmetic across unlike denominators needs a bridge partition.
+
+    The lesson has five partitions on-screen: the two original operands (their
+    unlike denominators), each operand's refined form on the LCD (the
+    intermediate 3/6 and 2/6 states of a 1/2 + 1/3 lesson), and the LCD bridge
+    that carries the combined result. The refined partitions are what make the
+    animation teach the refinement itself rather than only "here are two
+    fractions, here is their sum" -- without them, the frame jumps from
+    unlike-denominator operands to the combined bridge and the LCD reasoning
+    is invisible.
+
+    The order in `supporting_visuals` is fixed: second_operand, refined_a,
+    refined_b, bridge. Refining `refined_a` from `primary_visual` and
+    `refined_b` from `second_operand` mirrors the operand order the answer
+    expression is required to match.
+    """
+    if plan.primary_visual.kind != "partition":
+        return
+    supporting_partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if len(supporting_partitions) != 4:
+        _fail(
+            "common_denominator_bridge_requires_four_supporting_partitions",
+            "supporting_visuals",
+            "exactly four supporting partition visuals in order: "
+            "second_operand, refined_a (primary on LCD), refined_b (second on LCD), bridge",
+            f"{len(supporting_partitions)} supporting partition(s)",
+            "declare the second operand, each operand's LCD-refined partition, and "
+            "the LCD bridge as supporting partition visuals in that order, "
+            "or use a different strategy",
+        )
+    second_operand, refined_a, refined_b, bridge = supporting_partitions
+    primary_parts = _literal_integer(plan.primary_visual.parts)
+    second_parts = _literal_integer(second_operand.parts)
+    refined_a_parts = _literal_integer(refined_a.parts)
+    refined_b_parts = _literal_integer(refined_b.parts)
+    bridge_parts = _literal_integer(bridge.parts)
+    if (
+        primary_parts is None or second_parts is None or bridge_parts is None
+        or refined_a_parts is None or refined_b_parts is None
+    ):
+        _fail(
+            "common_denominator_bridge_requires_literal_denominators",
+            "supporting_visuals",
+            "literal parts counts on all five partitions so the compiler can verify the LCD",
+            f"primary parts={_describe_expression(plan.primary_visual.parts)}, "
+            f"second parts={_describe_expression(second_operand.parts)}, "
+            f"refined_a parts={_describe_expression(refined_a.parts)}, "
+            f"refined_b parts={_describe_expression(refined_b.parts)}, "
+            f"bridge parts={_describe_expression(bridge.parts)}",
+            "set every partition's parts to a literal integer, or use a different strategy",
+        )
+    expected_lcd = _lcm(primary_parts, second_parts)
+    if bridge_parts != expected_lcd:
+        _fail(
+            "common_denominator_bridge_requires_lcd",
+            f"supporting_visuals.{bridge.ref}.parts",
+            f"a bridge partition of {expected_lcd} parts (the LCD of {primary_parts} and {second_parts})",
+            f"bridge parts={bridge_parts}",
+            f"set the bridge partition's parts to {expected_lcd}, "
+            "or use a different strategy",
+        )
+    for spec, spec_parts, operand_ref, operand_parts in (
+        (refined_a, refined_a_parts, plan.primary_visual.ref, primary_parts),
+        (refined_b, refined_b_parts, second_operand.ref, second_parts),
+    ):
+        if spec_parts != expected_lcd:
+            _fail(
+                "common_denominator_bridge_requires_refined_lcd_parts",
+                f"supporting_visuals.{spec.ref}.parts",
+                f"a refined partition of {expected_lcd} parts "
+                f"(the LCD of {primary_parts} and {second_parts})",
+                f"{spec.ref} parts={spec_parts}",
+                f"set {spec.ref}.parts to {expected_lcd}, or use a different strategy",
+            )
+    _require_same_whole(
+        [plan.primary_visual, second_operand, refined_a, refined_b, bridge],
+        "common_denominator_bridge",
+    )
+    primary_fraction = _partition_fraction(plan.primary_visual, "primary_visual")
+    second_fraction = _partition_fraction(
+        second_operand, f"supporting_visuals.{second_operand.ref}",
+    )
+    refined_a_fraction = _partition_fraction(
+        refined_a, f"supporting_visuals.{refined_a.ref}",
+    )
+    refined_b_fraction = _partition_fraction(
+        refined_b, f"supporting_visuals.{refined_b.ref}",
+    )
+    bridge_fraction = _partition_fraction(
+        bridge, f"supporting_visuals.{bridge.ref}",
+    )
+    for spec, refined_fraction, operand_fraction in (
+        (refined_a, refined_a_fraction, primary_fraction),
+        (refined_b, refined_b_fraction, second_fraction),
+    ):
+        if refined_fraction != operand_fraction:
+            _fail(
+                "common_denominator_bridge_refined_must_equal_operand",
+                f"supporting_visuals.{spec.ref}.shaded",
+                f"a refined partition equal to its operand ({operand_fraction}) "
+                f"expressed with denominator {expected_lcd}",
+                f"{spec.ref} = {refined_fraction}",
+                f"set {spec.ref}.shaded so shaded/{expected_lcd} = {operand_fraction}, "
+                "or use a different strategy",
+            )
+    _require_bridge_matches_answer(
+        answer_expression=answer_expression, bridge_ref=bridge.ref,
+        primary_fraction=primary_fraction, second_fraction=second_fraction,
+        bridge_fraction=bridge_fraction,
+    )
+    _require_owned_common_denominator_bridge_beat(plan)
+
+
+def _require_bridge_matches_answer(
+    *, answer_expression, bridge_ref, primary_fraction, second_fraction, bridge_fraction,
+):
+    """The bridge is the RESULT of the specific operation `answer_expression` names.
+
+    A "sum or difference either way" acceptance let an addition answer compile
+    with a difference bridge, so the animation contradicted the arithmetic on
+    screen. Pin the accepted operator (add or subtract) and the operand order
+    to `answer_expression` itself: the bridge must equal `primary op second`
+    exactly, using the operator drawn from the answer and the operands in the
+    same order the primary/second partitions declare them.
+    """
+    if answer_expression is None or answer_expression.node not in {"add", "subtract"}:
+        _fail(
+            "common_denominator_bridge_requires_additive_answer",
+            "answer_expression",
+            "an add or subtract expression combining the two operand fractions",
+            _describe_expression(answer_expression) if answer_expression is not None else "none",
+            "set answer_expression to an add or subtract of the two operand fractions, "
+            "or use a different strategy",
+        )
+    operand_fractions = [_answer_operand_fraction(op) for op in answer_expression.operands]
+    if len(operand_fractions) != 2 or any(f is None for f in operand_fractions):
+        _fail(
+            "common_denominator_bridge_answer_operands_must_be_literal_fractions",
+            "answer_expression.operands",
+            "two literal FractionNode operands so the compiler can match them to the partitions",
+            _describe_expression(answer_expression),
+            "write answer_expression as add/subtract of two fraction(literal, literal) operands",
+        )
+    answer_a, answer_b = operand_fractions
+    if (answer_a, answer_b) != (primary_fraction, second_fraction):
+        _fail(
+            "common_denominator_bridge_operands_must_match_partitions",
+            "answer_expression.operands",
+            f"operand fractions matching primary ({primary_fraction}) and "
+            f"second ({second_fraction}) in that order",
+            f"answer operands {answer_a}, {answer_b}",
+            "reorder answer_expression's operands so operand[0] equals the primary "
+            "partition and operand[1] equals the second supporting partition",
+        )
+    if answer_expression.node == "add":
+        expected = primary_fraction + second_fraction
+        operator_label = "operand_a + operand_b"
+    else:
+        expected = primary_fraction - second_fraction
+        operator_label = "operand_a - operand_b"
+        if expected < 0:
+            _fail(
+                "common_denominator_bridge_subtract_must_be_nonnegative",
+                "answer_expression",
+                "a subtraction whose result is >= 0 (bridge cannot shade a negative fraction)",
+                f"{primary_fraction} - {second_fraction} = {expected}",
+                "swap the operand order or use a different strategy",
+            )
+    if bridge_fraction != expected:
+        _fail(
+            "common_denominator_bridge_result_mismatch",
+            f"supporting_visuals.{bridge_ref}",
+            f"a bridge shaded/parts fraction equal to {operator_label} ({expected})",
+            f"primary {primary_fraction}, second {second_fraction}, bridge {bridge_fraction}",
+            "set the bridge partition's shaded so shaded/parts equals the answer_expression's "
+            "operation on the operands' fractions, or use a different strategy",
+        )
+
+
+def _answer_operand_fraction(operand):
+    """Read a FractionNode(literal, literal) as a `Fraction`, else None."""
+    if getattr(operand, "node", None) != "fraction":
+        return None
+    numerator, denominator = operand.operands
+    if numerator.node != "literal" or denominator.node != "literal":
+        return None
+    if not float(numerator.value).is_integer() or not float(denominator.value).is_integer():
+        return None
+    denom = int(denominator.value)
+    if denom == 0:
+        return None
+    return Fraction(int(numerator.value), denom)
+
+
+def _require_owned_common_denominator_bridge_beat(plan):
+    """The bridge walk needs a focus/derive beat that targets the bridge partition.
+
+    `common_denominator_bridge_beat_id` returns None otherwise, and
+    `_beat_kind_actions` falls through to the generic role change so the
+    refined-onto-LCD walk never lands. Refused here so a plan that could not
+    animate the bridge fails at compile time rather than as a decorative frame.
+    """
+    if common_denominator_bridge_beat_id(plan) is None:
+        bridge_ref = None
+        partitions = [spec for spec in plan.supporting_visuals if spec.kind == "partition"]
+        if len(partitions) >= 4:
+            bridge_ref = partitions[3].ref
+        target_ref = bridge_ref if bridge_ref is not None else "<bridge>"
+        _fail(
+            "common_denominator_bridge_requires_bridge_beat", "beats",
+            f"a focus or derive beat targeting {target_ref!r}, "
+            "which the compiler stages the bridge walk on",
+            "no focus/derive beat names the bridge partition",
+            "add a focus or derive beat whose targets include the bridge partition",
+        )
+
+
+def _partition_fraction(spec, path):
+    parts = _literal_integer(spec.parts)
+    shaded = _literal_integer(spec.shaded)
+    if parts is None or shaded is None:
+        _fail(
+            "partition_requires_literal_shaded_and_parts", path,
+            "a partition with literal shaded and parts so the compiler can compare fractions",
+            f"shaded={_describe_expression(spec.shaded)}, parts={_describe_expression(spec.parts)}",
+            "set shaded and parts to literal integers, or use a different strategy",
+        )
+    if parts <= 0:
+        _fail(
+            "partition_requires_positive_parts", f"{path}.parts",
+            "a partition with at least one part", str(parts),
+            "raise parts to a positive integer",
+        )
+    if shaded < 0 or shaded > parts:
+        _fail(
+            "partition_shaded_out_of_range", f"{path}.shaded",
+            f"a shaded count between 0 and {parts}", str(shaded),
+            f"set shaded between 0 and {parts}",
+        )
+    return Fraction(shaded, parts)
+
+
+def _require_same_whole(specs, strategy):
+    wholes = []
+    for spec in specs:
+        whole = _literal_integer(spec.whole)
+        if whole is None:
+            _fail(
+                f"{strategy}_requires_literal_whole",
+                f"supporting_visuals.{spec.ref}.whole",
+                "a literal whole on every partition so the compiler can verify they share it",
+                _describe_expression(spec.whole),
+                "set whole to a literal integer, or use a different strategy",
+            )
+        wholes.append((spec.ref, whole))
+    reference_ref, reference_whole = wholes[0]
+    for ref, whole in wholes[1:]:
+        if whole != reference_whole:
+            _fail(
+                f"{strategy}_requires_same_whole",
+                f"supporting_visuals.{ref}.whole",
+                f"every partition to share the primary's whole ({reference_whole})",
+                f"{ref} whole={whole}",
+                f"set {ref}.whole to {reference_whole}",
+            )
+
+
+def _lcm(a, b):
+    return a * b // gcd(a, b)
 
 
 def validate_unit_rate_value_range(plan, known_fields):
@@ -605,6 +1092,182 @@ def _require_owned_sweep_beat(plan):
             "no focus/derive beat names the primary visual",
             "add a focus or derive beat whose targets include the primary visual",
         )
+
+
+def _validate_percent_of_whole_compatibility(plan):
+    """A percent bar is a 100-unit bar with a whole-number percent as its value.
+
+    Constraining `maximum` to 100 keeps "part-of-whole" reasoning legible:
+    each segment represents exactly one percent, so a `value` of 30 reads as
+    "30% of the whole" without a separate axis. `value` in [1, 99] leaves
+    both the "part" and the "whole minus part" on screen: 0 would sweep
+    nothing (same shape as `magnitude_comparison`'s zero-value refusal) and
+    100 would put the whole bar in `focus`, losing the two-region contrast
+    the strategy exists to teach.
+
+    `supporting_visuals` are left free -- a label naming "30%" is a common
+    supporting visual and the strategy does not stage it.
+    """
+    spec = plan.primary_visual
+    if spec.kind != "bar":
+        _fail(
+            "percent_of_whole_requires_bar_primary", "primary_visual.kind",
+            "a bar primary visual (percent-of-whole is only defined on a bar)",
+            spec.kind,
+            "make the primary visual a bar with maximum=100, or use a different strategy",
+        )
+    maximum = _literal_integer(spec.maximum)
+    if maximum != 100:
+        _fail(
+            "percent_of_whole_requires_hundred_maximum", "primary_visual.maximum",
+            "a literal maximum of 100 so one segment reads as one percent",
+            _describe_expression(spec.maximum),
+            "set maximum to the literal 100, or use magnitude_comparison for a non-percent bar",
+        )
+    value = _literal_integer(spec.value)
+    if value is None:
+        _fail(
+            "percent_of_whole_requires_literal_value", "primary_visual.value",
+            "a literal whole-number percent (1..99) so the sweep addresses specific segments",
+            _describe_expression(spec.value),
+            "set value to a literal integer in [1, 99], or use a different strategy",
+        )
+    if value < 1 or value > 99:
+        _fail(
+            "percent_of_whole_requires_value_in_range", "primary_visual.value",
+            "a percent value in [1, 99] so both the part and the remainder stay on screen",
+            str(value),
+            "set value to a whole percent between 1 and 99, or use a different strategy",
+        )
+    if value > _MAX_PERCENT_SWEEP_SEGMENTS:
+        _fail(
+            "percent_of_whole_sweep_over_budget", "primary_visual.value",
+            f"a percent value at most {_MAX_PERCENT_SWEEP_SEGMENTS} so the "
+            f"per-segment sweep fits under the 40-action program cap",
+            str(value),
+            f"lower value to {_MAX_PERCENT_SWEEP_SEGMENTS} or below, or use a different strategy",
+        )
+    if percent_sweep_beat_id(plan) is None:
+        _fail(
+            "percent_of_whole_requires_sweep_beat", "beats",
+            f"a focus or derive beat targeting {plan.primary_visual.ref!r}, "
+            "which the compiler stages the sweep on",
+            "no focus/derive beat names the primary visual",
+            "add a focus or derive beat whose targets include the primary visual",
+        )
+
+
+def _validate_percent_change_compatibility(plan):
+    """A percent-change lesson needs a before bar and an after bar.
+
+    Both bars share a maximum (the axis against which the delta reads),
+    so the after-bar's segments align one-to-one with the before-bar's --
+    the delta the strategy sweeps has to fall inside the same segment
+    span. Distinct literal values give the strategy a delta to sweep;
+    equal values are the `group_reveal` shape (two identical bars, no
+    change to teach). Both values sit inside [1, maximum-1] so the
+    delta has room and the bars read as partial fills of the same axis.
+    """
+    primary = plan.primary_visual
+    if primary.kind != "bar":
+        _fail(
+            "percent_change_requires_bar_primary", "primary_visual.kind",
+            "a bar primary visual (percent_change stages a before/after bar pair)",
+            primary.kind,
+            "make the primary visual the 'before' bar, or use a different strategy",
+        )
+    supporting_bars = [
+        spec for spec in plan.supporting_visuals if spec.kind == "bar"
+    ]
+    if len(plan.supporting_visuals) != 1 or len(supporting_bars) != 1:
+        _fail(
+            "percent_change_requires_one_supporting_bar", "supporting_visuals",
+            "exactly one supporting bar visual (the 'after' bar)",
+            f"{len(plan.supporting_visuals)} supporting visuals "
+            f"({len(supporting_bars)} of them bars)",
+            "declare one supporting bar with matching maximum to hold the after value",
+        )
+    after = supporting_bars[0]
+    primary_max = _literal_integer(primary.maximum)
+    after_max = _literal_integer(after.maximum)
+    if primary_max is None or after_max is None:
+        _fail(
+            "percent_change_requires_literal_maxima", "primary_visual.maximum",
+            "literal whole-number maxima on both bars so the delta sweeps a known span",
+            f"before={_describe_expression(primary.maximum)}, "
+            f"after={_describe_expression(after.maximum)}",
+            "set both bars' maximum to a literal integer, or use a different strategy",
+        )
+    if primary_max != after_max:
+        _fail(
+            "percent_change_requires_matching_maxima",
+            f"supporting_visuals[0].maximum",
+            "the same literal maximum on both bars so the delta lands on the same axis",
+            f"before={primary_max}, after={after_max}",
+            "set the supporting bar's maximum equal to the primary bar's",
+        )
+    before_value = _literal_integer(primary.value)
+    after_value = _literal_integer(after.value)
+    if before_value is None or after_value is None:
+        _fail(
+            "percent_change_requires_literal_values", "primary_visual.value",
+            "literal whole-number values on both bars so the delta segments are known at compile time",
+            f"before={_describe_expression(primary.value)}, "
+            f"after={_describe_expression(after.value)}",
+            "set both bars' value to a literal integer, or use a different strategy",
+        )
+    if before_value == after_value:
+        _fail(
+            "percent_change_requires_distinct_values",
+            f"supporting_visuals[0].value",
+            "a non-zero delta between the two bars so the sweep has segments to animate",
+            f"before={before_value}, after={after_value}",
+            "make the after value different from the before value, or use a different strategy",
+        )
+    for label, value in (("before", before_value), ("after", after_value)):
+        if value < 1 or value > primary_max - 1:
+            _fail(
+                "percent_change_requires_value_in_range",
+                (
+                    "primary_visual.value" if label == "before"
+                    else "supporting_visuals[0].value"
+                ),
+                f"a {label} value in [1, {primary_max - 1}] so the bar reads as a partial fill",
+                str(value),
+                "set the value between 1 and one less than maximum, or use a different strategy",
+            )
+    delta = abs(after_value - before_value)
+    if delta > _MAX_PERCENT_SWEEP_SEGMENTS:
+        _fail(
+            "percent_change_sweep_over_budget", "supporting_visuals[0].value",
+            f"a delta of at most {_MAX_PERCENT_SWEEP_SEGMENTS} segments so the "
+            f"per-segment sweep fits under the 40-action program cap",
+            f"delta={delta}",
+            f"pick before/after values whose difference is {_MAX_PERCENT_SWEEP_SEGMENTS} or less",
+        )
+    _require_percent_change_sweep_beat(plan, after.ref)
+
+
+def _require_percent_change_sweep_beat(plan, after_ref):
+    """The compiler stages `percent_change`'s delta sweep on the after-bar.
+
+    Mirrors `_require_owned_sweep_beat` but pins to the supporting bar's
+    ref -- the sweep colours the delta segments on the after-bar, so the
+    beat that owns the sweep is the first focus/derive beat naming it, not
+    the primary.
+    """
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == after_ref for target in beat.targets):
+            return
+    _fail(
+        "percent_change_requires_sweep_beat", "beats",
+        f"a focus or derive beat targeting {after_ref!r}, "
+        "which the compiler stages the delta sweep on",
+        "no focus/derive beat names the after bar",
+        "add a focus or derive beat whose targets include the after bar",
+    )
 
 
 def _describe_expression(expression):
@@ -763,6 +1426,13 @@ def _literal_integer(expression):
     if expression.node != "literal" or not float(expression.value).is_integer():
         return None
     return int(expression.value)
+
+
+def _literal_number(expression):
+    """The literal's float value, or None when the expression is not a literal."""
+    if expression.node != "literal":
+        return None
+    return float(expression.value)
 
 
 def _literal_ceiling(expression):

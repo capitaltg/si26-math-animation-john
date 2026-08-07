@@ -318,6 +318,40 @@ def test_every_deferred_part_is_held_out_of_the_root_group(kind):
         )
 
 
+def test_bar_segments_encode_value_as_a_baseline_fill():
+    """A bar's `value` must render as a visible baseline fill: segments
+    [0..value-1] carry the whole-visual (structure) colour while segments
+    [value..maximum-1] fall back to the `neutral` "empty" colour. Without
+    this, two bars sharing a maximum but declaring different values render
+    identically -- the exact failure the percent_change strategy would hit
+    where the before-bar and after-bar look the same until the delta
+    sweep plays.
+    """
+    from app.meta.manim_primitives.style import resolve_semantic_style
+
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="bar", ref="bar", initial_role="structure"),
+        {"value": Fraction(3), "maximum": Fraction(7)},
+        ManimTextMeasurer(),
+    )
+    _root, children = _build_visual(PlacedVisual(measured, Point(0.0, 0.0)), "ocean")
+
+    filled = [children[("segment", i)] for i in range(3)]
+    empty = [children[("segment", i)] for i in range(3, 7)]
+    structure_colour = resolve_semantic_style("ocean", "structure")["color"]
+    neutral_colour = resolve_semantic_style("ocean", "neutral")["color"]
+
+    # Every filled segment carries the structure colour; every empty
+    # segment carries the neutral (unfilled) colour. Comparing the colour
+    # of segment[0]'s stroke against segment[value]'s stroke is what makes
+    # two bars with the same maximum but different values readable as
+    # different values -- the finding the percent_change review flagged.
+    for segment in filled:
+        assert segment.get_color() == structure_colour
+    for segment in empty:
+        assert segment.get_color() == neutral_colour
+
+
 def test_number_line_draws_its_line_through_its_markers():
     """The line must pass through its own marker dots, not sit below them.
 

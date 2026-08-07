@@ -2,7 +2,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.meta.dsl.expression import ExpressionNode
+from app.meta.dsl.expression import ExpressionNode, LiteralNode
 from app.meta.dsl.v3_common import (
     MAX_PLAN_BEATS, MAX_SIMPLE_STAGGER_SECONDS, MIN_PLAN_BEATS,
     AnchorRef, CalloutText, GeneratedText, ProseText, StyleRole, TargetRef,
@@ -92,10 +92,20 @@ class PartitionVisual(BaseModel):
     ref: GeneratedText
     whole: ExpressionNode
     parts: ExpressionNode = Field(description=(
-        f"How many equal parts the whole is divided into, drawn one marker per "
+        f"How many equal parts the whole is divided into, drawn one wedge per "
         f"part, at most {MAX_PART_CARDINALITY}. For a magnitude larger than that "
         f"use a number_line."
     ))
+    shaded: ExpressionNode = Field(
+        default_factory=lambda: LiteralNode(value=0),
+        description=(
+            "How many of the parts are shaded -- the numerator of the fraction "
+            "this partition depicts. Defaults to 0 for a plain (unshaded) "
+            "partition; the compiler requires 0 <= shaded <= parts and rejects "
+            "an equivalent partition, LCD bridge, or refined operand whose "
+            "shaded/parts fraction does not match the strategy's move."
+        ),
+    )
 
 
 class BarVisual(BaseModel):
@@ -503,6 +513,9 @@ class TeachingPlanDocument(BaseModel):
         "group_reveal", "short_stagger", "pair_elimination", "boundary_trace",
         "partition", "regroup", "magnitude_comparison", "unit_substitution",
         "unit_rate", "inverse_operation", "ray_shade",
+        "signed_hop", "distance_from_zero",
+        "equivalence_align", "common_denominator_bridge",
+        "percent_of_whole", "percent_change",
     ]
     #: The unit of the computed result ("meters"), empty when unitless. The
     #: compiler puts it on the answer visual's suffix; the model authors nothing
@@ -650,6 +663,38 @@ class TeachingPlanDocument(BaseModel):
                     f"beat {sweep_beat.id!r} is magnitude_comparison's sweep beat, which "
                     "the compiler stages entirely on its own; move its custom actions to "
                     "another beat"
+                )
+        if self.strategy in {"percent_of_whole", "percent_change"}:
+            # Same reasoning as magnitude_comparison: the compiler owns the
+            # sweep beat's actions (a segment-per-slot focus over the part
+            # or the delta), and a hand-written role change on the same
+            # beat would either duplicate a compiler-emitted focus or slip
+            # a second focus into a slot the salience gate expects to hold
+            # exactly one. Author-written callouts belong on an adjacent
+            # beat, not on the sweep itself.
+            #
+            # For percent_change the beat that owns the sweep is the first
+            # focus/derive beat naming the supporting (after) bar, not the
+            # primary; percent_of_whole matches magnitude_comparison and
+            # picks the first focus/derive beat naming the primary.
+            sweep_ref = (
+                self.supporting_visuals[0].ref
+                if self.strategy == "percent_change" and self.supporting_visuals
+                else self.primary_visual.ref
+            )
+            sweep_beat = next(
+                (
+                    beat for beat in self.beats
+                    if beat.kind in {"focus", "derive"}
+                    and any(target.visual_ref == sweep_ref for target in beat.targets)
+                ),
+                None,
+            )
+            if sweep_beat is not None and sweep_beat.custom_actions:
+                raise ValueError(
+                    f"beat {sweep_beat.id!r} is {self.strategy}'s sweep beat, which "
+                    "the compiler stages entirely on its own; move its custom actions "
+                    "to another beat"
                 )
         return self
 

@@ -2,12 +2,13 @@ from dataclasses import dataclass
 
 from app.meta.dsl.scene_program import (
     AnswerProgramVisual, BarProgramVisual, CalloutRelation,
-    CoordinatePlaneProgramVisual, DataDisplayProgramVisual, DrawAction,
+    CoordinatePlaneProgramVisual, DataDisplayProgramVisual,
+    DistanceAnnotationAction, DrawAction,
     GridProgramVisual, LabelProgramVisual, MoveAction, NumberLineProgramVisual,
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
     ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
-    ShowAnswerStageAction, ShowRelationAction, TraceAction, TransformAction,
-    UnitTapeProgramVisual,
+    ShowAnswerStageAction, ShowRelationAction, SignedHopArrowAction,
+    TraceAction, TransformAction, UnitTapeProgramVisual,
 )
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.expression_display import has_operation
@@ -61,6 +62,24 @@ _MAX_ELIMINATION_SECONDS = 6.0
 _REGROUP_PART = {"grid": "cell", "object_set": "item"}
 _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 
+# `signed_hop` and `distance_from_zero` (M6) each own one derive/focus beat on
+# the primary number_line: `signed_hop` draws one directed arrow per
+# consecutive marker pair (see `signed_hop_beat_id`); `distance_from_zero`
+# draws a bracketed span from the origin to each nonzero marker, labelled with
+# the magnitude (see `distance_from_zero_beat_id`). The generic role change
+# still fires on the same beat, so the whole line reads as focused while the
+# arrow / annotation is drawn on top.
+#
+# `equivalence_align` and `common_denominator_bridge` (M2) carry a compile-time
+# shape (which supporting partitions must be declared and which must reveal)
+# AND their own beat-owned focus walks: the align beat highlights the shaded
+# parts of both partitions together, and the bridge beat highlights the LCD
+# partition's shaded parts. Both use `SetRoleAction` on the plan-author's own
+# partition parts -- no new action kind is needed -- but the walk is owned by
+# a single beat so a plan with two derive beats does not double-stage it.
+_EQUIVALENCE_ALIGN_STRATEGY = "equivalence_align"
+_BRIDGE_STRATEGY = "common_denominator_bridge"
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
@@ -75,6 +94,12 @@ class BeatExpander:
         self._ray_boundary_beat_id, self._ray_shade_beat_id = (
             ray_shade_beat_ids(plan)
         )
+        self._signed_hop_beat_id = signed_hop_beat_id(plan)
+        self._distance_from_zero_beat_id = distance_from_zero_beat_id(plan)
+        self._equivalence_align_beat_id = equivalence_align_beat_id(plan)
+        self._bridge_beat_id = common_denominator_bridge_beat_id(plan)
+        self._percent_sweep_beat_id = percent_sweep_beat_id(plan)
+        self._percent_change_sweep_target = _percent_change_sweep_target(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -232,6 +257,26 @@ class BeatExpander:
             and beat.id == getattr(self, "_sweep_beat_id", None)
         ):
             return len(actions)
+        if (
+            plan.strategy == _BRIDGE_STRATEGY
+            and beat.id == getattr(self, "_bridge_beat_id", None)
+        ):
+            # The bridge beat walks each operand through its LCD refinement
+            # into the bridge, then dims the operands and refined intermediates
+            # back to structure. One slot per action keeps every focus role
+            # change on its own instant so `check_salience` sees at most one
+            # focused target per second; the default `beat_seconds /
+            # MIN_ACTION_SECONDS` rule batches two focuses into one slot as soon
+            # as the beat's ~17 actions overflow the seconds/min ratio.
+            return len(actions)
+        if (
+            plan.strategy in {"percent_of_whole", "percent_change"}
+            and beat.id == getattr(self, "_percent_sweep_beat_id", None)
+        ):
+            # Same reasoning as magnitude_comparison: one slot per focus so
+            # `check_salience` sees exactly one focus role change at each
+            # at_seconds.
+            return len(actions)
         return None
 
     def _standard_actions(
@@ -351,6 +396,94 @@ class BeatExpander:
             # not double-stage one sweep.
             actions = self._magnitude_comparison_actions(plan, current_roles)
             if actions:
+                return actions
+
+        if (
+            plan.strategy == "signed_hop"
+            and beat.id == getattr(self, "_signed_hop_beat_id", None)
+        ):
+            # One directed arrow per consecutive marker pair. Emitted alongside
+            # the generic focus so the whole line still reads as the beat's
+            # subject while each hop lands. Later derive/focus beats fall
+            # through to the generic role change alone.
+            arrows = self._signed_hop_actions(plan)
+            if arrows:
+                return self._generic_role_change(beat, "focus", current_roles) + arrows
+
+        if (
+            plan.strategy == "distance_from_zero"
+            and beat.id == getattr(self, "_distance_from_zero_beat_id", None)
+        ):
+            # One bracketed span per nonzero marker, anchored at the origin
+            # and labelled with the magnitude, so the beat teaches the
+            # distance rather than just recolouring the markers.
+            annotations = self._distance_from_zero_actions(plan)
+            if annotations:
+                return self._generic_role_change(beat, "focus", current_roles) + annotations
+
+        if (
+            plan.strategy == _EQUIVALENCE_ALIGN_STRATEGY
+            and beat.id == getattr(self, "_equivalence_align_beat_id", None)
+        ):
+            # Focus every shaded wedge of BOTH partitions in one beat so the
+            # equivalent numerators read as matching amounts. The compiler
+            # already verified the fractions are equal; the walk here is what
+            # makes that equality land in the animation.
+            actions = self._equivalence_align_actions(plan, current_roles)
+            if actions:
+                detailed = self._targets_detailed_by_custom_actions(beat)
+                acted_refs = {plan.primary_visual.ref} | {
+                    spec.ref for spec in plan.supporting_visuals if spec.kind == "partition"
+                }
+                for target in beat.targets:
+                    if target.visual_ref in acted_refs and target.part is None:
+                        continue
+                    if self._target_key(target) in detailed:
+                        continue
+                    actions.extend(self._role_change(target, "focus", current_roles))
+                return actions
+
+        if (
+            plan.strategy == _BRIDGE_STRATEGY
+            and beat.id == getattr(self, "_bridge_beat_id", None)
+        ):
+            # Focus the bridge partition's shaded wedges -- the refined result
+            # on the LCD -- and dim the operands' shaded wedges to structure,
+            # so the frame reads as "the operands combined into the bridge".
+            actions = self._bridge_actions(plan, current_roles)
+            if actions:
+                detailed = self._targets_detailed_by_custom_actions(beat)
+                bridge_ref = _bridge_ref(plan)
+                operand_refs = _operand_refs(plan)
+                refined_refs = {spec.ref for spec in _refined_specs(plan)}
+                acted_refs = {bridge_ref, *operand_refs, *refined_refs}
+                for target in beat.targets:
+                    if target.visual_ref in acted_refs and target.part is None:
+                        continue
+                    if self._target_key(target) in detailed:
+                        continue
+                    actions.extend(self._role_change(target, "focus", current_roles))
+                return actions
+
+        if (
+            plan.strategy in {"percent_of_whole", "percent_change"}
+            and beat.id == getattr(self, "_percent_sweep_beat_id", None)
+        ):
+            # Sweep the "part" (percent_of_whole) or the delta (percent_change)
+            # one segment per slot. Same salience discipline as
+            # `magnitude_comparison`: one focus role change per at_seconds so
+            # the extent reads left to right rather than as a batched
+            # recolour, and `_slot_count` sizes the beat accordingly.
+            actions = self._percent_sweep_actions(plan, current_roles)
+            if actions:
+                if plan.strategy == "percent_change":
+                    # Label the change with a Δ ribbon anchored at the delta's
+                    # midpoint segment. The ribbon reads before the sweep
+                    # starts, so the learner knows the coming animation names
+                    # the change rather than merely recolouring the after-bar.
+                    ribbon = self._percent_change_delta_ribbon(plan, relations)
+                    if ribbon is not None:
+                        actions = [ribbon, *actions]
                 return actions
 
         if (
@@ -542,6 +675,193 @@ class BeatExpander:
             target = TargetRef(visual_ref=ref, part="ray", index=0)
             return self._reveal_unrevealed(plan, [target], revealed)
         return []
+
+    def _signed_hop_actions(self, plan):
+        """One arrow per consecutive marker pair, in plan order.
+
+        Plan order is the hop sequence, so `markers[i] -> markers[i+1]` is the
+        i-th hop. The source-then-target order encodes the sign at render time:
+        a positive hop draws source-left/target-right and a right-pointing
+        arrow; a negative hop reverses both -- see `_build_signed_hop_arrow`
+        in `renderer.py`.
+        """
+        ref = plan.primary_visual.ref
+        markers = plan.primary_visual.markers
+        return [
+            SignedHopArrowAction(
+                source=TargetRef(visual_ref=ref, part="marker", index=index),
+                target=TargetRef(visual_ref=ref, part="marker", index=index + 1),
+            )
+            for index in range(len(markers) - 1)
+        ]
+
+    def _distance_from_zero_actions(self, plan):
+        """A distance bracket for every nonzero marker, all anchored on 0.
+
+        `_validate_distance_from_zero_compatibility` (in `compiler.py`) has
+        already refused a plan without a 0 marker or without a nonzero one, so
+        the origin index and the nonzero list are both guaranteed to exist by
+        the time this runs.
+        """
+        ref = plan.primary_visual.ref
+        markers = plan.primary_visual.markers
+        origin_index = next(
+            index for index, marker in enumerate(markers)
+            if _literal_number(marker) == 0.0
+        )
+        origin = TargetRef(visual_ref=ref, part="marker", index=origin_index)
+        actions = []
+        for index, marker in enumerate(markers):
+            value = _literal_number(marker)
+            if value == 0.0:
+                continue
+            actions.append(DistanceAnnotationAction(
+                origin=origin,
+                target=TargetRef(visual_ref=ref, part="marker", index=index),
+                label=_format_magnitude(abs(value)),
+            ))
+        return actions
+
+    def _equivalence_align_actions(self, plan, current_roles):
+        specs = [plan.primary_visual, *[
+            spec for spec in plan.supporting_visuals if spec.kind == "partition"
+        ]]
+        actions = []
+        for spec in specs:
+            shaded = _partition_shaded(spec)
+            for index in range(shaded):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+        return actions
+
+    def _bridge_actions(self, plan, current_roles):
+        """Walk each operand from its own denominator into the LCD, then land
+        the bridge, then dim the operands and refined intermediates so the
+        bridge holds the punchline.
+
+        For each (operand, refined) pair the beat focuses the operand's shaded
+        wedges (its unlike-denominator state), then focuses the refined
+        partition's shaded wedges (that same amount expressed on the LCD --
+        3/6 and 2/6 in a 1/2 + 1/3 lesson). Only after both refinements have
+        landed does the bridge focus, so the frame reads as "each operand
+        refined onto the common denominator, combined into the bridge" rather
+        than as a jump from unlike-denominator operands to their sum.
+
+        The compiler enforces the four supporting partitions in order --
+        second_operand, refined_a, refined_b, bridge -- so `_refined_specs`
+        and `_bridge_ref` return the matching operand refinements without a
+        separate name convention.
+        """
+        bridge_ref = _bridge_ref(plan)
+        operand_specs = [
+            spec for spec in (plan.primary_visual, *plan.supporting_visuals)
+            if spec.kind == "partition" and spec.ref != bridge_ref
+        ]
+        refined_specs = _refined_specs(plan)
+        bridge_spec = next(
+            (
+                spec for spec in plan.supporting_visuals
+                if spec.kind == "partition" and spec.ref == bridge_ref
+            ),
+            None,
+        )
+        if bridge_spec is None or len(refined_specs) != 2:
+            return []
+        refined_refs = {spec.ref for spec in refined_specs}
+        original_operand_specs = [
+            spec for spec in operand_specs if spec.ref not in refined_refs
+        ]
+        actions = []
+        for operand_spec, refined_spec in zip(original_operand_specs, refined_specs):
+            for index in range(_partition_shaded(operand_spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=operand_spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+            for index in range(_partition_shaded(refined_spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=refined_spec.ref, part="partition", index=index),
+                    "focus", current_roles,
+                ))
+        for index in range(_partition_shaded(bridge_spec)):
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=bridge_spec.ref, part="partition", index=index),
+                "focus", current_roles,
+            ))
+        for spec in (*original_operand_specs, *refined_specs):
+            for index in range(_partition_shaded(spec)):
+                actions.extend(self._role_change(
+                    TargetRef(visual_ref=spec.ref, part="partition", index=index),
+                    "structure", current_roles,
+                ))
+        return actions
+
+    def _percent_sweep_actions(self, plan, current_roles):
+        """Focus the "part" (percent_of_whole) or the delta (percent_change).
+
+        For `percent_of_whole` the primary bar's segments [0, value-1] are
+        the "part of the whole"; the remaining segments read as
+        "whole minus part" and stay in the initial structural role. For
+        `percent_change` the sweep colours the delta segments on the
+        supporting (after) bar, moving from `min(before, after)` up to but
+        not including `max(before, after)`, so the walk reads as
+        "the change" against the after-bar's existing fill.
+
+        `validate_strategy_compatibility` refuses either strategy when the
+        driving values are not literal, so the walk is fully known here.
+        """
+        if plan.strategy == "percent_of_whole":
+            ref = plan.primary_visual.ref
+            value = _literal_int(plan.primary_visual.value) or 0
+            indices = tuple(range(value))
+        else:  # percent_change
+            target = getattr(self, "_percent_change_sweep_target", None)
+            if target is None:
+                return []
+            ref, indices = target
+        actions = []
+        for index in indices:
+            actions.extend(self._role_change(
+                TargetRef(visual_ref=ref, part="segment", index=index),
+                "focus", current_roles,
+            ))
+        return actions
+
+    def _percent_change_delta_ribbon(self, plan, relations):
+        """Append a Δ callout on the after-bar's delta midpoint, if not already.
+
+        Anchors at the midpoint segment of the delta range so the ribbon sits
+        directly over the change the sweep animates. Text names the delta as
+        raw units ("Δ 10"): both bars share a `maximum` (see
+        `_validate_percent_change_compatibility`), so one segment on either
+        bar is one unit of the same scale, and the ribbon reads against the
+        bars without a separate axis. Returns a `ShowRelationAction` that the
+        sweep beat plays alongside its first focus, or `None` when the sweep
+        has no target to attach to (a hand-built plan the validator would
+        have caught earlier).
+        """
+        target = getattr(self, "_percent_change_sweep_target", None)
+        if target is None:
+            return None
+        ref, indices = target
+        if not indices:
+            return None
+        midpoint = indices[len(indices) // 2]
+        delta = len(indices)
+        ribbon_ref = "delta_ribbon"
+        if any(relation.ref == ribbon_ref for relation in relations):
+            return None
+        relations.append(CalloutRelation(
+            ref=ribbon_ref,
+            target={
+                "visual_ref": ref, "part": "segment",
+                "index": midpoint, "anchor": "top",
+            },
+            text=f"Δ {delta}",
+        ))
+        return ShowRelationAction(relation_ref=ribbon_ref)
 
     def _unit_rate_actions(self, plan, current_roles):
         """Focus box[0] -- the "per one" column that carries the rate.
@@ -880,6 +1200,198 @@ def magnitude_sweep_beat_id(plan):
     return None
 
 
+def signed_hop_beat_id(plan):
+    """The single beat signed_hop stages its arrow sequence on, or None.
+
+    Same discipline as `magnitude_sweep_beat_id`: the first derive/focus beat
+    that names the primary number_line owns the hops; later derive/focus beats
+    fall through so a plan with two derive beats does not double-stage the
+    arrows. Filtering by `beat.targets` also lets a focus beat that only
+    names a specific marker (a `focus_end` in the M6 fixtures) run its own
+    generic role change without being commandeered by the arrow pass.
+    """
+    if plan.strategy != "signed_hop":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for beat in plan.beats:
+        if beat.kind not in {"derive", "focus"}:
+            continue
+        if any(
+            target.visual_ref == primary_ref and target.part is None
+            for target in beat.targets
+        ):
+            return beat.id
+    return None
+
+
+def distance_from_zero_beat_id(plan):
+    """The single beat distance_from_zero stages the annotation on, or None.
+
+    First derive beat naming the primary line as a whole, else the first focus
+    beat. Preferring `derive` over `focus` puts the annotation on the beat that
+    reads "measure the distance", not the one that reads "state it".
+    """
+    if plan.strategy != "distance_from_zero":
+        return None
+    primary_ref = plan.primary_visual.ref
+    for kinds in ({"derive"}, {"focus"}):
+        for beat in plan.beats:
+            if beat.kind not in kinds:
+                continue
+            if any(
+                target.visual_ref == primary_ref and target.part is None
+                for target in beat.targets
+            ):
+                return beat.id
+    return None
+
+
+def equivalence_align_beat_id(plan):
+    """The single beat equivalence_align stages its shaded-wedge walk on.
+
+    The first derive/focus beat that names BOTH the primary and the supporting
+    partition owns the walk. A beat that names only one of the two would emit
+    the walk over an unrevealed second partition (or vice versa), so requiring
+    both here means the alignment lands only when both are on-screen.
+    """
+    if plan.strategy != _EQUIVALENCE_ALIGN_STRATEGY:
+        return None
+    primary_ref = plan.primary_visual.ref
+    supports = [
+        spec.ref for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    if not supports:
+        return None
+    support_ref = supports[0]
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        refs = {target.visual_ref for target in beat.targets}
+        if primary_ref in refs and support_ref in refs:
+            return beat.id
+    return None
+
+
+def common_denominator_bridge_beat_id(plan):
+    """The single beat common_denominator_bridge stages its refine walk on.
+
+    The first derive/focus beat that names the bridge partition owns the walk;
+    the compiler treats the second supporting partition as the LCD bridge.
+    """
+    if plan.strategy != _BRIDGE_STRATEGY:
+        return None
+    bridge_ref = _bridge_ref(plan)
+    if bridge_ref is None:
+        return None
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == bridge_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def _bridge_ref(plan):
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return partitions[3].ref if len(partitions) >= 4 else None
+
+
+def _operand_refs(plan):
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return (plan.primary_visual.ref, partitions[0].ref) if partitions else (plan.primary_visual.ref,)
+
+
+def _refined_specs(plan):
+    """The two LCD-refined operand partitions, or an empty tuple if absent.
+
+    Order matches operand order: refined_a is the primary_visual's refinement,
+    refined_b is the second_operand's refinement. `_validate_common_
+    denominator_bridge_compatibility` enforces the shape; falling back to an
+    empty tuple keeps `_bridge_actions` graceful on non-strategy paths.
+    """
+    partitions = [
+        spec for spec in plan.supporting_visuals if spec.kind == "partition"
+    ]
+    return (partitions[1], partitions[2]) if len(partitions) >= 4 else ()
+
+
+def _partition_shaded(spec):
+    """Literal shaded count of a partition spec, else 0.
+
+    The compiler already refuses a partition without literal shaded/parts for
+    both strategies (see `_partition_fraction`), so returning 0 here is only
+    reached for a partition falling through from a non-strategy path -- the
+    same defensive shape `_literal_int` uses.
+    """
+    value = getattr(spec, "shaded", None)
+    if value is None:
+        return 0
+    literal = _literal_int(value)
+    return literal if literal is not None else 0
+
+
+def percent_sweep_beat_id(plan):
+    """The single beat percent_of_whole / percent_change stage their sweep on.
+
+    Same discipline as `magnitude_sweep_beat_id`: one beat owns the sweep so
+    two focus/derive beats do not double-stage one recolour, and `_slot_count`
+    can size that beat by its action count. For `percent_of_whole` the sweep
+    lands on the primary bar (the segments 0..value-1 are the "part"); for
+    `percent_change` the sweep lands on the supporting (after) bar (the
+    segments between the before and after values are the delta). Selecting
+    by `beat.targets` picks the actual sweep beat rather than the first
+    focus/derive beat in plan order.
+    """
+    if plan.strategy == "percent_of_whole":
+        sweep_ref = plan.primary_visual.ref
+    elif plan.strategy == "percent_change":
+        if not plan.supporting_visuals:
+            return None
+        sweep_ref = plan.supporting_visuals[0].ref
+    else:
+        return None
+    for beat in plan.beats:
+        if beat.kind not in {"focus", "derive"}:
+            continue
+        if any(target.visual_ref == sweep_ref for target in beat.targets):
+            return beat.id
+    return None
+
+
+def _percent_change_sweep_target(plan):
+    """The visual and segment indices `percent_change` sweeps, or None.
+
+    The delta is the segments between the before and after values on the
+    after (supporting) bar. Direction of the change is preserved by taking
+    the min as the lower bound and the max as the upper bound of the walk:
+    a $40 -> $50 mark-up and a $50 -> $40 discount both sweep segments
+    [40, 50), so the animation always moves the same direction on screen.
+    That is the delta's magnitude, which is what percent_change teaches;
+    "before was greater than after" reads from the two labels the plan
+    puts on its supporting visuals rather than from the sweep direction.
+
+    Returns (visual_ref, indices) for the sweep, or None if the plan does
+    not carry the shape (validate_strategy_compatibility should have caught
+    this earlier; the None guard keeps expansion from raising on a
+    hand-constructed plan).
+    """
+    if plan.strategy != "percent_change" or not plan.supporting_visuals:
+        return None
+    after = plan.supporting_visuals[0]
+    if after.kind != "bar":
+        return None
+    before_value = _literal_int(plan.primary_visual.value)
+    after_value = _literal_int(after.value)
+    if before_value is None or after_value is None:
+        return None
+    lower, upper = sorted((before_value, after_value))
+    return after.ref, tuple(range(lower, upper))
+
+
 def _literal_int(expression):
     """Extract a whole-number literal, or return None if the expression is not one.
 
@@ -962,3 +1474,14 @@ def _literal_number(expression):
     if getattr(expression, "node", None) != "literal":
         return None
     return float(expression.value)
+
+
+def _format_magnitude(value):
+    """Human-friendly label for a distance magnitude.
+
+    Whole magnitudes render without a decimal point ("7" not "7.0") so the
+    label reads as the value the lesson names. Fractional magnitudes keep the
+    decimal; the label field caps at 8 characters, which is enough for any
+    marker the schema permits.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)

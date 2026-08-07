@@ -65,8 +65,18 @@ def place_vertical_lesson(
 ) -> list[PlacedVisual]:
     arrangement = _arrange(measured_visuals, relations)
     callout_room = _bottom_callout_room_per_scale(arrangement, relations)
+    # A `top`-anchored callout renders above its anchor part; a `bottom`
+    # callout on a supporting visual renders below one that layout does not
+    # size against. Both push the column inward from the safe-frame edge by
+    # a full envelope, so shrink the frame the column has to fit inside
+    # rather than threading a second pad through the scale solve.
+    top_pad = _outer_callout_pad(arrangement, relations, "top")
+    extra_bottom_pad = _outer_callout_pad(
+        arrangement, relations, "bottom", exclude_primary=True,
+    )
+    frame = _shrunk_frame(INSTRUCTIONAL_FRAME, top_pad, extra_bottom_pad)
     scale = min(1.0, _fit_instructional_scale(
-        arrangement, INSTRUCTIONAL_FRAME, callout_room,
+        arrangement, frame, callout_room,
     ))
     if scale < MIN_TEXT_SCALE:
         raise V3ValidationError(V3Failure(
@@ -80,10 +90,43 @@ def place_vertical_lesson(
     placed_by_ref = {
         item.measured.ref: item
         for item in _place_instructional(
-            arrangement, INSTRUCTIONAL_FRAME, scale, primary_bottom_pad,
+            arrangement, frame, scale, primary_bottom_pad,
         )
     }
     return [placed_by_ref[item.ref] for item in measured_visuals]
+
+
+def _shrunk_frame(frame: Bounds, top_pad: float, bottom_pad: float) -> Bounds:
+    if not top_pad and not bottom_pad:
+        return frame
+    return Bounds(frame.left, frame.right, frame.bottom + bottom_pad, frame.top - top_pad)
+
+
+def _outer_callout_pad(
+    arrangement, relations, direction: str, *, exclude_primary: bool = False,
+) -> float:
+    """`CALLOUT_ENVELOPE` when any callout renders past the column edge in
+    `direction`, else zero.
+
+    A callout's label sits `CALLOUT_ENVELOPE` past its anchor in the rendered
+    direction. The credited `_bottom_callout_room_per_scale` path already
+    accounts for a `bottom` callout on the primary (which is where a
+    `rectangle_measurement` puts its length label). For everything else --
+    a `top` anchor on any visual, or a `bottom` anchor on a supporting
+    visual -- the layout has no interior room to credit against, so it
+    reserves the whole envelope by shrinking the frame the column fits into.
+    """
+    primary = arrangement.primary
+    if primary is None or not relations:
+        return 0.0
+    for relation in relations:
+        target = getattr(relation, "target", None)
+        if target is None or getattr(target, "anchor", None) != direction:
+            continue
+        if exclude_primary and getattr(target, "visual_ref", None) == primary.ref:
+            continue
+        return CALLOUT_ENVELOPE
+    return 0.0
 
 
 def _bottom_callout_room_per_scale(arrangement, relations):
