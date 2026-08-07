@@ -42,12 +42,14 @@ def test_scene_round_trip_retains_manual_source_and_stated_answer():
         grade_level=4,
         manual_source_text="Three halves plus two halves equals five halves.",
         stated_answer=Fraction(5, 2),
+        stated_answer_source="5/2",
     )
 
     restored = Scene.model_validate_json(scene.model_dump_json())
 
     assert restored.manual_source_text == scene.manual_source_text
     assert restored.stated_answer == Fraction(5, 2)
+    assert restored.stated_answer_source == "5/2"
 
 
 @pytest.mark.parametrize("grade_level", [-1, 9])
@@ -124,3 +126,54 @@ def test_scene_rejects_none_of_the_three_sources():
 
     with pytest.raises(ValidationError):
         Scene(scene_id="s1", grade_level=2, status="approved")
+
+
+def _minimal_scene_kwargs():
+    from app.models.scene import TemplateRef
+
+    return dict(
+        scene_id="s1",
+        candidate_id="c1",
+        template=TemplateRef(name="number_line", version_id="v1", artifact_hash="h1"),
+        grade_level=2,
+        params={},
+    )
+
+
+def test_stated_answer_source_requires_stated_answer():
+    with pytest.raises(ValidationError):
+        Scene(
+            **_minimal_scene_kwargs(),
+            stated_answer=None,
+            stated_answer_source="= 9",
+        )
+
+
+def test_stated_answer_requires_source():
+    with pytest.raises(ValidationError):
+        Scene(
+            **_minimal_scene_kwargs(),
+            stated_answer=Fraction(9),
+            stated_answer_source=None,
+        )
+
+
+def test_stated_answer_with_source_ok():
+    scene = Scene(
+        **_minimal_scene_kwargs(),
+        stated_answer=Fraction(9),
+        stated_answer_source="= 9",
+    )
+    assert scene.stated_answer == Fraction(9)
+    assert scene.stated_answer_source == "= 9"
+    assert scene.mismatch_acknowledged is False
+
+
+def test_mismatch_ack_requires_stated_answer():
+    with pytest.raises(ValidationError):
+        Scene(
+            **_minimal_scene_kwargs(),
+            stated_answer=None,
+            stated_answer_source=None,
+            mismatch_acknowledged=True,
+        )

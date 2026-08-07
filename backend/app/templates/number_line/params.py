@@ -1,3 +1,4 @@
+from fractions import Fraction
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -25,6 +26,18 @@ class NumberLineParams(BaseModel):
         check_number_line_compatibility(self)
         return self
 
+    def compute_answer(self) -> Fraction:
+        total = self.start
+        for step in self.steps:
+            if step.operation == "add":
+                total += step.amount
+            else:
+                total -= step.amount
+        return Fraction(total)
+
 
 class ChainedNumberLineParams(BaseModel):
     items: list[NumberLineParams] = Field(min_length=2, max_length=4)
+
+    def compute_answer(self) -> Fraction:
+        return self.items[-1].compute_answer()

@@ -1,3 +1,4 @@
+from fractions import Fraction
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -54,6 +55,18 @@ class ArrayGridParams(BaseModel):
         check_array_grid_compatibility(self)
         return self
 
+    def compute_answer(self) -> Fraction:
+        current: Fraction = Fraction(self.starting_total())
+        for step in self.steps:
+            if step.operation == "multiply":
+                current *= step.factor
+            else:
+                current /= step.factor
+        return current
+
 
 class ChainedArrayGridParams(BaseModel):
     items: list[ArrayGridParams] = Field(min_length=2, max_length=4)
+
+    def compute_answer(self) -> Fraction:
+        return self.items[-1].compute_answer()

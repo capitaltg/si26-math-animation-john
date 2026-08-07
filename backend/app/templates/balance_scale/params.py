@@ -1,3 +1,5 @@
+from fractions import Fraction
+
 from pydantic import BaseModel, Field, model_validator
 
 from app.templates.balance_scale.guard import check_balance_scale_compatibility
@@ -18,6 +20,12 @@ class BalanceScaleParams(BaseModel):
         components = [str(term) for term in self.left_terms]
         return [(str(self.right_total), components)]
 
+    def compute_answer(self) -> Fraction:
+        return Fraction(sum(self.left_terms))
+
 
 class ChainedBalanceScaleParams(BaseModel):
     items: list[BalanceScaleParams] = Field(min_length=2, max_length=4)
+
+    def compute_answer(self) -> Fraction:
+        return self.items[-1].compute_answer()

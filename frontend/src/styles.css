@@ -824,6 +824,12 @@ h3 {
   max-width: 70ch;
 }
 
+.mismatch-ack {
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
+  margin: 0.5rem 0 0;
+}
+
 .scene__grid {
   display: grid;
   grid-template-columns: minmax(0, 340px) minmax(0, 1fr);

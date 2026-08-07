@@ -19,6 +19,7 @@ from app.models.scene import (
 )
 from app.pipeline.classification import ClassificationResult, classify_candidate
 from app.pipeline.discovery import discover_candidates_for_document
+from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
@@ -110,6 +111,10 @@ class SceneOut(BaseModel):
     thumbnail_url: str | None = None
     source_excerpt: str
     detected_summary: str
+    stated_answer: str | None = None
+    stated_answer_source: str | None = None
+    mismatch: dict | None = None
+    mismatch_acknowledged: bool = False
 
 
 class StoryboardRequest(BaseModel):
@@ -313,6 +318,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
     else:
         source_excerpt = scene.manual_source_text or ""
         detected_summary = ""
+    stated_answer_display = (
+        format_answer(scene.stated_answer) if scene.stated_answer is not None else None
+    )
+    mismatch = scene_mismatch(scene)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -327,6 +336,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         thumbnail_url=thumbnail_url,
         source_excerpt=source_excerpt,
         detected_summary=detected_summary,
+        stated_answer=stated_answer_display,
+        stated_answer_source=scene.stated_answer_source,
+        mismatch=mismatch,
+        mismatch_acknowledged=scene.mismatch_acknowledged,
     )
 
 
@@ -471,6 +484,14 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
             raise HTTPException(
                 status_code=400,
                 detail=f"Scene {scene_id} is no longer available for combining",
+            )
+        if scene_mismatch(scene) is not None and not scene.mismatch_acknowledged:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "stated_answer_mismatch_in_chain",
+                    "scene_id": scene_id,
+                },
             )
         scenes.append(scene)
 
@@ -645,11 +666,27 @@ def edit_scene(
     content_changed = params_changed or grade_changed
     if content_changed and scene.status in ("approved", "rejected"):
         updates["status"] = "pending_review"
+    if content_changed:
+        updates["mismatch_acknowledged"] = False
 
     updated = _write_scene_cas(
         session, scene_id, scene.revision, updates, bump_revision=content_changed
     )
     return _scene_out(updated, candidates)
+
+
+def _guard_approval_mismatch(scene: Scene) -> None:
+    mismatch = scene_mismatch(scene)
+    if mismatch is None or scene.mismatch_acknowledged:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "stated_answer_mismatch",
+            "stated": mismatch["stated"],
+            "computed": mismatch["computed"],
+        },
+    )
 
 
 def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> SceneOut:
@@ -669,7 +706,30 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
 def approve_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = _lookup_active_scene(session, scene_id)
+    _guard_approval_mismatch(scene)
     return _set_scene_status(session_id, scene_id, "approved")
+
+
+@router.post("/storyboard/{scene_id}/acknowledge-mismatch", response_model=SceneOut)
+def acknowledge_mismatch(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = _lookup_active_scene(session, scene_id)
+    if scene_mismatch(scene) is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "no_mismatch_to_acknowledge"},
+        )
+    candidates = _lookup_candidates(session, scene)
+    updated = _write_scene_cas(
+        session, scene_id, scene.revision, {"mismatch_acknowledged": True}
+    )
+    return _scene_out(updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/reject", response_model=SceneOut)

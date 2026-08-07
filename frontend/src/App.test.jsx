@@ -89,6 +89,14 @@ const chainedScene = {
   detected_summary: `${pendingScene.detected_summary} / ${pendingScene2.detected_summary}`,
 }
 
+const mismatchScene = {
+  ...pendingScene,
+  stated_answer: '9',
+  stated_answer_source: '= 9',
+  mismatch: { stated: '9', computed: '8' },
+  mismatch_acknowledged: false,
+}
+
 const manualSourceScene = {
   ...pendingScene2,
   scene_id: 'manual-1',
@@ -179,6 +187,9 @@ function installFetchMock({
     if (url === '/storyboard/s1/reject') {
       return jsonResponse({ ...pendingScene, status: 'rejected' })
     }
+    if (url === '/storyboard/s1/acknowledge-mismatch' && init.method === 'POST') {
+      return jsonResponse({ ...mismatchScene, mismatch_acknowledged: true })
+    }
     if (url === '/render') {
       if (renderFails) {
         return jsonResponse({ detail: 'Render timed out after 600s' }, 500)
@@ -267,6 +278,17 @@ it('removes a selected scene from combine eligibility after approval', async () 
   await waitFor(() => {
     expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
   })
+})
+
+it('excludes a scene with an unacknowledged mismatch from combine eligibility', async () => {
+  installFetchMock({ storyboardScenes: [mismatchScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+
+  expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
 })
 
 it('combines eligible scenes and ungroups them back into their original position', async () => {
@@ -712,4 +734,31 @@ it('clears a failed render alert once a new storyboard is built', async () => {
   await screen.findByRole('heading', { name: 'Storyboard review' })
 
   expect(screen.queryByText(/The render did not finish/)).toBeNull()
+})
+
+it('renders "Source says N; computed M" when mismatch present and unacked', async () => {
+  installFetchMock({ storyboardScenes: [mismatchScene] })
+  await reachStoryboard()
+
+  expect(screen.getByText('Source says 9; computed 8')).not.toBeNull()
+})
+
+it('disables approve button when mismatch unacked', async () => {
+  installFetchMock({ storyboardScenes: [mismatchScene] })
+  await reachStoryboard()
+
+  expect(screen.getByRole('button', { name: 'Approve' }).disabled).toBe(true)
+})
+
+it('POSTs to acknowledge-mismatch when "Mark as intentional correction" clicked', async () => {
+  const fetchMock = installFetchMock({ storyboardScenes: [mismatchScene] })
+  await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Mark as intentional correction' }))
+
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' }).disabled).toBe(false))
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/storyboard/s1/acknowledge-mismatch',
+    expect.objectContaining({ method: 'POST', credentials: 'include' }),
+  )
 })
