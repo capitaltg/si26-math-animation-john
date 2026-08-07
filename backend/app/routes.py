@@ -658,11 +658,27 @@ def edit_scene(
     content_changed = params_changed or grade_changed
     if content_changed and scene.status in ("approved", "rejected"):
         updates["status"] = "pending_review"
+    if content_changed:
+        updates["mismatch_acknowledged"] = False
 
     updated = _write_scene_cas(
         session, scene_id, scene.revision, updates, bump_revision=content_changed
     )
     return _scene_out(updated, candidates)
+
+
+def _guard_approval_mismatch(scene: Scene) -> None:
+    mismatch = scene_mismatch(scene)
+    if mismatch is None or scene.mismatch_acknowledged:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "stated_answer_mismatch",
+            "stated": mismatch["stated"],
+            "computed": mismatch["computed"],
+        },
+    )
 
 
 def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> SceneOut:
@@ -682,7 +698,30 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
 def approve_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = _lookup_active_scene(session, scene_id)
+    _guard_approval_mismatch(scene)
     return _set_scene_status(session_id, scene_id, "approved")
+
+
+@router.post("/storyboard/{scene_id}/acknowledge-mismatch", response_model=SceneOut)
+def acknowledge_mismatch(scene_id: str, session_id: str | None = Cookie(default=None)):
+    session = store.get(session_id) if session_id else None
+    if session is None:
+        raise HTTPException(status_code=400, detail="No active session; upload a document first")
+    scene = _lookup_active_scene(session, scene_id)
+    if scene_mismatch(scene) is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "no_mismatch_to_acknowledge"},
+        )
+    candidates = _lookup_candidates(session, scene)
+    updated = _write_scene_cas(
+        session, scene_id, scene.revision, {"mismatch_acknowledged": True}
+    )
+    return _scene_out(updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/reject", response_model=SceneOut)

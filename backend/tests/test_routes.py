@@ -975,6 +975,133 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
     assert body["params_schema"]["properties"]["items"]["type"] == "array"
 
 
+def _mismatched_scene(tmp_path):
+    """Number-line scene whose params compute 8 but which states an answer of 9."""
+    from fractions import Fraction
+
+    scene = _number_line_scene(tmp_path).model_copy(
+        update={
+            "params": {"start": 4, "steps": [{"operation": "add", "amount": 4}]},
+            "stated_answer": Fraction(9),
+            "stated_answer_source": "= 9",
+        }
+    )
+    return scene
+
+
+def _matching_scene(tmp_path):
+    """Number-line scene whose stated answer agrees with its computed answer (7)."""
+    from fractions import Fraction
+
+    return _number_line_scene(tmp_path).model_copy(
+        update={"stated_answer": Fraction(7), "stated_answer_source": "= 7"}
+    )
+
+
+def test_approve_blocked_by_unacked_mismatch(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _mismatched_scene(tmp_path))
+
+    resp = client.post("/storyboard/s1/approve")
+
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert body["error"] == "stated_answer_mismatch"
+    assert body["stated"] == "9"
+    assert body["computed"] == "8"
+
+
+def test_approve_succeeds_when_mismatch_acknowledged(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _mismatched_scene(tmp_path))
+
+    ack = client.post("/storyboard/s1/acknowledge-mismatch")
+    assert ack.status_code == 200
+
+    approve = client.post("/storyboard/s1/approve")
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "approved"
+
+
+def test_approve_succeeds_when_answers_match(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _matching_scene(tmp_path))
+
+    resp = client.post("/storyboard/s1/approve")
+    assert resp.status_code == 200
+
+
+def test_approve_succeeds_when_no_stated_answer(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    resp = client.post("/storyboard/s1/approve")
+    assert resp.status_code == 200
+
+
+def test_acknowledge_mismatch_without_mismatch_returns_409(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _matching_scene(tmp_path))
+
+    resp = client.post("/storyboard/s1/acknowledge-mismatch")
+    assert resp.status_code == 409
+
+
+def test_acknowledge_mismatch_unknown_scene_is_404():
+    client = _client()
+    _upload_candidate(client)
+    assert client.post("/storyboard/nope/acknowledge-mismatch").status_code == 404
+
+
+def test_edit_resets_mismatch_acknowledged(tmp_path):
+    from app.routes import store
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _mismatched_scene(tmp_path))
+
+    ack = client.post("/storyboard/s1/acknowledge-mismatch")
+    assert ack.status_code == 200
+    session = store.get(client.cookies["session_id"])
+    assert session.scenes["s1"].mismatch_acknowledged is True
+
+    # Edit params: content changed, so the ack resets regardless of the new mismatch state.
+    with patch("app.routes.render_scene_thumbnail"):
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 4, "steps": [{"operation": "add", "amount": 5}]}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["mismatch_acknowledged"] is False
+    assert session.scenes["s1"].mismatch_acknowledged is False
+
+
+def test_edit_noop_patch_does_not_reset_mismatch_acknowledged(tmp_path):
+    from app.routes import store
+
+    client = _client()
+    _upload_candidate(client)
+    scene = _mismatched_scene(tmp_path)
+    _seed_scene(client, scene)
+
+    ack = client.post("/storyboard/s1/acknowledge-mismatch")
+    assert ack.status_code == 200
+
+    # No-op PATCH: resend the same grade_level, no params change.
+    resp = client.patch("/storyboard/s1", json={"grade_level": scene.grade_level})
+
+    assert resp.status_code == 200
+    assert resp.json()["mismatch_acknowledged"] is True
+    session = store.get(client.cookies["session_id"])
+    assert session.scenes["s1"].mismatch_acknowledged is True
+
+
 def test_patch_params_resets_approved_scene_to_pending_review(tmp_path):
     client = _client()
     _upload_candidate(client)
