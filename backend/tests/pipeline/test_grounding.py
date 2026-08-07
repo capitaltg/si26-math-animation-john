@@ -66,15 +66,19 @@ def test_ungrounded_token_is_reported():
 class _StubParams:
     """Minimal params exposing the grounding hooks directly."""
 
-    def __init__(self, tokens, derived_totals):
+    def __init__(self, tokens, derived_totals, string_tokens=None):
         self._tokens = tokens
         self._derived_totals = derived_totals
+        self._string_tokens = string_tokens or []
 
     def grounding_number_tokens(self):
         return self._tokens
 
     def grounding_derived_totals(self):
         return self._derived_totals
+
+    def grounding_string_tokens(self):
+        return self._string_tokens
 
 
 def test_derived_total_allowed_only_via_explicit_declaration():
@@ -411,3 +415,73 @@ def test_duplicate_derived_total_claim_is_not_multiset_checked():
         derived_totals=[("8", ["3", "5"])],
     )
     assert check_params_grounded(params, "3 apples and 5 oranges.") == []
+
+
+# ---------------------------------------------------------------------------
+# String/enum grounding (P0: dynamic string/enum params were invisible)
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_unit_is_ungrounded():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3"], derived_totals=[], string_tokens=["meters"])
+    assert check_params_grounded(params, "A 3 kilometer path has oranges.") == ["meters"]
+
+
+def test_wrong_object_label_is_ungrounded():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=["3"], derived_totals=[], string_tokens=["apples"])
+    assert check_params_grounded(params, "A 3 kilometer path has oranges.") == ["apples"]
+
+
+def test_correct_unit_and_object_ground():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=["3"], derived_totals=[], string_tokens=["kilometer", "oranges"]
+    )
+    assert check_params_grounded(params, "A 3 kilometer path has oranges.") == []
+
+
+def test_string_token_case_and_whitespace_normalize():
+    from app.pipeline.grounding import check_params_grounded
+
+    # Casing and surrounding whitespace differ from the source spelling but
+    # the word itself is unchanged, so it still grounds.
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["  Kilometer  "])
+    assert check_params_grounded(params, "A 3 kilometer path.") == []
+
+
+def test_plural_mismatch_does_not_silently_ground():
+    from app.pipeline.grounding import check_params_grounded
+
+    # No stemming: "apple" and "apples" are distinct tokens, so a param
+    # claiming the singular against a plural-only source is caught, not
+    # silently accepted as "close enough".
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["apple"])
+    assert check_params_grounded(params, "Sarah has apples.") == ["apple"]
+
+
+def test_multi_word_string_token_grounds_each_word_independently():
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
+    assert check_params_grounded(params, "Sarah has a red balloon.") == []
+
+
+def test_derived_total_allowance_does_not_launder_a_coincidentally_numeric_string_token():
+    from app.pipeline.grounding import check_params_grounded
+
+    # A numeric derived total (7 <- 3 + 4) is unrelated to a source-owned
+    # string/enum field whose value happens to be the digit string "7".
+    # Derived-total allowance is a numeric-only concept; it must not exempt
+    # a string token merely because it shares a canonical key with an
+    # allowed numeric total.
+    params = _StubParams(
+        tokens=["3", "4"],
+        derived_totals=[("7", ["3", "4"])],
+        string_tokens=["7"],
+    )
+    assert check_params_grounded(params, "3 and 4 make what?") == ["7"]

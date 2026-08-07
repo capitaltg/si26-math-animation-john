@@ -605,6 +605,132 @@ def test_grounding_number_tokens_falls_back_to_default_stringification_without_f
     assert params.grounding_number_tokens() == ["5"]
 
 
+# ---------------------------------------------------------------------------
+# String/enum grounding ownership (P0: dynamic string/enum params were
+# invisible to grounding -- only numeric leaves were checked)
+# ---------------------------------------------------------------------------
+
+
+def test_source_owned_string_field_defaults_to_grounded():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            StringFieldSpec(name="unit", label="Unit", description="", max_length=20),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5, unit="kilometers")
+    assert params.grounding_string_tokens() == ["kilometers"]
+
+
+def test_source_owned_enum_field_defaults_to_grounded():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            EnumFieldSpec(name="object_name", label="Object", description="", choices=["apples", "oranges"]),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5, object_name="oranges")
+    assert params.grounding_string_tokens() == ["oranges"]
+
+
+def test_contract_owned_enum_field_is_excluded_from_grounding():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            EnumFieldSpec(
+                name="layout",
+                label="Layout",
+                description="",
+                choices=["grid", "list"],
+                source_owned=False,
+            ),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5, layout="grid")
+    assert params.grounding_string_tokens() == []
+
+
+def test_contract_owned_string_field_needs_no_source_span_end_to_end():
+    from app.pipeline.grounding import check_params_grounded
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            StringFieldSpec(
+                name="internal_id", label="Internal ID", description="", max_length=20, source_owned=False
+            ),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5, internal_id="not-in-source-at-all")
+
+    assert check_params_grounded(params, "There are 5 rows.") == []
+
+
+def test_source_owned_string_field_reports_ungrounded_value_end_to_end():
+    from app.pipeline.grounding import check_params_grounded
+
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            StringFieldSpec(name="unit", label="Unit", description="", max_length=20),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5, unit="meters")
+
+    assert check_params_grounded(params, "There are 5 rows spanning 5 kilometers.") == ["meters"]
+
+
+def test_source_owned_string_field_inside_array_item_is_grounded():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            ArrayFieldSpec(
+                name="terms",
+                label="Terms",
+                description="",
+                min_items=1,
+                max_items=3,
+                item_fields=[
+                    IntegerFieldSpec(name="value", label="V", description="", minimum=0, maximum=99),
+                    StringFieldSpec(name="unit", label="U", description="", max_length=20),
+                ],
+            ),
+        ],
+    )
+    guard = GuardDocument(predicates=[
+        {"predicate": "positive",
+         "value": {"node": "field_ref", "field": "terms", "index": 0, "item_field": "value"}},
+    ])
+    compiled_guard = compile_guard(guard, field_contract_for(document))
+    Params = compile_template_params(document, compiled_guard)
+    params = Params(terms=[{"value": 3, "unit": "meters"}, {"value": 4, "unit": "kilograms"}])
+
+    assert sorted(params.grounding_string_tokens()) == ["kilograms", "meters"]
+
+
+def test_optional_string_field_left_unset_contributes_no_token():
+    document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="rows", label="Rows", description="", minimum=1, maximum=20),
+            StringFieldSpec(name="unit", label="Unit", description="", max_length=20, required=False),
+        ],
+    )
+    Params = compile_template_params(document, _guard_for("rows"))
+    params = Params(rows=5)
+    assert params.grounding_string_tokens() == []
+
+
 def test_a_guard_predicate_can_read_a_scalar_inside_an_array_item():
     """An array field must be usable by the guard, not merely declarable.
 

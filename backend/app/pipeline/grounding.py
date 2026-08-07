@@ -54,6 +54,22 @@ def params_number_tokens(params) -> list[str]:
     return default_number_tokens(params)
 
 
+def params_string_tokens(params) -> list[str]:
+    """Source-owned string/enum values a template declares via the hook.
+
+    No generic default here (unlike numbers): a hand-written template's
+    string/enum leaves are as likely to be internal contract fields (e.g. an
+    `operation: Literal["add", "subtract"]`) as source-copied text, so
+    blindly walking every string leaf would demand a literal source span for
+    values that were never meant to appear in the problem text. Absent the
+    hook, no string tokens are checked.
+    """
+    hook = getattr(params, "grounding_string_tokens", None)
+    if callable(hook):
+        return list(hook())
+    return []
+
+
 def params_derived_totals(params) -> list[tuple[str, list[str], str]]:
     """Derived-total declarations a template vouches for.
 
@@ -133,26 +149,48 @@ def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> b
 
 
 def check_params_grounded(params, source_text: str) -> list[str]:
-    """Return the params number tokens that are not grounded in the source.
+    """Return the params number and source-owned string/enum tokens not grounded in the source.
 
     A token is grounded when the source has an unconsumed occurrence of that
     value in the multiset built from `tokenize_for_grounding(source_text)`,
-    or when a template declares it a derived total whose components are
-    each grounded against an independent fresh copy of that multiset and
-    whose numeric value equals the sum/product of the components. An empty
-    return means fully grounded.
+    or, for a numeric token only, when a template declares it a derived total
+    whose components are each grounded against an independent fresh copy of
+    that multiset and whose numeric value equals the sum/product of the
+    components. Derived-total allowance never applies to string/enum tokens,
+    even when one coincidentally shares a canonical key with an allowed
+    numeric total. An empty return means fully grounded.
     """
     original_occurrences = _build_source_occurrences(source_text)
     consuming = copy.deepcopy(original_occurrences)
 
-    tokens = params_number_tokens(params)
-    ungrounded_pending: list[str] = []
-    for token in tokens:
-        spans = consuming.get(_canonical_key(token))
-        if spans:
-            spans.pop(0)
-        else:
-            ungrounded_pending.append(token)
+    # A source-owned string value is tokenized the same way the source text
+    # is, so a multi-word value (e.g. "red balloon") grounds one source
+    # occurrence per word rather than requiring the exact phrase verbatim.
+    string_tokens = [
+        word
+        for value in params_string_tokens(params)
+        for word in tokenize_for_grounding(value)
+    ]
+
+    def consume(tokens: list[str]) -> list[str]:
+        pending: list[str] = []
+        for token in tokens:
+            spans = consuming.get(_canonical_key(token))
+            if spans:
+                spans.pop(0)
+            else:
+                pending.append(token)
+        return pending
+
+    # Numeric and string tokens draw from the same shared source multiset
+    # (numbers first, matching prior behavior), but are tracked separately:
+    # derived-total allowance below is a numeric-only concept (a declared
+    # sum/product of numeric components) and must never exempt a
+    # source-owned string/enum value merely because it shares a canonical
+    # key with an allowed numeric total (e.g. a string field whose value is
+    # literally "7" is not vouched for by an unrelated 3 + 4 = 7 total).
+    ungrounded_numbers = consume(params_number_tokens(params))
+    ungrounded_strings = consume(string_tokens)
 
     allowed_totals: set[str] = set()
     for total_token, components, operation in params_derived_totals(params):
@@ -176,6 +214,6 @@ def check_params_grounded(params, source_text: str) -> list[str]:
 
     return [
         token
-        for token in ungrounded_pending
+        for token in ungrounded_numbers
         if _canonical_key(token) not in allowed_totals
-    ]
+    ] + ungrounded_strings
