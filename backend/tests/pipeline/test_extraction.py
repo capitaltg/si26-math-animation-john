@@ -1,4 +1,7 @@
+from fractions import Fraction
 from unittest.mock import patch
+
+from app.pipeline.extraction import extract_stated_answer
 
 
 @patch("app.pipeline.extraction.call_with_tool")
@@ -374,3 +377,50 @@ def test_static_template_extraction_keeps_its_tuned_prompt(mock_call):
     extract_params("Sarah has 4 apples and buys 3 more.", NumberLineParams)
 
     assert mock_call.call_args.kwargs["system_prompt"] == _EXTRACTION_SYSTEM_PROMPT
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_integer(mock_call):
+    mock_call.return_value = ("report_stated_answer", {"value": "9", "source_span": "= 9"})
+    result = extract_stated_answer("What is 3 + 5? Answer: = 9")
+    assert result == (Fraction(9), "= 9")
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_fraction(mock_call):
+    mock_call.return_value = (
+        "report_stated_answer",
+        {"value": "3/4", "source_span": "3/4"},
+    )
+    result = extract_stated_answer("1/4 + 2/4 = 3/4")
+    assert result == (Fraction(3, 4), "3/4")
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_decline(mock_call):
+    mock_call.return_value = ("decline_stated_answer", {"reason": "no answer"})
+    assert extract_stated_answer("What is 3 + 5?") is None
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_span_not_in_source(mock_call):
+    mock_call.return_value = (
+        "report_stated_answer",
+        {"value": "9", "source_span": "= 9"},
+    )
+    assert extract_stated_answer("What is 3 + 5?") is None
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_bedrock_raises(mock_call):
+    mock_call.side_effect = RuntimeError("bedrock down")
+    assert extract_stated_answer("1/4 + 2/4 = 3/4") is None
+
+
+@patch("app.pipeline.extraction.call_with_tool")
+def test_extract_stated_answer_invalid_fraction(mock_call):
+    mock_call.return_value = (
+        "report_stated_answer",
+        {"value": "not-a-number", "source_span": "not-a-number"},
+    )
+    assert extract_stated_answer("blah not-a-number blah") is None

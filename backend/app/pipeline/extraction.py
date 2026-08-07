@@ -1,9 +1,13 @@
+import logging
+from fractions import Fraction
 from typing import Type, TypeVar
 
 from pydantic import BaseModel
 
 from app.pipeline.bedrock_client import call_with_tool
 from app.pipeline.grounding import check_params_grounded
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -55,6 +59,29 @@ _DECLINE_TOOL_SCHEMA = {
     "required": ["reason"],
 }
 
+_STATED_ANSWER_SYSTEM_PROMPT = (
+    "Report only the answer the source itself states as *the* answer to this "
+    "problem -- one explicitly labelled as the answer, presented after an "
+    "equals sign, or otherwise unambiguously identified. Ignore answer "
+    "choices, distractors, worked examples for other problems, and any label "
+    "that could plausibly be a hint or a step. If no answer is unambiguously "
+    "stated, call decline_stated_answer. Return the answer as a "
+    "rational-number string (for example '9' or '3/4') and the exact "
+    "substring of the source in which it appears."
+)
+
+_STATED_ANSWER_REPORT_TOOL = "report_stated_answer"
+_STATED_ANSWER_REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "value": {"type": "string"},
+        "source_span": {"type": "string"},
+    },
+    "required": ["value", "source_span"],
+}
+
+_STATED_ANSWER_DECLINE_TOOL = "decline_stated_answer"
+
 
 def _system_prompt_for(params_cls: Type[T]) -> str:
     """Which extraction vocabulary this params class should be read against.
@@ -97,3 +124,29 @@ def extract_params(source_text: str, params_cls: Type[T]) -> T:
             f"Extracted numbers not grounded in source: {', '.join(ungrounded)}"
         )
     return params
+
+
+def extract_stated_answer(source_text: str) -> tuple[Fraction, str] | None:
+    try:
+        tool_name, result = call_with_tool(
+            system_prompt=_STATED_ANSWER_SYSTEM_PROMPT,
+            user_message=source_text,
+            tools=[
+                {"name": _STATED_ANSWER_REPORT_TOOL, "schema": _STATED_ANSWER_REPORT_SCHEMA},
+                {"name": _STATED_ANSWER_DECLINE_TOOL, "schema": _DECLINE_TOOL_SCHEMA},
+            ],
+        )
+    except Exception:
+        logger.warning("Stated-answer extraction call failed", exc_info=True)
+        return None
+    if tool_name != _STATED_ANSWER_REPORT_TOOL:
+        return None
+    value_str = result.get("value", "")
+    span = result.get("source_span", "")
+    if not span or span not in source_text:
+        return None
+    try:
+        value = Fraction(value_str)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return value, span
