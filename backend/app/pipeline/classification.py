@@ -92,10 +92,9 @@ def classify_candidate(
     in one request should load one snapshot up front and pass it via
     `snapshot=` to every call, rather than passing `session=` and letting each
     call load its own snapshot. With neither passed (the default) or the flag
-    off, this is byte-identical to the pre-dynamic-classifier behavior: no
-    snapshot is loaded, the system prompt and schema are unmodified, and an
-    unrecognized template name raises (via `static_ref`) rather than being
-    silently dropped.
+    off, no snapshot is loaded and the system prompt is unmodified; the tool
+    schema is still enum-constrained to the static `TemplateName` vocabulary so
+    the model cannot return a name that would blow up `static_ref`.
     """
     settings = get_settings()
     schema = ClassificationResult.model_json_schema()
@@ -108,15 +107,18 @@ def classify_candidate(
         elif session is not None:
             dynamic_snapshot = load_enabled_snapshot(session)
 
+    static_names = [member.value for member in TemplateName]
+    dynamic_names: list[str] = []
     if dynamic_snapshot is not None:
         dynamic_names = sorted(dynamic_snapshot.names())
-        static_names = [member.value for member in TemplateName]
         if dynamic_names:
             bullets = "\n".join(
                 dynamic_snapshot.entry(name).classifier_bullet for name in dynamic_names
             )
             system_prompt = f"{_CLASSIFICATION_SYSTEM_PROMPT}\n{bullets}"
-        schema = _patch_schema_enum(schema, [*static_names, *dynamic_names])
+    # Constrain the tool schema to the known vocabulary in every request so an
+    # unknown template name cannot reach static_ref() and blow up the call.
+    schema = _patch_schema_enum(schema, [*static_names, *dynamic_names])
 
     _, result = call_with_tool(
         system_prompt=system_prompt,
