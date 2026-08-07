@@ -1,5 +1,3 @@
-from fractions import Fraction
-
 OPERATION_SYMBOLS = {"add": "+", "subtract": "-", "multiply": "×", "divide": "÷"}
 
 
@@ -12,22 +10,25 @@ def run_additive_chain(start: int, ops: list[tuple[str, int]]) -> list[int]:
     return values
 
 
-def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[Fraction]:
+def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[int]:
     if start <= 0:
         raise ValueError(f"Multiplicative chain must start from a positive value ({start})")
 
-    values: list[Fraction] = [Fraction(start)]
-    running = Fraction(start)
+    values = [start]
+    running = start
     for operation, factor in ops:
         if operation == "multiply":
             running = running * factor
         else:
             if factor == 0:
                 raise ValueError(
-                    f"Division by zero: {running} / {factor}"
+                    f"Division by zero: {running} / {factor} is not a whole number"
                 )
-            # Allow non-exact division; Fraction will handle exact representation
-            running = running / factor
+            if running % factor != 0:
+                raise ValueError(
+                    f"Non-exact division: {running} / {factor} is not a whole number"
+                )
+            running = running // factor
         if running <= 0:
             raise ValueError(
                 f"Multiplicative chain produced a non-positive value ({running})"
@@ -38,8 +39,4 @@ def run_multiplicative_chain(start: int, ops: list[tuple[str, int]]) -> list[Fra
 
 def format_operation_caption(a, operation: str, b, result) -> str:
     symbol = OPERATION_SYMBOLS[operation]
-    # Convert Fractions to string representation (int if whole number, "n/d" otherwise)
-    a_str = str(int(a)) if isinstance(a, Fraction) and a.denominator == 1 else str(a)
-    b_str = str(int(b)) if isinstance(b, Fraction) and b.denominator == 1 else str(b)
-    result_str = str(int(result)) if isinstance(result, Fraction) and result.denominator == 1 else str(result)
-    return f"{a_str} {symbol} {b_str} = {result_str}"
+    return f"{a} {symbol} {b} = {result}"

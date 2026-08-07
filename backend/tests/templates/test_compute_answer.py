@@ -63,13 +63,6 @@ def test_array_grid_chain_multiply():
     assert params.compute_answer() == Fraction(12)
 
 
-def test_array_grid_chain_divide_fractional():
-    params = ArrayGridParams(
-        start=7, steps=[ArrayGridStep(operation="divide", factor=2)]
-    )
-    assert params.compute_answer() == Fraction(7, 2)
-
-
 def test_chained_array_grid_uses_last():
     a = ArrayGridParams(rows=2, cols=2)
     b = ArrayGridParams(rows=3, cols=3)

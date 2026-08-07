@@ -1,19 +1,10 @@
-from fractions import Fraction
 from math import isqrt
 
 MAX_GRID_AXIS = 12
 MAX_GRID_TOTAL = 144
 
 
-def grid_dimensions(total: int | Fraction) -> tuple[int, int]:
-    # Convert to int if Fraction with whole number value
-    if isinstance(total, Fraction):
-        if total.denominator != 1:
-            raise ValueError(
-                f"Array grid total must be a whole number, got {total}"
-            )
-        total = int(total)
-
+def grid_dimensions(total: int) -> tuple[int, int]:
     if total <= 0:
         raise ValueError(f"Array grid total must be positive ({total})")
     if total > MAX_GRID_TOTAL:
