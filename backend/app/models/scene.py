@@ -41,6 +41,8 @@ class Scene(BaseModel):
     grade_overridden: bool = False
     params: dict = Field(default_factory=dict)
     stated_answer: Fraction | None = None
+    stated_answer_source: str | None = None
+    mismatch_acknowledged: bool = False
     status: Literal["pending_review", "approved", "rejected", "fallback"] = "pending_review"
     #: Bumped on every render-affecting write; lets approve/edit detect a
     #: concurrent write and lets render detect a stale approval.
@@ -71,4 +73,16 @@ class Scene(BaseModel):
             raise ValueError("Fallback scenes require a nonblank fallback_reason")
         if self.status != "fallback" and self.fallback_reason is not None:
             raise ValueError("Only fallback scenes may include fallback_reason")
+        has_stated_answer = self.stated_answer is not None
+        has_stated_source = bool(
+            self.stated_answer_source and self.stated_answer_source.strip()
+        )
+        if has_stated_answer != has_stated_source:
+            raise ValueError(
+                "stated_answer and stated_answer_source must be set together"
+            )
+        if self.mismatch_acknowledged and not has_stated_answer:
+            raise ValueError(
+                "mismatch_acknowledged requires stated_answer to be set"
+            )
         return self
