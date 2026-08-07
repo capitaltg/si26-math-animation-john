@@ -123,6 +123,188 @@ function humanLoc(loc) {
     .replace(/^./, (c) => c.toUpperCase())
 }
 
+// Pydantic tags every ValidationError with a machine `type`. Anything raised by a
+// @model_validator / @field_validator surfaces as value_error or assertion_error
+// — those are cross-field or domain rules ("semantic"). Everything else is a
+// primitive schema check (int/enum/range/missing/…).
+const SEMANTIC_ERROR_TYPES = new Set(['value_error', 'assertion_error'])
+
+function isSemanticError(err) {
+  return SEMANTIC_ERROR_TYPES.has(err?.type)
+}
+
+// The rule name the user sees when a check fires — the pydantic error `type`
+// slug, humanised. Not exhaustive; unknown types fall through to the raw slug so
+// nothing is silently hidden.
+const RULE_LABELS = {
+  int_type: 'Must be an integer',
+  int_parsing: 'Must be an integer',
+  float_type: 'Must be a number',
+  string_type: 'Must be text',
+  bool_type: 'Must be true or false',
+  list_type: 'Must be a list',
+  enum: 'Must be one of the allowed values',
+  literal_error: 'Must be one of the allowed values',
+  missing: 'Required',
+  greater_than: 'Below allowed minimum',
+  greater_than_equal: 'Below allowed minimum',
+  less_than: 'Above allowed maximum',
+  less_than_equal: 'Above allowed maximum',
+  too_short: 'Too few items',
+  too_long: 'Too many items',
+  string_too_short: 'Too short',
+  string_too_long: 'Too long',
+  value_error: 'Cross-field rule',
+  assertion_error: 'Cross-field rule',
+}
+
+function humanRule(type) {
+  if (!type) return 'Rule'
+  return RULE_LABELS[type] || type.replace(/_/g, ' ')
+}
+
+// Resolve one { "$ref": "#/$defs/Name" } hop; leaves other nodes untouched.
+function resolveSchemaRef(node, root) {
+  if (node && node.$ref) {
+    const name = node.$ref.replace('#/$defs/', '')
+    return root?.$defs?.[name] ?? {}
+  }
+  return node || {}
+}
+
+function schemaTypeLabel(node, root) {
+  const resolved = resolveSchemaRef(node, root)
+  if (resolved.enum) return `enum(${resolved.enum.join('|')})`
+  if (Array.isArray(resolved.type)) return resolved.type.join(' | ')
+  if (resolved.type === 'array') {
+    const item = resolveSchemaRef(resolved.items, root)
+    const inner = item.enum
+      ? `enum(${item.enum.join('|')})`
+      : item.type || 'object'
+    return `array<${inner}>`
+  }
+  return resolved.type || (resolved.properties ? 'object' : 'any')
+}
+
+// JSON-Schema constraint keys pydantic emits and that we know how to render as
+// a short "type/range/enum" summary. Anything unlisted is skipped rather than
+// stringified verbatim — the goal is a readable schema, not a JSON dump.
+const CONSTRAINT_KEYS = [
+  ['minimum', (v) => `≥ ${v}`],
+  ['exclusiveMinimum', (v) => `> ${v}`],
+  ['maximum', (v) => `≤ ${v}`],
+  ['exclusiveMaximum', (v) => `< ${v}`],
+  ['minLength', (v) => `min length ${v}`],
+  ['maxLength', (v) => `max length ${v}`],
+  ['minItems', (v) => `min items ${v}`],
+  ['maxItems', (v) => `max items ${v}`],
+  ['pattern', (v) => `pattern /${v}/`],
+]
+
+function schemaConstraints(node, root) {
+  const resolved = resolveSchemaRef(node, root)
+  const parts = []
+  for (const [key, fmt] of CONSTRAINT_KEYS) {
+    if (resolved[key] !== undefined) parts.push(fmt(resolved[key]))
+  }
+  return parts.join(', ')
+}
+
+// Walk the schema breadth-first and emit one row per leaf-ish field, so the
+// table matches what the SchemaForm would actually render. Object children get
+// their own indented rows; array-of-objects show the item shape once.
+function schemaRows(schema, root, value, prefix = '', depth = 0) {
+  if (depth > 4) return []
+  const resolved = resolveSchemaRef(schema, root)
+  const properties = resolved.properties || {}
+  const rows = []
+  for (const [name, propSchema] of Object.entries(properties)) {
+    const prop = resolveSchemaRef(propSchema, root)
+    const path = prefix ? `${prefix}.${name}` : name
+    const propValue = value != null ? value[name] : undefined
+    const isObject = prop.type === 'object' || !!prop.properties
+    const isArrayOfObjects =
+      prop.type === 'array' &&
+      (resolveSchemaRef(prop.items, root).type === 'object' ||
+        !!resolveSchemaRef(prop.items, root).properties)
+    rows.push({
+      path,
+      type: schemaTypeLabel(propSchema, root),
+      constraint: schemaConstraints(propSchema, root),
+      value: isObject || isArrayOfObjects ? '—' : propValue,
+    })
+    if (isObject) {
+      rows.push(...schemaRows(prop, root, propValue, path, depth + 1))
+    } else if (isArrayOfObjects) {
+      // Show item shape once with a `[]` suffix, so a 3-element list doesn't
+      // print 3 identical schema rows.
+      rows.push(
+        ...schemaRows(
+          resolveSchemaRef(prop.items, root),
+          root,
+          Array.isArray(propValue) && propValue.length > 0 ? propValue[0] : undefined,
+          `${path}[]`,
+          depth + 1,
+        ),
+      )
+    }
+  }
+  return rows
+}
+
+function formatSchemaValue(value) {
+  if (value === undefined) return ''
+  if (value === '—') return '—'
+  if (value === null) return 'null'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+// Collapsed by default — the schema is here to prove "we checked it", not to
+// take up scene-card real estate.
+function SchemaView({ schema, value }) {
+  const [open, setOpen] = useState(false)
+  if (!schema || !schema.properties) return null
+  const rows = schemaRows(schema, schema, value)
+  return (
+    <div className="schema-view">
+      <button
+        type="button"
+        className="btn btn--quiet btn--tiny"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? 'Hide schema' : 'View schema'}
+      </button>
+      {open && (
+        <table className="schema-view__table">
+          <caption className="sr-only">
+            Typed schema every proposed value was checked against
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Field</th>
+              <th scope="col">Type</th>
+              <th scope="col">Constraint</th>
+              <th scope="col">Proposed value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.path}>
+                <td>{row.path}</td>
+                <td><code>{row.type}</code></td>
+                <td>{row.constraint || <span className="dim">—</span>}</td>
+                <td>{formatSchemaValue(row.value) || <span className="dim">—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 function sceneIds(entry) {
   return entry.candidate_ids || [entry.candidate_id || entry.scene_id]
 }
@@ -269,15 +451,25 @@ function Stamp({ label, state }) {
 // reachable. There is no percentage to show: POST /render is a single blocking
 // batch call with no progress stream, so the render itself is reported by the
 // dock rather than faked as a per-scene bar here.
-function StampColumn({ scene, hasErrors, draft }) {
+function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
   const extracted = draft != null && Object.keys(draft).length > 0
   const rejected = scene.status === 'rejected'
+  // Schema failing short-circuits the semantic stamp: cross-field rules only
+  // run once the primitive types line up, so "todo" is truer than a fake pass.
+  const semanticState = schemaFailed
+    ? 'todo'
+    : semanticFailed
+      ? 'failed'
+      : extracted
+        ? 'done'
+        : 'todo'
   const stamps = [
     { label: 'Values extracted', state: extracted ? 'done' : 'todo' },
     {
-      label: 'Validated in Python',
-      state: hasErrors ? 'failed' : extracted ? 'done' : 'todo',
+      label: 'Schema check',
+      state: schemaFailed ? 'failed' : extracted ? 'done' : 'todo',
     },
+    { label: 'Semantic check', state: semanticState },
     { label: 'Preview rendered', state: scene.thumbnail_url ? 'done' : 'todo' },
     {
       label: rejected ? 'Rejected — will not render' : 'Approved for render',
@@ -1073,6 +1265,9 @@ function MainApp() {
               const combinable =
                 scene.status === 'pending_review' && !!scene.candidate_id && !isChain
               const errors = fieldErrors[scene.scene_id]
+              const errorList = errors || []
+              const semanticFailed = errorList.some(isSemanticError)
+              const schemaFailed = errorList.some((e) => !isSemanticError(e))
               const mismatchUnacked = !!scene.mismatch && !scene.mismatch_acknowledged
               return (
                 <article
@@ -1141,7 +1336,8 @@ function MainApp() {
                       </div>
                       <StampColumn
                         scene={scene}
-                        hasErrors={!!errors}
+                        schemaFailed={schemaFailed}
+                        semanticFailed={semanticFailed}
                         draft={drafts[scene.scene_id]}
                       />
                       <Rods params={drafts[scene.scene_id]} />
@@ -1164,11 +1360,15 @@ function MainApp() {
                           </p>
                           <ul className="errors__list">
                             {errors.map((e, i) => (
-                              <li key={i}>{humanLoc(e.loc)}: {e.msg}</li>
+                              <li key={i}>
+                                {humanLoc(e.loc)} — <strong>{humanRule(e.type)}</strong>: {e.msg}
+                              </li>
                             ))}
                           </ul>
                         </div>
                       )}
+
+                      <SchemaView schema={scene.params_schema} value={scene.params} />
 
                       <label className="grade">
                         Grade

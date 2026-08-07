@@ -166,7 +166,13 @@ function installFetchMock({
     if (url === '/storyboard/s1' && init.method === 'PATCH') {
       if (patchStatus === '422') {
         return jsonResponse(
-          { detail: { errors: [{ loc: ['start'], msg: 'must be non-negative' }] } },
+          {
+            detail: {
+              errors: [
+                { loc: ['start'], msg: 'must be non-negative', type: 'value_error' },
+              ],
+            },
+          },
           422,
         )
       }
@@ -299,7 +305,11 @@ it('combines eligible scenes and ungroups them back into their original position
   await reachStoryboard()
 
   fireEvent.click(screen.getAllByRole('button', { name: 'Save edits' })[0])
-  await screen.findByText('Start: must be non-negative')
+  await screen.findByText(
+    (_, node) =>
+      node?.tagName === 'LI' &&
+      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+  )
 
   for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
     fireEvent.click(checkbox)
@@ -316,7 +326,13 @@ it('combines eligible scenes and ungroups them back into their original position
     within(screen.getByText(chainedScene.detected_summary).parentElement)
       .queryByRole('button', { name: 'Retry' }),
   ).toBeNull()
-  expect(screen.queryByText('Start: must be non-negative')).toBeNull()
+  expect(
+    screen.queryByText(
+      (_, node) =>
+        node?.tagName === 'LI' &&
+        /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+    ),
+  ).toBeNull()
   expect(
     screen.getByText(chainedScene.detected_summary).compareDocumentPosition(
       screen.getByText(manualSourceScene.source_excerpt),
@@ -336,7 +352,13 @@ it('combines eligible scenes and ungroups them back into their original position
       .getByRole('button', { name: 'Retry' }),
   ).not.toBeNull()
   expect(screen.queryByRole('button', { name: 'Ungroup' })).toBeNull()
-  expect(screen.queryByText('Start: must be non-negative')).toBeNull()
+  expect(
+    screen.queryByText(
+      (_, node) =>
+        node?.tagName === 'LI' &&
+        /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+    ),
+  ).toBeNull()
   expect(
     screen.getByText(pendingScene2.detected_summary).compareDocumentPosition(
       screen.getByText(manualSourceScene.source_excerpt),
@@ -482,7 +504,53 @@ it('surfaces 422 field errors from a PATCH without crashing', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
-  await screen.findByText('Start: must be non-negative')
+  await screen.findByText(
+    (_, node) =>
+      node?.tagName === 'LI' &&
+      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+  )
+})
+
+it('renders Schema check and Semantic check as separate stamps', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  // Both stamps show, replacing the old single "Validated in Python" line.
+  expect(screen.getByText('Schema check')).not.toBeNull()
+  expect(screen.getByText('Semantic check')).not.toBeNull()
+  expect(screen.queryByText('Validated in Python')).toBeNull()
+})
+
+it('surfaces the schema table under a View schema toggle', async () => {
+  installFetchMock()
+  await reachStoryboard()
+
+  const toggle = screen.getByRole('button', { name: 'View schema' })
+  fireEvent.click(toggle)
+
+  // Field, type, constraint, and proposed value all land in the table.
+  expect(screen.getByRole('columnheader', { name: 'Field' })).not.toBeNull()
+  expect(screen.getByRole('columnheader', { name: 'Proposed value' })).not.toBeNull()
+  const startRow = screen.getByRole('row', { name: /^start\s+integer/ })
+  expect(within(startRow).getByText('4')).not.toBeNull()
+  expect(screen.getByRole('button', { name: 'Hide schema' })).not.toBeNull()
+})
+
+it('flags Semantic check failed and leaves Schema check passing for a cross-field 422', async () => {
+  installFetchMock({ patchStatus: '422' })
+  await reachStoryboard()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+  await screen.findByText(
+    (_, node) =>
+      node?.tagName === 'LI' &&
+      /Start.*Cross-field rule.*must be non-negative/.test(node.textContent || ''),
+  )
+
+  const schemaStamp = screen.getByText('Schema check').closest('li')
+  const semanticStamp = screen.getByText('Semantic check').closest('li')
+  expect(schemaStamp.getAttribute('data-state')).toBe('done')
+  expect(semanticStamp.getAttribute('data-state')).toBe('failed')
 })
 
 it('shows a save error when a 422 response has no field errors array', async () => {

@@ -1094,6 +1094,38 @@ h3 {
   margin: 0 0 0.15rem;
 }
 
+.schema-view {
+  margin-top: 0.75rem;
+}
+
+.schema-view__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: var(--t-sm);
+}
+
+.schema-view__table th,
+.schema-view__table td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.schema-view__table th {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.schema-view__table code {
+  font-size: 0.85em;
+}
+
+.schema-view .dim {
+  color: var(--ink-soft);
+}
+
 .grade {
   display: flex;
   align-items: center;

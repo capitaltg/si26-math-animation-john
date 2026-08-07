@@ -603,7 +603,15 @@ def get_thumbnail(thumb_id: str):
 
 
 def _field_errors(exc: ValidationError) -> dict:
-    return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
+    # `type` is carried through so the UI can split Pydantic's schema checks
+    # (int_type/less_than/enum/…) from semantic ones (value_error/assertion_error
+    # raised by @model_validator or @field_validator).
+    return {
+        "errors": [
+            {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
+            for e in exc.errors()
+        ]
+    }
 
 
 def _write_scene_cas(
@@ -650,7 +658,11 @@ def edit_scene(
             status_code=422,
             detail={
                 "errors": [
-                    {"loc": ["grade_level"], "msg": "grade_level must be between 0 and 8"}
+                    {
+                        "loc": ["grade_level"],
+                        "msg": "grade_level must be between 0 and 8",
+                        "type": "value_error",
+                    }
                 ]
             },
         )
