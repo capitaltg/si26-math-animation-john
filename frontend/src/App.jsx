@@ -52,6 +52,67 @@ function templateLabel(template) {
   return template.replace(/_/g, ' ')
 }
 
+const REJECTION_REASON_LABEL = {
+  not_applicable: 'structure does not fit',
+  schema_fail: 'schema check failed',
+  low_confidence: 'operands ambiguous',
+}
+
+function rejectionReasonLabel(reason) {
+  return REJECTION_REASON_LABEL[reason] || reason
+}
+
+// Compiler-boundary claim: the model picks from a finite allowed vocabulary,
+// not free-form text. The strip below shows the raw counts; the drawer lists
+// every allowed template and why the non-matched ones were dropped.
+function VocabularyStrip({ item }) {
+  const [open, setOpen] = useState(false)
+  const matched = item.templates.length
+  const vocabSize = item.vocabulary_size ?? matched
+  const rejected = item.rejected ?? []
+  const matchedRows = item.templates.map((option) => ({
+    template: option.template,
+    status: 'matched',
+    detail: option.rationale,
+  }))
+  const rejectedRows = rejected.map((row) => ({
+    template: row.template,
+    status: 'rejected',
+    detail: rejectionReasonLabel(row.reason),
+  }))
+  const rows = [...matchedRows, ...rejectedRows].sort((a, b) =>
+    a.template.localeCompare(b.template),
+  )
+  return (
+    <div className="vocab-strip">
+      <button
+        type="button"
+        className="vocab-strip__summary"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        Model considered {vocabSize} templates. {matched} matched.{' '}
+        {rejected.length} rejected (schema/applicability).
+      </button>
+      {open && (
+        <ul className="vocab-strip__list">
+          {rows.map((row) => (
+            <li key={row.template} className={`vocab-strip__row vocab-strip__row--${row.status}`}>
+              <span className="chip" data-template={row.template}>
+                {templateLabel(row.template)}
+              </span>
+              <span className="vocab-strip__status">
+                {row.status === 'matched' ? 'pass' : 'reject'}
+              </span>
+              <span className="vocab-strip__detail">{row.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // Server validation errors arrive as Pydantic paths ("steps.0.amount"). A teacher
 // reads "Steps 1 → Amount", not a dotted accessor.
 function humanLoc(loc) {
@@ -897,6 +958,7 @@ function MainApp() {
               return (
                 <fieldset className="option-set" key={item.candidate_id} disabled={loading}>
                   <legend>{candidate?.one_line_summary || item.candidate_id}</legend>
+                  <VocabularyStrip item={item} />
                   {isUnsupportedShape(item) && (
                     <div className="notice notice--teach">
                       <IconSeedling />

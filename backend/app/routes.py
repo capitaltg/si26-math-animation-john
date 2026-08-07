@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
+from typing import Literal
 
 from app.config import get_settings
 from app.meta.db import meta_session
@@ -14,6 +15,7 @@ from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
 from app.models.scene import (
     Scene,
+    TemplateName,
     TemplateRef,
     TemplateVersionMismatchError,
 )
@@ -68,11 +70,18 @@ class TemplateOptionOut(BaseModel):
     rationale: str
 
 
+class RejectedTemplateOut(BaseModel):
+    template: str
+    reason: Literal["not_applicable", "schema_fail", "low_confidence"]
+
+
 class CandidateOptionsOut(BaseModel):
     candidate_id: str
     grade_level: int
     ambiguous: bool
     templates: list[TemplateOptionOut]
+    vocabulary_size: int
+    rejected: list[RejectedTemplateOut]
 
 
 class OptionsResponse(BaseModel):
@@ -214,12 +223,30 @@ def get_options(
                 meta_db_session, owner_session_id=session.session_id
             )
 
+    static_names = {member.value for member in TemplateName}
+    dynamic_names = set(snapshot.names()) if snapshot is not None else set()
+    vocabulary = static_names | dynamic_names
+
     for candidate_id, candidate in candidates:
         if snapshot is not None:
             classification = classify_candidate(candidate.source_excerpt, snapshot=snapshot)
         else:
             classification = classify_candidate(candidate.source_excerpt)
         session.options[candidate_id] = classification
+        matched = {option.template for option in classification.options}
+        # Ambiguity or a non-problem input suppresses every structural option
+        # regardless of the model's per-template rationale, so the rejection is
+        # about confidence in the input, not applicability of the template.
+        low_confidence = (
+            classification.ambiguous or classification.problem_kind == "not_a_problem"
+        )
+        rejected = [
+            RejectedTemplateOut(
+                template=name,
+                reason="low_confidence" if low_confidence else "not_applicable",
+            )
+            for name in sorted(vocabulary - matched)
+        ]
         results.append(
             CandidateOptionsOut(
                 candidate_id=candidate_id,
@@ -233,6 +260,8 @@ def get_options(
                     )
                     for option in classification.options
                 ],
+                vocabulary_size=len(vocabulary),
+                rejected=rejected,
             )
         )
     return OptionsResponse(options=results)

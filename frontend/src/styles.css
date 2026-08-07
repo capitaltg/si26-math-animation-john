@@ -714,6 +714,75 @@ h3 {
   max-width: 72ch;
 }
 
+.vocab-strip {
+  margin: 0 0 0.7rem;
+}
+
+.vocab-strip__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--board-deep);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.vocab-strip__summary:hover {
+  color: var(--ink);
+}
+
+.vocab-strip__summary::before {
+  content: '▸';
+  font-size: 0.8em;
+}
+
+.vocab-strip__summary[aria-expanded='true']::before {
+  content: '▾';
+}
+
+.vocab-strip__list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--board-deep);
+  font-size: var(--t-sm);
+}
+
+.vocab-strip__row {
+  display: grid;
+  grid-template-columns: minmax(9rem, max-content) 4.5rem 1fr;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.2rem 0;
+}
+
+.vocab-strip__row--rejected {
+  color: var(--ink-soft);
+}
+
+.vocab-strip__status {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vocab-strip__row--matched .vocab-strip__status {
+  color: var(--ok);
+}
+
+.vocab-strip__row--rejected .vocab-strip__status {
+  color: var(--danger);
+}
+
 /* ---------- Notices ---------- */
 
 .notice {
