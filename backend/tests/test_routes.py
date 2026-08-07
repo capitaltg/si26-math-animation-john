@@ -1102,6 +1102,25 @@ def test_edit_noop_patch_does_not_reset_mismatch_acknowledged(tmp_path):
     assert session.scenes["s1"].mismatch_acknowledged is True
 
 
+def test_chained_scene_mismatch_uses_last_item_compute_answer(tmp_path):
+    """compute_answer_for routes candidate_ids scenes through get_chained_template;
+    the mismatch must reflect the chained params' last item, not a solo template."""
+    from fractions import Fraction
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    # Last item computes 5 - 1 = 4, but the source states the answer is 9.
+    chained = _chained_number_line_scene().model_copy(
+        update={"stated_answer": Fraction(9), "stated_answer_source": "= 9"}
+    )
+    _seed_scene(client, chained)
+
+    resp = client.patch("/storyboard/s1", json={"grade_level": chained.grade_level})
+
+    assert resp.status_code == 200
+    assert resp.json()["mismatch"] == {"stated": "9", "computed": "4"}
+
+
 def test_patch_params_resets_approved_scene_to_pending_review(tmp_path):
     client = _client()
     _upload_candidate(client)
