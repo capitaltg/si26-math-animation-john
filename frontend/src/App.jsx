@@ -588,7 +588,8 @@ function MainApp() {
         !!s.candidate_id &&
         !s.candidate_ids &&
         !sceneIsDirty(s, drafts) &&
-        s.template === checkedScenes[0]?.template,
+        s.template === checkedScenes[0]?.template &&
+        !(s.mismatch && !s.mismatch_acknowledged),
     )
 
   async function handleCombineScenes() {

@@ -280,6 +280,17 @@ it('removes a selected scene from combine eligibility after approval', async () 
   })
 })
 
+it('excludes a scene with an unacknowledged mismatch from combine eligibility', async () => {
+  installFetchMock({ storyboardScenes: [mismatchScene, pendingScene2] })
+  await reachStoryboard()
+
+  for (const checkbox of screen.getAllByLabelText('Combine with other selected scenes')) {
+    fireEvent.click(checkbox)
+  }
+
+  expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
+})
+
 it('combines eligible scenes and ungroups them back into their original position', async () => {
   const fetchMock = installFetchMock({
     patchStatus: '422',

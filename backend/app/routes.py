@@ -485,6 +485,14 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
                 status_code=400,
                 detail=f"Scene {scene_id} is no longer available for combining",
             )
+        if scene_mismatch(scene) is not None and not scene.mismatch_acknowledged:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "stated_answer_mismatch_in_chain",
+                    "scene_id": scene_id,
+                },
+            )
         scenes.append(scene)
 
     template = scenes[0].template

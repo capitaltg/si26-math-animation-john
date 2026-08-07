@@ -1121,6 +1121,43 @@ def test_chained_scene_mismatch_uses_last_item_compute_answer(tmp_path):
     assert resp.json()["mismatch"] == {"stated": "9", "computed": "4"}
 
 
+def test_combine_rejects_scene_with_unacked_mismatch(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    scene1 = _mismatched_scene(tmp_path)
+    scene2 = _mismatched_scene(tmp_path).model_copy(
+        update={"scene_id": "s2", "candidate_id": "c2"}
+    )
+    _seed_scene(client, scene1)
+    _seed_scene(client, scene2)
+
+    resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert body["error"] == "stated_answer_mismatch_in_chain"
+    assert body["scene_id"] == "s1"
+
+
+def test_combine_succeeds_when_mismatch_acknowledged(tmp_path):
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    scene1 = _mismatched_scene(tmp_path)
+    scene2 = _mismatched_scene(tmp_path).model_copy(
+        update={"scene_id": "s2", "candidate_id": "c2"}
+    )
+    _seed_scene(client, scene1)
+    _seed_scene(client, scene2)
+
+    assert client.post("/storyboard/s1/acknowledge-mismatch").status_code == 200
+    assert client.post("/storyboard/s2/acknowledge-mismatch").status_code == 200
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
+
+    assert resp.status_code == 200
+
+
 def test_patch_params_resets_approved_scene_to_pending_review(tmp_path):
     client = _client()
     _upload_candidate(client)
