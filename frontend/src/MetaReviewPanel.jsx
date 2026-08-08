@@ -109,12 +109,24 @@ const QUALITY_CHECK_CATEGORIES = [
   },
 ]
 
-function passingQualityCategoryLabels(qualityReport) {
+// Per-category gate rows for the meta panel: keep a category's failed status
+// visible instead of dropping the row entirely. A category with no matching
+// checks in this quality report has no signal to show and is omitted.
+function qualityCategoryGates(qualityReport) {
   const checks = qualityReport?.checks ?? []
-  return QUALITY_CHECK_CATEGORIES.filter(({ codes }) => {
+  const gates = []
+  for (const { label, codes } of QUALITY_CHECK_CATEGORIES) {
     const matching = checks.filter((check) => codes.has(check.code))
-    return matching.length > 0 && matching.every((check) => check.passed)
-  }).map(({ label }) => label)
+    if (matching.length === 0) continue
+    const anyFailed = matching.some((check) => !check.passed)
+    const status = anyFailed ? 'failed' : 'passed'
+    const name = anyFailed ? `${label} failed` : `${label} passed`
+    // Raw check codes/paths/details are internal — the reviewer sees status
+    // only. GatePanel emits a fallback "Status: failed" line when `details`
+    // is absent, which is enough signal without leaking check internals.
+    gates.push({ name, category: label, status })
+  }
+  return gates
 }
 
 function capitalize(word) {
@@ -466,7 +478,7 @@ export default function MetaReviewPanel() {
     && selected.quality_report?.passed === true
     && selected.quality_report.artifact_hash === selected.artifact_hash,
   )
-  const passingQualityLabels = passingQualityCategoryLabels(selected?.quality_report)
+  const qualityGates = qualityCategoryGates(selected?.quality_report)
   const totalDurationSeconds = selected?.total_duration_seconds ?? 0
   const canApprove = Boolean(
     selected
@@ -641,13 +653,7 @@ export default function MetaReviewPanel() {
                   ))}
                 </ol>
               )}
-              <GatePanel
-                gates={passingQualityLabels.map((label) => ({
-                  name: `${label} passed`,
-                  category: label,
-                  status: 'passed',
-                }))}
-              />
+              <GatePanel gates={qualityGates} />
 
               {previewSrc && (
                 <div className="inset admin__preview">

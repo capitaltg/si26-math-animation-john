@@ -469,58 +469,64 @@ function StageRail({ current }) {
   )
 }
 
-// Discrete, countable named gates, every one read from real scene state and
-// every one reachable. There is no percentage to show: POST /render is a
-// single blocking batch call with no progress stream, so the render itself is
-// reported by the dock rather than faked as a per-scene bar here.
-//
-// Gates are derived client-side so the schema/semantic status can reflect a
-// live PATCH ValidationError that the backend snapshot has not yet seen. The
-// backend also returns a matching `gates` list on SceneOut for API consumers.
-function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
-  const extracted = draft != null && Object.keys(draft).length > 0
+// Discrete, countable named gates. The backend returns the authoritative
+// `scene.gates` list on SceneOut; we render that verbatim so a gate never
+// reads as passed unless the backend actually ran it. Local overlays only
+// *demote* gates when the client knows the backend snapshot is stale:
+//   - `isDirty`: the draft has unsaved edits, so no backend gate has run
+//     against the current draft — everything is pending until save.
+//   - `schemaFailed` / `semanticFailed`: a live PATCH ValidationError the
+//     backend has not yet committed — mark that specific gate failed and
+//     downstream gates pending until the draft revalidates.
+// There is no percentage to show: POST /render is a single blocking batch
+// call with no progress stream, so the render itself is reported by the
+// dock rather than faked as a per-scene bar here.
+const DOWNSTREAM_OF_VALIDATION = new Set([
+  'Compiled deterministically',
+  'Preview rendered',
+])
+
+function StampColumn({ scene, schemaFailed, semanticFailed, isDirty }) {
   const rejected = scene.status === 'rejected'
-  const compiled = !!scene.scene_program_hash
-  const semanticStatus = schemaFailed
+  const hasLiveErrors = schemaFailed || semanticFailed
+  const baseline = Array.isArray(scene.gates) ? scene.gates : []
+  const gates = baseline.map((gate) => {
+    // A live 422 PATCH is fresh validation info — apply per-gate overrides
+    // and leave the gates the PATCH didn't complain about at their backend
+    // status (the PATCH validated them successfully).
+    if (hasLiveErrors) {
+      if (schemaFailed && gate.name === 'Schema check') {
+        return { ...gate, status: 'failed' }
+      }
+      if (semanticFailed && gate.name === 'Semantic check') {
+        return { ...gate, status: 'failed' }
+      }
+      if (DOWNSTREAM_OF_VALIDATION.has(gate.name)) {
+        return { ...gate, status: 'pending' }
+      }
+      return gate
+    }
+    // No PATCH has run against the current draft — the backend snapshot's
+    // gate results are stale, so demote them all to pending until save.
+    if (isDirty) {
+      return { ...gate, status: 'pending' }
+    }
+    return gate
+  })
+  // Backend's SceneOut gate list does not include the approval decision;
+  // append it here so the deck surface still shows N countable gates.
+  const approvalStatus = isDirty
     ? 'pending'
-    : semanticFailed
+    : rejected
       ? 'failed'
-      : extracted
+      : scene.status === 'approved'
         ? 'passed'
         : 'pending'
-  const gates = [
-    {
-      name: 'Values extracted',
-      category: 'Fixture',
-      status: extracted ? 'passed' : 'pending',
-    },
-    {
-      name: 'Schema check',
-      category: 'Fixture',
-      status: schemaFailed ? 'failed' : extracted ? 'passed' : 'pending',
-    },
-    {
-      name: 'Semantic check',
-      category: 'Anchor alignment',
-      status: semanticStatus,
-    },
-    {
-      name: 'Compiled deterministically',
-      category: 'Rendered output',
-      status: compiled && !semanticFailed && !schemaFailed ? 'passed' : 'pending',
-      duration_ms: scene.compile_ms,
-    },
-    {
-      name: 'Preview rendered',
-      category: 'Rendered output',
-      status: scene.thumbnail_url ? 'passed' : 'pending',
-    },
-    {
-      name: rejected ? 'Rejected — will not render' : 'Approved for render',
-      category: 'Rendered output',
-      status: rejected ? 'failed' : scene.status === 'approved' ? 'passed' : 'pending',
-    },
-  ]
+  gates.push({
+    name: rejected ? 'Rejected — will not render' : 'Approved for render',
+    category: 'Rendered output',
+    status: approvalStatus,
+  })
   const done = gates.filter((g) => g.status === 'passed').length
   return (
     <div>
@@ -1394,7 +1400,7 @@ function MainApp() {
                         scene={scene}
                         schemaFailed={schemaFailed}
                         semanticFailed={semanticFailed}
-                        draft={drafts[scene.scene_id]}
+                        isDirty={isDirty}
                       />
                       <Rods params={drafts[scene.scene_id]} />
                     </div>

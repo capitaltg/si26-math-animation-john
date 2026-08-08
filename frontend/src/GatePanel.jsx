@@ -35,7 +35,8 @@ function GateMark({ status }) {
 }
 
 // A gate `{ name, category, status, duration_ms }`; `details` is optional
-// free-form text shown when the row is expanded.
+// free-form text shown when the row is expanded. Every row is expandable so
+// the audience can always drill into status and timing per gate.
 export default function GatePanel({ gates }) {
   if (!gates || gates.length === 0) return null
   return (
@@ -47,30 +48,20 @@ export default function GatePanel({ gates }) {
         const ms = typeof gate.duration_ms === 'number' ? gate.duration_ms : null
         return (
           <li key={gate.name} className="stamp gate" data-state={stamp}>
-            {detail ? (
-              <details>
-                <summary>
-                  <GateMark status={state} />
-                  <span className="gate__name">{gate.name}</span>
-                  <span className="chip gate__category">{gate.category}</span>
-                  <span className="sr-only"> — {STATE_WORDS[state]}</span>
-                </summary>
-                <p className="gate__detail">{detail}</p>
-                {ms !== null && (
-                  <p className="gate__timing">{`${Math.round(ms)} ms`}</p>
-                )}
-              </details>
-            ) : (
-              <>
+            <details>
+              <summary>
                 <GateMark status={state} />
                 <span className="gate__name">{gate.name}</span>
                 <span className="chip gate__category">{gate.category}</span>
-                {ms !== null && (
-                  <span className="gate__timing">{`${Math.round(ms)} ms`}</span>
-                )}
                 <span className="sr-only"> — {STATE_WORDS[state]}</span>
-              </>
-            )}
+              </summary>
+              <p className="gate__detail">
+                {detail || `Status: ${STATE_WORDS[state]}`}
+              </p>
+              {ms !== null && (
+                <p className="gate__timing">{`${Math.round(ms)} ms`}</p>
+              )}
+            </details>
           </li>
         )
       })}

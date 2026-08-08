@@ -54,6 +54,13 @@ const pendingScene = {
   scene_program_hash: 'a4f2b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f80917263544352617abcde',
   compile_ms: 0.12,
   program_size: 128,
+  gates: [
+    { name: 'Values extracted', category: 'Fixture', status: 'passed' },
+    { name: 'Schema check', category: 'Fixture', status: 'passed' },
+    { name: 'Semantic check', category: 'Anchor alignment', status: 'passed' },
+    { name: 'Compiled deterministically', category: 'Rendered output', status: 'passed', duration_ms: 0.12 },
+    { name: 'Preview rendered', category: 'Rendered output', status: 'pending' },
+  ],
 }
 
 const pendingScene2 = {
