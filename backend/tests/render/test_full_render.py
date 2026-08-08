@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from app.models.scene import TemplateName
-from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
+from app.render.full_render import render_scene_preview, render_scene_to_mp4
 from app.templates.array_grid.params import ArrayGridParams
 from app.templates.number_line.params import NumberLineParams, NumberLineStep
 from app.templates.registry import static_ref
@@ -29,15 +29,15 @@ def test_render_number_line_scene_produces_mp4(tmp_path):
     assert output_path.read_bytes() != b"stale destination"
 
 
-def test_render_array_grid_scene_produces_thumbnail(tmp_path):
+def test_render_array_grid_scene_produces_preview(tmp_path):
     params = ArrayGridParams(rows=2, cols=3)
-    output_path = tmp_path / "thumb.png"
+    output_path = tmp_path / "preview.mp4"
 
-    result_path = render_scene_thumbnail(static_ref(TemplateName.ARRAY_GRID), params, output_path)
+    result_path = render_scene_preview(static_ref(TemplateName.ARRAY_GRID), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
-    assert output_path.suffix == ".png"
+    assert output_path.suffix == ".mp4"
     assert output_path.stat().st_size > 0
 
 
@@ -47,13 +47,13 @@ def test_failed_rerender_preserves_existing_artifact(mock_run, tmp_path):
         args=[], returncode=1, stdout="", stderr="manim failed"
     )
     params = ArrayGridParams(rows=2, cols=3)
-    output_path = tmp_path / "thumb.png"
-    output_path.write_bytes(b"previous successful thumbnail")
+    output_path = tmp_path / "preview.mp4"
+    output_path.write_bytes(b"previous successful preview")
 
     with pytest.raises(RuntimeError, match="Render subprocess failed"):
-        render_scene_thumbnail(static_ref(TemplateName.ARRAY_GRID), params, output_path)
+        render_scene_preview(static_ref(TemplateName.ARRAY_GRID), params, output_path)
 
-    assert output_path.read_bytes() == b"previous successful thumbnail"
+    assert output_path.read_bytes() == b"previous successful preview"
 
 
 def test_render_chained_number_line_scene_produces_mp4(tmp_path):
@@ -73,8 +73,8 @@ def test_render_chained_number_line_scene_produces_mp4(tmp_path):
     assert output_path.stat().st_size > 0
 
 
-def test_render_chained_number_line_scene_produces_thumbnail(tmp_path):
-    from app.render.full_render import render_chained_scene_thumbnail
+def test_render_chained_number_line_scene_produces_preview(tmp_path):
+    from app.render.full_render import render_chained_scene_preview
     from app.templates.number_line.params import (
         ChainedNumberLineParams,
         NumberLineParams,
@@ -85,13 +85,13 @@ def test_render_chained_number_line_scene_produces_thumbnail(tmp_path):
         NumberLineParams(start=1, steps=[NumberLineStep(operation="add", amount=2)]),
         NumberLineParams(start=5, steps=[NumberLineStep(operation="subtract", amount=1)]),
     ])
-    output_path = tmp_path / "chain-thumb.png"
+    output_path = tmp_path / "chain-preview.mp4"
 
-    result_path = render_chained_scene_thumbnail(static_ref(TemplateName.NUMBER_LINE), params, output_path)
+    result_path = render_chained_scene_preview(static_ref(TemplateName.NUMBER_LINE), params, output_path)
 
     assert result_path == output_path
     assert output_path.exists()
-    assert output_path.suffix == ".png"
+    assert output_path.suffix == ".mp4"
     assert output_path.stat().st_size > 0
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from app.models.scene import TemplateRef
 from app.templates.registry import get_chained_template, get_template
 
-VALID_MODES = {"full", "thumbnail"}
+VALID_MODES = {"full", "preview"}
 VALID_CHAIN_FLAGS = {"solo", "chained"}
 
 
@@ -30,18 +30,17 @@ def main() -> None:
         "output_file": output_path.stem,
         "disable_caching": True,
     }
-    if mode == "thumbnail":
-        overrides["save_last_frame"] = True
-        overrides["quality"] = "low_quality"
-    else:
-        overrides["quality"] = "medium_quality"
+    # Preview clips are always mp4; low_quality (~480p15) keeps the render cheap
+    # enough to run at storyboard time so the teacher can play the artifact
+    # before approving it for a medium-quality final render.
+    overrides["quality"] = "low_quality" if mode == "preview" else "medium_quality"
 
     with tempconfig(overrides):
         scene = scene_cls()
         scene.params = params
         scene.render()
 
-    ext = "png" if mode == "thumbnail" else "mp4"
+    ext = "mp4"
     destination = output_path.resolve()
     matches = [
         path

@@ -27,9 +27,9 @@ from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
-    render_chained_scene_thumbnail,
+    render_chained_scene_preview,
     render_chained_scene_to_mp4,
-    render_scene_thumbnail,
+    render_scene_preview,
     render_scene_to_mp4,
 )
 from app.session import SessionStore
@@ -131,7 +131,7 @@ class SceneOut(BaseModel):
     params_schema: dict
     status: str
     fallback_reason: str | None = None
-    thumbnail_url: str | None = None
+    preview_url: str | None = None
     source_excerpt: str
     detected_summary: str
     stated_answer: str | None = None
@@ -303,7 +303,7 @@ def _scene_gates(
     schema_passed = extracted
     semantic_passed = extracted and not scene_mismatch(scene)
     compiled = program_hash is not None
-    preview_ready = scene.thumbnail_path is not None
+    preview_ready = scene.preview_path is not None
 
     def _state(passed: bool, ran: bool) -> Literal["passed", "failed", "pending"]:
         if not ran:
@@ -418,10 +418,10 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         else:
             _, params_cls = get_template(scene.template)
         schema = params_cls.model_json_schema()
-    thumbnail_url = None
-    if scene.thumbnail_path is not None:
-        thumb_id = store.register_thumbnail(scene.thumbnail_path)
-        thumbnail_url = f"/thumbnails/{thumb_id}"
+    preview_url = None
+    if scene.preview_path is not None:
+        preview_id = store.register_preview(scene.preview_path)
+        preview_url = f"/previews/{preview_id}"
     if candidates:
         source_excerpt = " / ".join(c.source_excerpt for c in candidates)
         detected_summary = " / ".join(c.one_line_summary for c in candidates)
@@ -445,7 +445,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         params_schema=schema,
         status=scene.status,
         fallback_reason=scene.fallback_reason,
-        thumbnail_url=thumbnail_url,
+        preview_url=preview_url,
         source_excerpt=source_excerpt,
         detected_summary=detected_summary,
         stated_answer=stated_answer_display,
@@ -628,11 +628,11 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     items = [params_cls.model_validate(scene.params) for scene in scenes]
     chained_params = chained_params_cls(items=items)
 
-    thumb_path = session.output_dir / f"chain-{uuid4()}.png"
+    preview_path = session.output_dir / f"chain-preview-{uuid4()}.mp4"
     try:
-        render_chained_scene_thumbnail(template, chained_params, thumb_path)
+        render_chained_scene_preview(template, chained_params, preview_path)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
+        raise HTTPException(status_code=500, detail="Preview render failed") from exc
 
     new_scene = Scene(
         scene_id=str(uuid4()),
@@ -642,7 +642,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
         grade_overridden=scenes[0].grade_overridden,
         params=chained_params.model_dump(mode="json"),
         status="pending_review",
-        thumbnail_path=thumb_path,
+        preview_path=preview_path,
     )
 
     screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
@@ -682,12 +682,12 @@ def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     return UngroupResponse(scenes=restored)
 
 
-@router.get("/thumbnails/{thumb_id}")
-def get_thumbnail(thumb_id: str):
-    path = store.get_thumbnail(thumb_id)
+@router.get("/previews/{preview_id}")
+def get_preview(preview_id: str):
+    path = store.get_preview(preview_id)
     if path is None or not path.exists():
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(path, media_type="image/png", filename=path.name)
+        raise HTTPException(status_code=404, detail="Preview not found")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 # Pydantic tags every @model_validator / @field_validator raise as
@@ -792,7 +792,7 @@ def edit_scene(
         )
 
     new_params = scene.params
-    new_thumb = scene.thumbnail_path
+    new_preview = scene.preview_path
     params_changed = False
     if request.params is not None:
         if scene.candidate_ids:
@@ -803,16 +803,16 @@ def edit_scene(
             params = params_cls.model_validate(request.params)
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=_field_errors(exc))
-        out = session.output_dir / f"{scene.scene_id}-{uuid4()}.png"
+        out = session.output_dir / f"{scene.scene_id}-preview-{uuid4()}.mp4"
         try:
             if scene.candidate_ids:
-                render_chained_scene_thumbnail(scene.template, params, out)
+                render_chained_scene_preview(scene.template, params, out)
             else:
-                render_scene_thumbnail(scene.template, params, out)
+                render_scene_preview(scene.template, params, out)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail="Thumbnail render failed") from exc
+            raise HTTPException(status_code=500, detail="Preview render failed") from exc
         new_params = params.model_dump(mode="json")
-        new_thumb = out
+        new_preview = out
         params_changed = new_params != scene.params
 
     grade = request.grade_level if request.grade_level is not None else scene.grade_level
@@ -821,7 +821,7 @@ def edit_scene(
 
     updates = {
         "params": new_params,
-        "thumbnail_path": new_thumb,
+        "preview_path": new_preview,
         "grade_level": grade,
         "grade_overridden": grade_overridden,
     }

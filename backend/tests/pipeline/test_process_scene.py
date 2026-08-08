@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 
 @patch("app.pipeline.process_scene.extract_stated_answer", return_value=None)
-def test_assemble_scene_returns_pending_review_with_thumbnail(mock_stated, tmp_path):
+def test_assemble_scene_returns_pending_review_with_preview(mock_stated, tmp_path):
     from unittest.mock import patch
 
     from app.models.candidate import Candidate
@@ -21,13 +21,13 @@ def test_assemble_scene_returns_pending_review_with_thumbnail(mock_stated, tmp_p
     ref = static_ref(TemplateName.NUMBER_LINE)
 
     with patch("app.pipeline.process_scene.extract_params", return_value=params), patch(
-        "app.pipeline.process_scene.render_scene_thumbnail"
+        "app.pipeline.process_scene.render_scene_preview"
     ) as thumb:
         scene = assemble_scene(candidate, tmp_path, template=ref, grade=1)
 
     assert scene.status == "pending_review"
     assert scene.template == ref
-    assert scene.thumbnail_path is not None
+    assert scene.preview_path is not None
     assert scene.params["start"] == 4
     thumb.assert_called_once()
 
@@ -54,7 +54,7 @@ def test_assemble_scene_falls_back_on_template_mismatch(tmp_path):
     with patch(
         "app.pipeline.process_scene.extract_params",
         side_effect=TemplateMismatchError("no add/subtract sequence"),
-    ), patch("app.pipeline.process_scene.render_scene_thumbnail"):
+    ), patch("app.pipeline.process_scene.render_scene_preview"):
         scene = assemble_scene(
             candidate, tmp_path, template=static_ref(TemplateName.NUMBER_LINE), grade=3
         )
@@ -62,7 +62,7 @@ def test_assemble_scene_falls_back_on_template_mismatch(tmp_path):
     assert scene.status == "fallback"
     assert scene.template == static_ref(TemplateName.TEXT_CARD)
     assert scene.fallback_reason == TEMPLATE_MISMATCH_REASON
-    assert scene.thumbnail_path is not None
+    assert scene.preview_path is not None
 
 
 def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
@@ -83,7 +83,7 @@ def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
     with patch(
         "app.pipeline.process_scene.extract_params",
         side_effect=AssertionError("text cards must bypass extraction"),
-    ) as extract, patch("app.pipeline.process_scene.render_scene_thumbnail") as thumbnail:
+    ) as extract, patch("app.pipeline.process_scene.render_scene_preview") as thumbnail:
         scene = assemble_scene(
             candidate, tmp_path, template=static_ref(TemplateName.TEXT_CARD), grade=3
         )
@@ -95,12 +95,12 @@ def test_assemble_scene_builds_selected_text_card_without_extraction(tmp_path):
         "headline": "Detected: static plotting task",
         "lines": ["Plot one half and three quarters on a number line."],
     }
-    assert scene.thumbnail_path is not None
+    assert scene.preview_path is not None
     extract.assert_not_called()
     thumbnail.assert_called_once()
 
 
-def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
+def test_selected_text_card_reports_preview_render_failure(tmp_path):
     from unittest.mock import patch
 
     from app.models.candidate import Candidate
@@ -116,7 +116,7 @@ def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
     )
 
     with patch(
-        "app.pipeline.process_scene.render_scene_thumbnail",
+        "app.pipeline.process_scene.render_scene_preview",
         side_effect=RuntimeError("preview failed"),
     ):
         scene = assemble_scene(
@@ -125,11 +125,11 @@ def test_selected_text_card_reports_thumbnail_render_failure(tmp_path):
 
     assert scene.status == "pending_review"
     assert scene.failure_kind == "render_failure"
-    assert scene.thumbnail_path is None
+    assert scene.preview_path is None
 
 
 @patch("app.pipeline.process_scene.extract_stated_answer", return_value=None)
-def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(mock_stated, tmp_path):
+def test_assemble_scene_keeps_valid_params_when_preview_render_fails(mock_stated, tmp_path):
     from unittest.mock import patch
 
     from app.models.candidate import Candidate
@@ -157,7 +157,7 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(mock_stat
     with patch(
         "app.pipeline.process_scene.extract_params", return_value=params
     ) as extract, patch(
-        "app.pipeline.process_scene.render_scene_thumbnail",
+        "app.pipeline.process_scene.render_scene_preview",
         side_effect=fail_number_line_preview,
     ):
         scene = assemble_scene(candidate, tmp_path, template=ref, grade=1)
@@ -169,7 +169,7 @@ def test_assemble_scene_keeps_valid_params_when_thumbnail_render_fails(mock_stat
         "start": 4,
         "steps": [{"operation": "add", "amount": 3}],
     }
-    assert scene.thumbnail_path is None
+    assert scene.preview_path is None
     extract.assert_called_once()
 
 

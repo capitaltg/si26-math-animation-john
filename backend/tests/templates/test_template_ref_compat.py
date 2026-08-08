@@ -77,7 +77,7 @@ def test_classify_pick_and_build_scene_round_trips_the_same_ref(mock_call, tmp_p
         one_line_summary="Detected: 6 + 3",
     )
     with patch("app.pipeline.process_scene.extract_params") as mock_extract, \
-         patch("app.pipeline.process_scene.render_scene_thumbnail"):
+         patch("app.pipeline.process_scene.render_scene_preview"):
         from app.templates.number_line.params import NumberLineParams
 
         mock_extract.return_value = NumberLineParams(

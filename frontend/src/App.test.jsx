@@ -44,7 +44,7 @@ const pendingScene = {
   },
   status: 'pending_review',
   fallback_reason: null,
-  thumbnail_url: null,
+  preview_url: null,
   source_excerpt: candidate.source_excerpt,
   detected_summary: candidate.one_line_summary,
   scene_program: {
@@ -304,6 +304,24 @@ it('removes a selected scene from combine eligibility after approval', async () 
   await waitFor(() => {
     expect(screen.queryByRole('button', { name: 'Combine 2 into one scene' })).toBeNull()
   })
+})
+
+it('disables Approve until the preview clip has been watched', async () => {
+  const withPreview = { ...pendingScene, preview_url: '/previews/abc' }
+  installFetchMock({ storyboardScenes: [withPreview] })
+  const { container } = await reachStoryboard()
+
+  const approveBtn = screen.getByRole('button', { name: 'Approve' })
+  expect(approveBtn.disabled).toBe(true)
+  expect(screen.getByText('Watch the preview to enable Approve')).not.toBeNull()
+
+  const video = container.querySelector('video')
+  expect(video).not.toBeNull()
+  expect(video.getAttribute('src')).toBe('/previews/abc')
+  fireEvent.ended(video)
+
+  await waitFor(() => expect(approveBtn.disabled).toBe(false))
+  expect(screen.queryByText('Watch the preview to enable Approve')).toBeNull()
 })
 
 it('excludes a scene with an unacknowledged mismatch from combine eligibility', async () => {

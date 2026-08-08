@@ -496,7 +496,7 @@ def test_unknown_clip_id_is_404():
     assert resp.status_code == 404
 
 
-def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
+def test_storyboard_builds_scenes_with_schema_and_preview_url(tmp_path):
     from app.models.scene import Scene, TemplateName
     from app.templates.registry import static_ref
 
@@ -513,7 +513,7 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
-        thumbnail_path=thumb,
+        preview_path=thumb,
     )
 
     with patch("app.routes.assemble_scene", return_value=fake):
@@ -526,7 +526,7 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     scene = resp.json()["scenes"][0]
     assert scene["scene_id"] == "s1"
     assert scene["status"] == "pending_review"
-    assert scene["thumbnail_url"].startswith("/thumbnails/")
+    assert scene["preview_url"].startswith("/previews/")
     assert scene["source_excerpt"]
     assert scene["detected_summary"] == "Detected: 4 + 3"
     assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
@@ -571,7 +571,7 @@ def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
-        thumbnail_path=thumb,
+        preview_path=thumb,
         stated_answer=Fraction(9),
         stated_answer_source="= 9",
     )
@@ -616,7 +616,7 @@ def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
         grade_level=1,
         params={"headline": "x", "lines": ["y"]},
         status="pending_review",
-        thumbnail_path=thumb,
+        preview_path=thumb,
     )
 
     with patch("app.routes.assemble_scene", return_value=fake):
@@ -632,22 +632,22 @@ def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
     assert calls[0]["scene_status"] == "pending_review"
 
 
-def test_thumbnail_endpoint_serves_png(tmp_path):
+def test_preview_endpoint_serves_mp4(tmp_path):
     from app.routes import store
 
     client = _client()
-    png = tmp_path / "t.png"
-    png.write_bytes(b"\x89PNG\r\n")
-    thumb_id = store.register_thumbnail(png)
+    mp4 = tmp_path / "t.mp4"
+    mp4.write_bytes(b"fake-mp4")
+    preview_id = store.register_preview(mp4)
 
-    resp = client.get(f"/thumbnails/{thumb_id}")
+    resp = client.get(f"/previews/{preview_id}")
     assert resp.status_code == 200
-    assert resp.headers["content-type"] == "image/png"
+    assert resp.headers["content-type"] == "video/mp4"
 
 
-def test_thumbnail_unknown_id_is_404():
+def test_preview_unknown_id_is_404():
     client = _client()
-    assert client.get("/thumbnails/nope").status_code == 404
+    assert client.get("/previews/nope").status_code == 404
 
 
 def test_storyboard_rejects_pick_before_options_cached():
@@ -730,7 +730,7 @@ def _number_line_scene(tmp_path):
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
-        thumbnail_path=thumb,
+        preview_path=thumb,
     )
 
 
@@ -873,12 +873,12 @@ def test_render_stored_param_validation_failure_does_not_sink_batch(tmp_path):
     assert clips[1]["clip_url"] is None
 
 
-def test_patch_valid_params_re_renders_thumbnail(tmp_path):
+def test_patch_valid_params_re_renders_preview(tmp_path):
     client = _client()
     _upload_candidate(client)
     _seed_scene(client, _number_line_scene(tmp_path))
 
-    with patch("app.routes.render_scene_thumbnail") as thumb:
+    with patch("app.routes.render_scene_preview") as thumb:
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
@@ -897,7 +897,7 @@ def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
     _seed_scene(client, _number_line_scene(tmp_path))
 
     # start=1 then subtract 5 -> running total goes negative -> guard rejects.
-    with patch("app.routes.render_scene_thumbnail") as thumb:
+    with patch("app.routes.render_scene_preview") as thumb:
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": 1, "steps": [{"operation": "subtract", "amount": 5}]}},
@@ -915,7 +915,7 @@ def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
     thumb.assert_not_called()
 
 
-def test_patch_failed_thumbnail_regen_leaves_old_approval_intact(tmp_path):
+def test_patch_failed_preview_regen_leaves_old_approval_intact(tmp_path):
     client = _client()
     _upload_candidate(client)
     approved = _number_line_scene(tmp_path).model_copy(
@@ -923,7 +923,7 @@ def test_patch_failed_thumbnail_regen_leaves_old_approval_intact(tmp_path):
     )
     _seed_scene(client, approved)
 
-    with patch("app.routes.render_scene_thumbnail", side_effect=RuntimeError("boom")):
+    with patch("app.routes.render_scene_preview", side_effect=RuntimeError("boom")):
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
@@ -956,7 +956,7 @@ def test_patch_wrong_param_type_returns_schema_type_error(tmp_path):
     _upload_candidate(client)
     _seed_scene(client, _number_line_scene(tmp_path))
 
-    with patch("app.routes.render_scene_thumbnail") as thumb:
+    with patch("app.routes.render_scene_preview") as thumb:
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": "not-an-int", "steps": []}},
@@ -977,7 +977,7 @@ def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
     _upload_candidate(client)
     _seed_scene(client, _number_line_scene(tmp_path))
 
-    with patch("app.routes.render_scene_thumbnail") as thumb:
+    with patch("app.routes.render_scene_preview") as thumb:
         resp = client.patch("/storyboard/s1", json={"grade_level": 100})
 
     assert resp.status_code == 422
@@ -1014,7 +1014,7 @@ def test_retry_reextracts_same_template_and_keeps_scene_id(tmp_path):
         grade_level=1,
         params={"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         status="pending_review",
-        thumbnail_path=(tmp_path / "t.png"),
+        preview_path=(tmp_path / "t.png"),
     )
 
     with patch("app.routes.assemble_scene", return_value=fresh) as assemble:
@@ -1064,7 +1064,7 @@ def test_approve_fallback_scene_keeps_reason(tmp_path):
         params={"headline": "x", "lines": ["y"]},
         status="fallback",
         fallback_reason="did not fit the chosen template",
-        thumbnail_path=(tmp_path / "t.png"),
+        preview_path=(tmp_path / "t.png"),
     )
     (tmp_path / "t.png").write_bytes(b"png")
     _seed_scene(client, fallback)
@@ -1099,7 +1099,7 @@ def test_approve_chained_scene_returns_candidate_ids_and_joined_text(tmp_path):
             {"start": 4, "steps": [{"operation": "add", "amount": 3}]},
         ]},
         status="pending_review",
-        thumbnail_path=thumb,
+        preview_path=thumb,
     )
     _seed_scene(client, chained)
 
@@ -1212,7 +1212,7 @@ def test_edit_resets_mismatch_acknowledged(tmp_path):
     assert session.scenes["s1"].mismatch_acknowledged is True
 
     # Edit params: content changed, so the ack resets regardless of the new mismatch state.
-    with patch("app.routes.render_scene_thumbnail"):
+    with patch("app.routes.render_scene_preview"):
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": 4, "steps": [{"operation": "add", "amount": 5}]}},
@@ -1293,7 +1293,7 @@ def test_combine_succeeds_when_mismatch_acknowledged(tmp_path):
     assert client.post("/storyboard/s1/acknowledge-mismatch").status_code == 200
     assert client.post("/storyboard/s2/acknowledge-mismatch").status_code == 200
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
 
     assert resp.status_code == 200
@@ -1307,7 +1307,7 @@ def test_patch_params_resets_approved_scene_to_pending_review(tmp_path):
     )
     _seed_scene(client, approved)
 
-    with patch("app.routes.render_scene_thumbnail"):
+    with patch("app.routes.render_scene_preview"):
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
@@ -1371,7 +1371,7 @@ def test_patch_same_params_does_not_revoke_approval(tmp_path):
     )
     _seed_scene(client, approved)
 
-    with patch("app.routes.render_scene_thumbnail"):
+    with patch("app.routes.render_scene_preview"):
         resp = client.patch("/storyboard/s1", json={"params": approved.params})
 
     assert resp.status_code == 200
@@ -1398,7 +1398,7 @@ def test_edited_approved_scene_cannot_render_until_reapproved(tmp_path):
     )
     _seed_scene(client, approved)
 
-    with patch("app.routes.render_scene_thumbnail"):
+    with patch("app.routes.render_scene_preview"):
         client.patch(
             "/storyboard/s1",
             json={"params": {"start": 10, "steps": [{"operation": "subtract", "amount": 2}]}},
@@ -1500,7 +1500,7 @@ def test_chain_combines_two_scenes_into_one(tmp_path):
     _seed_scene(client, scene1)
     _seed_scene(client, scene2)
 
-    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+    with patch("app.routes.render_chained_scene_preview") as thumb:
         resp = client.post("/storyboard/chain", json={"scene_ids": ["s1", "s2"]})
 
     assert resp.status_code == 200
@@ -1639,7 +1639,7 @@ def test_chain_rejects_reusing_absorbed_constituent_scene_id(tmp_path):
     _seed_scene(client, b)
     _seed_scene(client, c)
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         first = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
     assert first.status_code == 200
 
@@ -1661,7 +1661,7 @@ def test_chain_splices_into_earliest_screen_position(tmp_path):
     _seed_scene(client, b)
     _seed_scene(client, c)
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "c"]})
 
     assert resp.status_code == 200
@@ -1702,7 +1702,7 @@ def test_chain_preserves_request_order_for_content_and_screen_order_for_restorat
     _seed_scene(client, b)
     _seed_scene(client, c)
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         resp = client.post("/storyboard/chain", json={"scene_ids": ["c", "a"]})
 
     assert resp.status_code == 200
@@ -1732,7 +1732,7 @@ def test_ungroup_restores_original_scenes_at_same_position(tmp_path):
     _seed_scene(client, b)
     _seed_scene(client, c)
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "c"]})
     new_id = chain_resp.json()["scene_id"]
 
@@ -1762,7 +1762,7 @@ def test_ungroup_restores_true_screen_order_when_request_order_is_reversed(tmp_p
     _seed_scene(client, c)
 
     # Request lists scene_ids in reversed on-screen order (c, a instead of a, c).
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["c", "a"]})
     new_id = chain_resp.json()["scene_id"]
 
@@ -1799,7 +1799,7 @@ def test_absorbed_scene_cannot_be_mutated(method, path, body, tmp_path):
     _seed_scene(client, a, template="number_line")
     _seed_scene(client, b, template="number_line")
 
-    with patch("app.routes.render_chained_scene_thumbnail"):
+    with patch("app.routes.render_chained_scene_preview"):
         chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
     assert chain_resp.status_code == 200
 
@@ -1837,12 +1837,12 @@ def _chained_number_line_scene(candidate_ids=("c1", "c2")):
     )
 
 
-def test_patch_chained_scene_valid_item_edit_re_renders_thumbnail():
+def test_patch_chained_scene_valid_item_edit_re_renders_preview():
     client = _client()
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     _seed_scene(client, _chained_number_line_scene())
 
-    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+    with patch("app.routes.render_chained_scene_preview") as thumb:
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"items": [
@@ -1861,7 +1861,7 @@ def test_patch_chained_scene_invalid_item_returns_422():
     _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
     _seed_scene(client, _chained_number_line_scene())
 
-    with patch("app.routes.render_chained_scene_thumbnail") as thumb:
+    with patch("app.routes.render_chained_scene_preview") as thumb:
         resp = client.patch(
             "/storyboard/s1",
             json={"params": {"items": [

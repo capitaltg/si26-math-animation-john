@@ -2,7 +2,7 @@
 
 Drives a real request through the entire dynamic-template stack --
 classify_candidate -> resolve_dynamic_ref -> get_template -> extract_params ->
-assemble_scene -> render_scene_to_mp4/thumbnail -- mocking only the two true
+assemble_scene -> render_scene_to_mp4/preview -- mocking only the two true
 external boundaries: Bedrock (`call_with_tool`, at both its classification.py
 and extraction.py call sites) and the render subprocess (`subprocess.run`).
 
@@ -98,6 +98,6 @@ def test_approved_dynamic_template_flows_end_to_end(session, tmp_path, monkeypat
     assert scene.status == "pending_review"
     assert scene.template == template_ref
     assert scene.params == extracted_params
-    assert scene.thumbnail_path is not None
+    assert scene.preview_path is not None
     mock_extract.assert_called_once()
     mock_run.assert_called_once()

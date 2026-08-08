@@ -12,7 +12,7 @@ from app.pipeline.extraction import (
     extract_params,
     extract_stated_answer,
 )
-from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
+from app.render.full_render import render_scene_preview, render_scene_to_mp4
 from app.templates.registry import get_template, is_static_template_name, static_ref
 from app.templates.text_card.params import TextCardParams
 
@@ -29,8 +29,8 @@ def _unique_output_path(candidate: Candidate, output_dir: Path) -> Path:
     return output_dir / f"{candidate.candidate_id}-{uuid4()}.mp4"
 
 
-def _unique_thumbnail_path(candidate: Candidate, output_dir: Path) -> Path:
-    return output_dir / f"{candidate.candidate_id}-{uuid4()}.png"
+def _unique_preview_path(candidate: Candidate, output_dir: Path) -> Path:
+    return output_dir / f"{candidate.candidate_id}-preview-{uuid4()}.mp4"
 
 
 def _text_card_params(candidate: Candidate, reason: str | None = None) -> TextCardParams:
@@ -47,18 +47,18 @@ def _fallback_scene(
     reason: str,
     output_dir: Path,
     *,
-    thumbnail: bool = False,
+    preview: bool = False,
 ) -> Scene:
     params = _text_card_params(candidate, reason)
     text_card_ref = static_ref(TemplateName.TEXT_CARD)
 
     render_path = None
-    thumbnail_path = None
+    preview_path = None
     try:
-        if thumbnail:
-            out = _unique_thumbnail_path(candidate, output_dir)
-            render_scene_thumbnail(text_card_ref, params, out)
-            thumbnail_path = out
+        if preview:
+            out = _unique_preview_path(candidate, output_dir)
+            render_scene_preview(text_card_ref, params, out)
+            preview_path = out
         else:
             out = _unique_output_path(candidate, output_dir)
             render_scene_to_mp4(text_card_ref, params, out)
@@ -79,7 +79,7 @@ def _fallback_scene(
         status="fallback",
         fallback_reason=reason,
         render_path=render_path,
-        thumbnail_path=thumbnail_path,
+        preview_path=preview_path,
     )
 
 
@@ -92,17 +92,17 @@ def assemble_scene(
 ) -> Scene:
     if template.name == TemplateName.TEXT_CARD:
         params = _text_card_params(candidate)
-        thumb_path = _unique_thumbnail_path(candidate, output_dir)
+        preview_path = _unique_preview_path(candidate, output_dir)
         failure_kind = None
         try:
-            render_scene_thumbnail(template, params, thumb_path)
+            render_scene_preview(template, params, preview_path)
         except Exception:
             logger.warning(
-                "Thumbnail render failed for candidate %s; returning scene without preview",
+                "Preview render failed for candidate %s; returning scene without preview",
                 candidate.candidate_id,
                 exc_info=True,
             )
-            thumb_path = None
+            preview_path = None
             failure_kind = "render_failure"
         return Scene(
             scene_id=str(uuid4()),
@@ -112,7 +112,7 @@ def assemble_scene(
             params=params.model_dump(mode="json"),
             status="pending_review",
             failure_kind=failure_kind,
-            thumbnail_path=thumb_path,
+            preview_path=preview_path,
         )
 
     _, params_cls = get_template(template)
@@ -134,10 +134,10 @@ def assemble_scene(
     if params is None:
         if isinstance(last_error, (ValidationError, TemplateMismatchError)):
             return _fallback_scene(
-                candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir, thumbnail=True
+                candidate, grade, TEMPLATE_MISMATCH_REASON, output_dir, preview=True
             )
         return _fallback_scene(
-            candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, thumbnail=True
+            candidate, grade, TECHNICAL_FAILURE_REASON, output_dir, preview=True
         )
 
     if is_static_template_name(template.name):
@@ -146,16 +146,16 @@ def assemble_scene(
     else:
         stated_answer_value, stated_answer_source = None, None
 
-    thumb_path = _unique_thumbnail_path(candidate, output_dir)
+    preview_path = _unique_preview_path(candidate, output_dir)
     try:
-        render_scene_thumbnail(template, params, thumb_path)
+        render_scene_preview(template, params, preview_path)
     except Exception:
         logger.warning(
-            "Thumbnail render failed for candidate %s; returning scene without preview",
+            "Preview render failed for candidate %s; returning scene without preview",
             candidate.candidate_id,
             exc_info=True,
         )
-        thumb_path = None
+        preview_path = None
     return Scene(
         scene_id=str(uuid4()),
         candidate_id=candidate.candidate_id,
@@ -163,7 +163,7 @@ def assemble_scene(
         grade_level=grade,
         params=params.model_dump(mode="json"),
         status="pending_review",
-        thumbnail_path=thumb_path,
+        preview_path=preview_path,
         stated_answer=stated_answer_value,
         stated_answer_source=stated_answer_source,
     )

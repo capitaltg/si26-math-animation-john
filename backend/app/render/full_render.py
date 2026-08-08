@@ -17,16 +17,16 @@ def render_scene_to_mp4(template: TemplateRef, params: BaseModel, output_path: P
     return _run_render_worker(template, params, output_path, mode="full", chained=False)
 
 
-def render_scene_thumbnail(template: TemplateRef, params: BaseModel, output_path: Path) -> Path:
-    return _run_render_worker(template, params, output_path, mode="thumbnail", chained=False)
+def render_scene_preview(template: TemplateRef, params: BaseModel, output_path: Path) -> Path:
+    return _run_render_worker(template, params, output_path, mode="preview", chained=False)
 
 
 def render_chained_scene_to_mp4(template: TemplateRef, params: BaseModel, output_path: Path) -> Path:
     return _run_render_worker(template, params, output_path, mode="full", chained=True)
 
 
-def render_chained_scene_thumbnail(template: TemplateRef, params: BaseModel, output_path: Path) -> Path:
-    return _run_render_worker(template, params, output_path, mode="thumbnail", chained=True)
+def render_chained_scene_preview(template: TemplateRef, params: BaseModel, output_path: Path) -> Path:
+    return _run_render_worker(template, params, output_path, mode="preview", chained=True)
 
 
 def _run_render_worker(

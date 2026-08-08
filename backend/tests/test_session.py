@@ -112,31 +112,31 @@ def test_session_starts_with_empty_storyboard(tmp_path):
     assert session.scene_requested_template == {}
 
 
-def test_register_and_get_thumbnail_round_trips(tmp_path):
+def test_register_and_get_preview_round_trips(tmp_path):
     from app.session import SessionStore
 
     store = SessionStore(tmp_path)
-    png = tmp_path / "thumb.png"
-    png.write_bytes(b"fake-png")
-    thumb_id = store.register_thumbnail(png)
-    assert store.get_thumbnail(thumb_id) == png
+    mp4 = tmp_path / "preview.mp4"
+    mp4.write_bytes(b"fake-mp4")
+    preview_id = store.register_preview(mp4)
+    assert store.get_preview(preview_id) == mp4
 
 
-def test_get_unknown_thumbnail_is_none(tmp_path):
+def test_get_unknown_preview_is_none(tmp_path):
     from app.session import SessionStore
 
     store = SessionStore(tmp_path)
-    assert store.get_thumbnail("nope") is None
+    assert store.get_preview("nope") is None
 
 
-def test_thumbnail_registry_evicts_oldest_over_cap(tmp_path):
+def test_preview_registry_evicts_oldest_over_cap(tmp_path):
     from app.session import SessionStore
 
-    store = SessionStore(tmp_path, max_thumbnails=2)
-    first = store.register_thumbnail(tmp_path / "a.png")
-    store.register_thumbnail(tmp_path / "b.png")
-    store.register_thumbnail(tmp_path / "c.png")
-    assert store.get_thumbnail(first) is None
+    store = SessionStore(tmp_path, max_previews=2)
+    first = store.register_preview(tmp_path / "a.mp4")
+    store.register_preview(tmp_path / "b.mp4")
+    store.register_preview(tmp_path / "c.mp4")
+    assert store.get_preview(first) is None
 
 
 def test_session_starts_with_empty_chain_members(tmp_path):

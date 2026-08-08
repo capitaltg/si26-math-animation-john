@@ -661,6 +661,11 @@ function MainApp() {
   const [drafts, setDrafts] = useState({})       // scene_id -> edited params
   const [fieldErrors, setFieldErrors] = useState({})  // scene_id -> [{loc,msg}]
   const [chainSelected, setChainSelected] = useState({})  // scene_id -> bool, combine checkboxes
+  // scene_id -> the preview_url the teacher last played through. Approve is
+  // gated on `previewsWatched[scene_id] === scene.preview_url`: an edit or
+  // retry replaces the URL, so a stale playback of an earlier preview can't
+  // stand in for reviewing the new one.
+  const [previewsWatched, setPreviewsWatched] = useState({})
   const [fileName, setFileName] = useState(null)
   const [rendering, setRendering] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -1331,6 +1336,8 @@ function MainApp() {
               const semanticFailed = errorList.some(isSemanticError)
               const schemaFailed = errorList.some((e) => !isSemanticError(e))
               const mismatchUnacked = !!scene.mismatch && !scene.mismatch_acknowledged
+              const previewWatched =
+                !scene.preview_url || previewsWatched[scene.scene_id] === scene.preview_url
               return (
                 <article
                   className="scene"
@@ -1383,11 +1390,22 @@ function MainApp() {
                   <div className="scene__grid">
                     <div>
                       <div className="inset">
-                        {scene.thumbnail_url ? (
-                          <img
-                            src={scene.thumbnail_url}
-                            alt={`First frame of the ${templateLabel(scene.template)} animation for ${scene.detected_summary || 'this scene'}`}
-                          />
+                        {scene.preview_url ? (
+                          <video
+                            key={scene.preview_url}
+                            src={scene.preview_url}
+                            controls
+                            preload="metadata"
+                            aria-label={`Preview clip of the ${templateLabel(scene.template)} animation for ${scene.detected_summary || 'this scene'}`}
+                            onEnded={() =>
+                              setPreviewsWatched((prev) => ({
+                                ...prev,
+                                [scene.scene_id]: scene.preview_url,
+                              }))
+                            }
+                          >
+                            Your browser does not support HTML video playback.
+                          </video>
                         ) : (
                           <div className="inset__empty">
                             {scene.template === 'text_card'
@@ -1466,10 +1484,11 @@ function MainApp() {
                     <button
                       className="btn btn--ok"
                       onClick={() => approveScene(scene.scene_id)}
-                      disabled={loading || isDirty || mismatchUnacked}
+                      disabled={loading || isDirty || mismatchUnacked || !previewWatched}
                       title={
                         isDirty ? 'Save edits before approving'
                           : mismatchUnacked ? 'Acknowledge the mismatch or edit values before approving'
+                          : !previewWatched ? 'Watch the preview before approving'
                           : undefined
                       }
                     >
@@ -1482,6 +1501,9 @@ function MainApp() {
                     </button>
                     {isDirty && (
                       <span className="dirty-flag">Unsaved edits — Save first</span>
+                    )}
+                    {!isDirty && !mismatchUnacked && !previewWatched && (
+                      <span className="dirty-flag">Watch the preview to enable Approve</span>
                     )}
                   </div>
                 </article>

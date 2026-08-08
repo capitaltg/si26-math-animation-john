@@ -50,7 +50,7 @@ class Scene(BaseModel):
     approved_revision: int | None = None
     fallback_reason: str | None = None
     failure_kind: Literal["render_failure"] | None = None
-    thumbnail_path: Path | None = None
+    preview_path: Path | None = None
     render_path: Path | None = None
 
     @model_validator(mode="after")
