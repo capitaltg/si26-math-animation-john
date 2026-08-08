@@ -537,6 +537,19 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     assert scene["compile_ms"] is not None
     assert scene["scene_program"]["params"] == scene["params"]
     assert scene["scene_program"]["template"]["name"] == "number_line"
+    # Named gate list on SceneOut: audience-facing surfaces render this so N
+    # named gates are visible next to the deck stamps, not just generic ones.
+    gate_names = [g["name"] for g in scene["gates"]]
+    assert gate_names == [
+        "Values extracted",
+        "Schema check",
+        "Semantic check",
+        "Compiled deterministically",
+        "Preview rendered",
+    ]
+    categories = {g["category"] for g in scene["gates"]}
+    assert categories <= {"Fixture", "Anchor alignment", "Rendered output"}
+    assert all(g["status"] == "passed" for g in scene["gates"])
 
 
 def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
@@ -771,14 +784,18 @@ def test_render_returns_manual_scene_results(tmp_path):
         resp = client.post("/render")
 
     assert resp.status_code == 200
-    assert resp.json()["clips"] == [{
+    clip = resp.json()["clips"][0]
+    gates = clip.pop("gates")
+    assert clip == {
         "scene_id": "manual-1",
         "candidate_id": None,
         "candidate_ids": None,
         "status": "approved",
-        "clip_url": resp.json()["clips"][0]["clip_url"],
+        "clip_url": clip["clip_url"],
         "fallback_reason": None,
-    }]
+    }
+    assert [g["name"] for g in gates][-1] == "Full render"
+    assert next(g["status"] for g in gates if g["name"] == "Full render") == "passed"
 
 
 def test_render_skips_rejected_scenes(tmp_path):

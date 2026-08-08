@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import GatePanel from './GatePanel'
 import { IconAlert, IconCard, IconCheck, IconChecked, IconWorking } from './Icons'
 
 const TEMPLATE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/
@@ -144,6 +145,7 @@ export default function MetaReviewPanel() {
   const [loading, setLoading] = useState(false)
   const [versions, setVersions] = useState(null)
   const [libraryError, setLibraryError] = useState(null)
+  const [rejectedCount, setRejectedCount] = useState(null)
   const [reviewerToken, setReviewerToken] = useState(
     () => sessionStorage.getItem('metaReviewerToken') || '',
   )
@@ -262,6 +264,15 @@ export default function MetaReviewPanel() {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+    // A failed count is not worth a whole error banner -- the counter just
+    // stays hidden. Reload pending drafts is the primary action.
+    try {
+      const resp = await fetch('/meta/drafts/rejected_count', { headers: authHeaders() })
+      const data = await responseJson(resp)
+      if (resp.ok && typeof data?.count === 'number') setRejectedCount(data.count)
+    } catch {
+      // ignored -- the counter is supplementary
     }
   }
 
@@ -519,6 +530,11 @@ export default function MetaReviewPanel() {
                   A threshold-triggered draft belongs to no session, so a human decides it.
                 </p>
               </div>
+              {rejectedCount !== null && (
+                <p className="stamps__count">
+                  {rejectedCount} draft{rejectedCount === 1 ? '' : 's'} rejected before review
+                </p>
+              )}
               {drafts && drafts.length === 0 && (
                 <div className="notice notice--empty">
                   <IconCard />
@@ -625,16 +641,14 @@ export default function MetaReviewPanel() {
                   ))}
                 </ol>
               )}
-              {passingQualityLabels.length > 0 && (
-                <ul className="stamps">
-                  {passingQualityLabels.map((label) => (
-                    <li className="stamp" key={label} data-state="done">
-                      <span className="stamp__mark"><IconCheck size={16} /></span>
-                      {label} passed
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <GatePanel
+                gates={passingQualityLabels.map((label) => ({
+                  name: `${label} passed`,
+                  category: label,
+                  status: 'passed',
+                }))}
+              />
+
               {previewSrc && (
                 <div className="inset admin__preview">
                   <img src={previewSrc} alt="preview" />

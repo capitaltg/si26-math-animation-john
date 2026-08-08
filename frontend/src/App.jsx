@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import CompileBadge from './CompileBadge'
+import GatePanel from './GatePanel'
 import MetaReviewPanel from './MetaReviewPanel'
 import SchemaForm from './SchemaForm'
 import TemplateWorkshop from './TemplateWorkshop'
@@ -12,7 +13,6 @@ import {
   IconCross,
   IconDownload,
   IconFilm,
-  IconPending,
   IconRedo,
   IconSeedling,
   IconTray,
@@ -469,74 +469,63 @@ function StageRail({ current }) {
   )
 }
 
-const STAMP_STATE_WORDS = {
-  done: 'done',
-  active: 'in progress',
-  failed: 'failed',
-  todo: 'not started',
-}
-
-function Stamp({ label, state }) {
-  const mark =
-    state === 'done' ? <IconCheck size={16} />
-      : state === 'active' ? <IconWorking size={16} />
-      : state === 'failed' ? <IconAlert size={16} />
-      : <IconPending size={16} />
-  return (
-    <li className="stamp" data-state={state}>
-      <span className="stamp__mark">{mark}</span>
-      {label}
-      {/* The icons are decorative, so the state is carried in text too. */}
-      <span className="sr-only"> — {STAMP_STATE_WORDS[state]}</span>
-    </li>
-  )
-}
-
-// Discrete, countable stages, every one read from real scene state and every one
-// reachable. There is no percentage to show: POST /render is a single blocking
-// batch call with no progress stream, so the render itself is reported by the
-// dock rather than faked as a per-scene bar here.
+// Discrete, countable named gates, every one read from real scene state and
+// every one reachable. There is no percentage to show: POST /render is a
+// single blocking batch call with no progress stream, so the render itself is
+// reported by the dock rather than faked as a per-scene bar here.
+//
+// Gates are derived client-side so the schema/semantic status can reflect a
+// live PATCH ValidationError that the backend snapshot has not yet seen. The
+// backend also returns a matching `gates` list on SceneOut for API consumers.
 function StampColumn({ scene, schemaFailed, semanticFailed, draft }) {
   const extracted = draft != null && Object.keys(draft).length > 0
   const rejected = scene.status === 'rejected'
-  // Schema failing short-circuits the semantic stamp: cross-field rules only
-  // run once the primitive types line up, so "todo" is truer than a fake pass.
-  const semanticState = schemaFailed
-    ? 'todo'
+  const compiled = !!scene.scene_program_hash
+  const semanticStatus = schemaFailed
+    ? 'pending'
     : semanticFailed
       ? 'failed'
       : extracted
-        ? 'done'
-        : 'todo'
-  // Compile is a pure function of (template, params); the backend runs it and
-  // exposes the hash so the audience can see this step is not model output.
-  const compiled = !!scene.scene_program_hash
-  const stamps = [
-    { label: 'Values extracted', state: extracted ? 'done' : 'todo' },
+        ? 'passed'
+        : 'pending'
+  const gates = [
     {
-      label: 'Schema check',
-      state: schemaFailed ? 'failed' : extracted ? 'done' : 'todo',
+      name: 'Values extracted',
+      category: 'Fixture',
+      status: extracted ? 'passed' : 'pending',
     },
-    { label: 'Semantic check', state: semanticState },
     {
-      label: 'Compiled deterministically',
-      state: compiled && !semanticFailed && !schemaFailed ? 'done' : 'todo',
+      name: 'Schema check',
+      category: 'Fixture',
+      status: schemaFailed ? 'failed' : extracted ? 'passed' : 'pending',
     },
-    { label: 'Preview rendered', state: scene.thumbnail_url ? 'done' : 'todo' },
     {
-      label: rejected ? 'Rejected — will not render' : 'Approved for render',
-      state: rejected ? 'failed' : scene.status === 'approved' ? 'done' : 'todo',
+      name: 'Semantic check',
+      category: 'Anchor alignment',
+      status: semanticStatus,
+    },
+    {
+      name: 'Compiled deterministically',
+      category: 'Rendered output',
+      status: compiled && !semanticFailed && !schemaFailed ? 'passed' : 'pending',
+      duration_ms: scene.compile_ms,
+    },
+    {
+      name: 'Preview rendered',
+      category: 'Rendered output',
+      status: scene.thumbnail_url ? 'passed' : 'pending',
+    },
+    {
+      name: rejected ? 'Rejected — will not render' : 'Approved for render',
+      category: 'Rendered output',
+      status: rejected ? 'failed' : scene.status === 'approved' ? 'passed' : 'pending',
     },
   ]
-  const done = stamps.filter((stamp) => stamp.state === 'done').length
+  const done = gates.filter((g) => g.status === 'passed').length
   return (
     <div>
-      <p className="stamps__count">{done} of {stamps.length} stages complete</p>
-      <ul className="stamps">
-        {stamps.map((stamp) => (
-          <Stamp key={stamp.label} label={stamp.label} state={stamp.state} />
-        ))}
-      </ul>
+      <p className="stamps__count">{done} of {gates.length} gates passed</p>
+      <GatePanel gates={gates} />
       <CompileBadge scene={scene} />
     </div>
   )
@@ -1267,6 +1256,20 @@ function MainApp() {
                 a scene can be approved.
               </p>
             </div>
+            {(() => {
+              // "Rejected drafts" counter: survivors are not the whole story.
+              // Show the funnel so the audience sees rejects and fallbacks
+              // were caught before render, not silently dropped.
+              const rejected = storyboard.filter(
+                (s) => s.status === 'rejected' || s.status === 'fallback',
+              ).length
+              if (rejected === 0) return null
+              return (
+                <p className="stamps__count">
+                  {rejected} draft{rejected === 1 ? '' : 's'} rejected or fell back before render
+                </p>
+              )
+            })()}
 
             {batchFailure && (
               <div className="notice notice--danger" role="alert">

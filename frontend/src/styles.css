@@ -989,6 +989,37 @@ h3 {
   place-items: center;
 }
 
+/* ---------- Gate panel ---------- */
+
+.gate .gate__category {
+  margin-left: auto;
+  font-size: var(--t-xs);
+  padding: 0.1rem 0.5rem 0.14rem;
+}
+
+.gate__name {
+  flex: 1 1 auto;
+}
+
+.gate details summary {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.gate details summary::-webkit-details-marker {
+  display: none;
+}
+
+.gate__detail,
+.gate__timing {
+  margin: 0.35rem 0 0 1.7rem;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+}
+
 /* ---------- Compile badge ---------- */
 
 .compile-badge {

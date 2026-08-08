@@ -1,5 +1,6 @@
 import logging
 import tempfile
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -94,6 +95,17 @@ class RenderPick(BaseModel):
     template: str
 
 
+# Each named gate the pipeline runs. `category` mirrors the meta-flow taxonomy
+# (Pacing / Anchor alignment / Rendered output / Fixture) so the audience sees
+# gates ran under one vocabulary across every surface, not just the meta panel.
+# `duration_ms` is optional: not every gate reports timing today.
+class Gate(BaseModel):
+    name: str
+    category: Literal["Pacing", "Anchor alignment", "Rendered output", "Fixture"]
+    status: Literal["passed", "failed", "pending"]
+    duration_ms: float | None = None
+
+
 class ClipResult(BaseModel):
     scene_id: str
     candidate_id: str | None
@@ -101,6 +113,7 @@ class ClipResult(BaseModel):
     status: str
     clip_url: str | None = None
     fallback_reason: str | None = None
+    gates: list[Gate] = []
 
 
 class RenderResponse(BaseModel):
@@ -131,6 +144,7 @@ class SceneOut(BaseModel):
     scene_program_hash: str | None = None
     compile_ms: float | None = None
     program_size: int | None = None
+    gates: list[Gate] = []
 
 
 class StoryboardRequest(BaseModel):
@@ -274,6 +288,50 @@ def get_options(
     return OptionsResponse(options=results)
 
 
+# The named gates the deck flow runs per scene. Categories mirror the meta
+# flow's taxonomy so the audience sees one gate vocabulary across surfaces.
+# `duration_ms` is only reported for the compile step today (measured); the
+# others are pass/fail-only for now.
+def _scene_gates(
+    scene: Scene,
+    *,
+    program_hash: str | None,
+    compile_ms: float | None,
+) -> list[Gate]:
+    fallback = scene.status == "fallback"
+    extracted = bool(scene.params) and not fallback
+    schema_passed = extracted
+    semantic_passed = extracted and not scene_mismatch(scene)
+    compiled = program_hash is not None
+    preview_ready = scene.thumbnail_path is not None
+
+    def _state(passed: bool, ran: bool) -> Literal["passed", "failed", "pending"]:
+        if not ran:
+            return "pending"
+        return "passed" if passed else "failed"
+
+    return [
+        Gate(name="Values extracted", category="Fixture", status=_state(extracted, True)),
+        Gate(name="Schema check", category="Fixture", status=_state(schema_passed, extracted)),
+        Gate(
+            name="Semantic check",
+            category="Anchor alignment",
+            status=_state(semantic_passed, extracted),
+        ),
+        Gate(
+            name="Compiled deterministically",
+            category="Rendered output",
+            status=_state(compiled and semantic_passed, extracted),
+            duration_ms=compile_ms,
+        ),
+        Gate(
+            name="Preview rendered",
+            category="Rendered output",
+            status=_state(preview_ready, True),
+        ),
+    ]
+
+
 def _is_render_ready(scene: Scene) -> bool:
     if scene.status != "approved":
         return False
@@ -299,8 +357,11 @@ def render(session_id: str | None = Cookie(default=None)):
     results: list[ClipResult] = []
     for scene in approved:
         clip_url = None
+        rendered_ok = False
+        render_ms: float | None = None
         try:
             output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
+            started = time.perf_counter()
             if scene.candidate_ids:
                 _, params_cls = get_chained_template(scene.template)
                 params = params_cls.model_validate(scene.params)
@@ -309,12 +370,24 @@ def render(session_id: str | None = Cookie(default=None)):
                 _, params_cls = get_template(scene.template)
                 params = params_cls.model_validate(scene.params)
                 render_scene_to_mp4(scene.template, params, output_path)
+            render_ms = (time.perf_counter() - started) * 1000.0
             clip_id = store.register_clip(output_path)
             clip_url = f"/clips/{clip_id}"
             status = "fallback" if scene.fallback_reason else "approved"
+            rendered_ok = True
         except Exception:
             logger.exception("Full render failed for scene %s", scene.scene_id)
             status = "error"
+        _, program_hash, _, compile_ms = compile_scene_program(scene)
+        scene_gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
+        scene_gates.append(
+            Gate(
+                name="Full render",
+                category="Rendered output",
+                status="passed" if rendered_ok else "failed",
+                duration_ms=render_ms,
+            )
+        )
         results.append(
             ClipResult(
                 scene_id=scene.scene_id,
@@ -323,6 +396,7 @@ def render(session_id: str | None = Cookie(default=None)):
                 status=status,
                 clip_url=clip_url,
                 fallback_reason=scene.fallback_reason,
+                gates=scene_gates,
             )
         )
     return RenderResponse(clips=results)
@@ -359,6 +433,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
     )
     mismatch = scene_mismatch(scene)
     program, program_hash, program_size, compile_ms = compile_scene_program(scene)
+    gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -381,6 +456,7 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         scene_program_hash=program_hash,
         compile_ms=compile_ms,
         program_size=program_size,
+        gates=gates,
     )
 
 
