@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import GatePanel from './GatePanel'
 import { IconAlert, IconCard, IconCheck, IconChecked, IconWorking } from './Icons'
 
 const TEMPLATE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/
@@ -108,12 +109,24 @@ const QUALITY_CHECK_CATEGORIES = [
   },
 ]
 
-function passingQualityCategoryLabels(qualityReport) {
+// Per-category gate rows for the meta panel: keep a category's failed status
+// visible instead of dropping the row entirely. A category with no matching
+// checks in this quality report has no signal to show and is omitted.
+function qualityCategoryGates(qualityReport) {
   const checks = qualityReport?.checks ?? []
-  return QUALITY_CHECK_CATEGORIES.filter(({ codes }) => {
+  const gates = []
+  for (const { label, codes } of QUALITY_CHECK_CATEGORIES) {
     const matching = checks.filter((check) => codes.has(check.code))
-    return matching.length > 0 && matching.every((check) => check.passed)
-  }).map(({ label }) => label)
+    if (matching.length === 0) continue
+    const anyFailed = matching.some((check) => !check.passed)
+    const status = anyFailed ? 'failed' : 'passed'
+    const name = anyFailed ? `${label} failed` : `${label} passed`
+    // Raw check codes/paths/details are internal — the reviewer sees status
+    // only. GatePanel emits a fallback "Status: failed" line when `details`
+    // is absent, which is enough signal without leaking check internals.
+    gates.push({ name, category: label, status })
+  }
+  return gates
 }
 
 function capitalize(word) {
@@ -144,6 +157,7 @@ export default function MetaReviewPanel() {
   const [loading, setLoading] = useState(false)
   const [versions, setVersions] = useState(null)
   const [libraryError, setLibraryError] = useState(null)
+  const [rejectedCount, setRejectedCount] = useState(null)
   const [reviewerToken, setReviewerToken] = useState(
     () => sessionStorage.getItem('metaReviewerToken') || '',
   )
@@ -262,6 +276,15 @@ export default function MetaReviewPanel() {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+    // A failed count is not worth a whole error banner -- the counter just
+    // stays hidden. Reload pending drafts is the primary action.
+    try {
+      const resp = await fetch('/meta/drafts/rejected_count', { headers: authHeaders() })
+      const data = await responseJson(resp)
+      if (resp.ok && typeof data?.count === 'number') setRejectedCount(data.count)
+    } catch {
+      // ignored -- the counter is supplementary
     }
   }
 
@@ -455,7 +478,7 @@ export default function MetaReviewPanel() {
     && selected.quality_report?.passed === true
     && selected.quality_report.artifact_hash === selected.artifact_hash,
   )
-  const passingQualityLabels = passingQualityCategoryLabels(selected?.quality_report)
+  const qualityGates = qualityCategoryGates(selected?.quality_report)
   const totalDurationSeconds = selected?.total_duration_seconds ?? 0
   const canApprove = Boolean(
     selected
@@ -519,6 +542,11 @@ export default function MetaReviewPanel() {
                   A threshold-triggered draft belongs to no session, so a human decides it.
                 </p>
               </div>
+              {rejectedCount !== null && (
+                <p className="stamps__count">
+                  {rejectedCount} draft{rejectedCount === 1 ? '' : 's'} rejected before review
+                </p>
+              )}
               {drafts && drafts.length === 0 && (
                 <div className="notice notice--empty">
                   <IconCard />
@@ -625,16 +653,8 @@ export default function MetaReviewPanel() {
                   ))}
                 </ol>
               )}
-              {passingQualityLabels.length > 0 && (
-                <ul className="stamps">
-                  {passingQualityLabels.map((label) => (
-                    <li className="stamp" key={label} data-state="done">
-                      <span className="stamp__mark"><IconCheck size={16} /></span>
-                      {label} passed
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <GatePanel gates={qualityGates} />
+
               {previewSrc && (
                 <div className="inset admin__preview">
                   <img src={previewSrc} alt="preview" />

@@ -450,6 +450,22 @@ def test_list_never_leaks_non_pending_drafts_regardless_of_status_query(client):
         assert [row["id"] for row in rows] == [pending.id]
 
 
+def test_rejected_drafts_count_returns_zero_when_none(client):
+    resp = client.get("/meta/drafts/rejected_count")
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 0}
+
+
+def test_rejected_drafts_count_counts_rejected_only(client):
+    _seed_pending_review_draft()
+    _seed_approvable_draft(draft_id="d-rej-1", fingerprint_key="k-rej-1", status=models.DRAFT_REJECTED)
+    _seed_approvable_draft(draft_id="d-rej-2", fingerprint_key="k-rej-2", status=models.DRAFT_REJECTED)
+    _seed_approvable_draft(draft_id="d-app-1", fingerprint_key="k-app-1", status=models.DRAFT_APPROVED)
+    resp = client.get("/meta/drafts/rejected_count")
+    assert resp.status_code == 200
+    assert resp.json() == {"count": 2}
+
+
 def test_get_draft_detail_includes_fixtures_and_preview_url(client, monkeypatch):
     monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
     get_settings.cache_clear()
