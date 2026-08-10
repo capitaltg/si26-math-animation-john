@@ -418,8 +418,12 @@ def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
         if current.render_path is None or not Path(current.render_path).exists():
             return None
         clip_id = session.scene_clip_id.get(scene.scene_id)
-        if clip_id is None or store.get_clip(clip_id) is None:
-            clip_id = store.register_clip(current.render_path)
+        if clip_id is None or store.get_clip(
+            clip_id, caller_session_id=session.session_id
+        ) is None:
+            clip_id = store.register_clip(
+                current.render_path, session_id=session.session_id
+            )
             session.scene_clip_id[scene.scene_id] = clip_id
     return f"/clips/{clip_id}"
 
@@ -606,8 +610,8 @@ def render(session_id: str | None = Cookie(default=None)):
 
 
 @router.get("/clips/{clip_id}")
-def get_clip(clip_id: str):
-    path = store.get_clip(clip_id)
+def get_clip(clip_id: str, session_id: str | None = Cookie(default=None)):
+    path = store.get_clip(clip_id, caller_session_id=session_id)
     if path is None or not path.exists():
         raise HTTPException(status_code=404, detail="Clip not found")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
@@ -929,8 +933,8 @@ def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
 
 
 @router.get("/thumbnails/{thumb_id}")
-def get_thumbnail(thumb_id: str):
-    path = store.get_thumbnail(thumb_id)
+def get_thumbnail(thumb_id: str, session_id: str | None = Cookie(default=None)):
+    path = store.get_thumbnail(thumb_id, caller_session_id=session_id)
     if path is None or not path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(path, media_type="image/png", filename=path.name)

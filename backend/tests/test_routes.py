@@ -627,6 +627,42 @@ def test_unknown_clip_id_is_404():
     assert resp.status_code == 404
 
 
+def test_clip_owned_by_another_session_is_404(tmp_path):
+    from app.routes import store
+
+    client = _client()
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    clip_id = store.register_clip(clip, session_id="owner-session")
+
+    client.cookies.set("session_id", "attacker-session")
+    assert client.get(f"/clips/{clip_id}").status_code == 404
+
+    client.cookies.clear()
+    assert client.get(f"/clips/{clip_id}").status_code == 404
+
+    client.cookies.set("session_id", "owner-session")
+    assert client.get(f"/clips/{clip_id}").status_code == 200
+
+
+def test_thumbnail_owned_by_another_session_is_404(tmp_path):
+    from app.routes import store
+
+    client = _client()
+    png = tmp_path / "t.png"
+    png.write_bytes(b"\x89PNG\r\n")
+    thumb_id = store.register_thumbnail(png, session_id="owner-session")
+
+    client.cookies.set("session_id", "attacker-session")
+    assert client.get(f"/thumbnails/{thumb_id}").status_code == 404
+
+    client.cookies.clear()
+    assert client.get(f"/thumbnails/{thumb_id}").status_code == 404
+
+    client.cookies.set("session_id", "owner-session")
+    assert client.get(f"/thumbnails/{thumb_id}").status_code == 200
+
+
 def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     from app.models.scene import Scene, TemplateName
     from app.templates.registry import static_ref

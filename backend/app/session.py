@@ -179,10 +179,16 @@ class SessionStore:
             self._delete_orphaned_files_locked(evicted)
         return clip_id
 
-    def get_clip(self, clip_id: str) -> Path | None:
+    def get_clip(
+        self, clip_id: str, *, caller_session_id: str | None = None
+    ) -> Path | None:
         with self._lock:
             entry = self._clips.get(clip_id)
-        return entry.path if entry is not None else None
+        if entry is None:
+            return None
+        if entry.session_id is not None and entry.session_id != caller_session_id:
+            return None
+        return entry.path
 
     def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str:
         thumb_id = str(uuid4())
@@ -203,10 +209,16 @@ class SessionStore:
             self._delete_orphaned_files_locked(evicted)
         return thumb_id
 
-    def get_thumbnail(self, thumb_id: str) -> Path | None:
+    def get_thumbnail(
+        self, thumb_id: str, *, caller_session_id: str | None = None
+    ) -> Path | None:
         with self._lock:
             entry = self._thumbnails.get(thumb_id)
-        return entry.path if entry is not None else None
+        if entry is None:
+            return None
+        if entry.session_id is not None and entry.session_id != caller_session_id:
+            return None
+        return entry.path
 
     def sweep_orphans(self) -> int:
         """Delete files under root_dir that no live entry or reservation owns.

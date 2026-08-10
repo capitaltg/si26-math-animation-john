@@ -265,7 +265,7 @@ def test_register_clip_after_reserve_unmarks(tmp_path):
 
     cid = store.register_clip(reserved, session_id=session.session_id)
 
-    assert store.get_clip(cid) == reserved
+    assert store.get_clip(cid, caller_session_id=session.session_id) == reserved
     assert reserved not in store.reserved_paths()
 
 
