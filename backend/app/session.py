@@ -1,5 +1,6 @@
 import shutil
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,6 +14,9 @@ from app.pipeline.classification import ClassificationResult
 DEFAULT_MAX_SESSIONS = 200
 DEFAULT_MAX_CLIPS = 1000
 DEFAULT_MAX_THUMBNAILS = 1000
+#: Per-session cap covering clip and thumbnail bytes together. Sized so a deck
+#: of ~200 ten-MiB clips fits before the LRU-by-session eviction kicks in.
+DEFAULT_MAX_BYTES_PER_SESSION = 2 * 1024 * 1024 * 1024
 
 
 @dataclass
@@ -59,6 +63,14 @@ class Session:
     scene_clip_id: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
+@dataclass
+class _Entry:
+    path: Path
+    session_id: str | None
+    size: int
+    created_at: float
+
+
 class SessionStore:
     def __init__(
         self,
@@ -66,14 +78,25 @@ class SessionStore:
         max_sessions: int = DEFAULT_MAX_SESSIONS,
         max_clips: int = DEFAULT_MAX_CLIPS,
         max_thumbnails: int = DEFAULT_MAX_THUMBNAILS,
+        max_bytes_per_session: int = DEFAULT_MAX_BYTES_PER_SESSION,
+        ttl_seconds: float | None = None,
     ):
         self._root = Path(root_dir)
         self._max_sessions = max_sessions
         self._max_clips = max_clips
         self._max_thumbnails = max_thumbnails
+        self._max_bytes_per_session = max_bytes_per_session
+        self._ttl_seconds = ttl_seconds
         self._sessions: OrderedDict[str, Session] = OrderedDict()
-        self._clips: OrderedDict[str, Path] = OrderedDict()
-        self._thumbnails: OrderedDict[str, Path] = OrderedDict()
+        self._clips: OrderedDict[str, _Entry] = OrderedDict()
+        self._thumbnails: OrderedDict[str, _Entry] = OrderedDict()
+        # Paths a writer has claimed but not yet registered. Sweeps must not
+        # touch these — deleting a partial render mid-write leaves the caller
+        # writing into a hole.
+        self._reserved: set[Path] = set()
+        # Single lock guards registries, reservations, and the session index
+        # together so eviction paths can't observe half-updated state.
+        self._lock = threading.Lock()
 
     def create(self, candidates: list[Candidate]) -> Session:
         session_id = str(uuid4())
@@ -84,34 +107,191 @@ class SessionStore:
             candidates={c.candidate_id: c for c in candidates},
             output_dir=output_dir,
         )
-        self._sessions[session_id] = session
-        if len(self._sessions) > self._max_sessions:
-            _, evicted = self._sessions.popitem(last=False)
+        with self._lock:
+            self._sessions[session_id] = session
+            evicted: Session | None = None
+            if len(self._sessions) > self._max_sessions:
+                _, evicted = self._sessions.popitem(last=False)
+                self._drop_session_entries_locked(evicted.session_id)
+        if evicted is not None:
             shutil.rmtree(evicted.output_dir, ignore_errors=True)
         return session
 
     def get(self, session_id: str) -> Session | None:
-        session = self._sessions.get(session_id)
-        if session is not None:
-            self._sessions.move_to_end(session_id)
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                self._sessions.move_to_end(session_id)
         return session
 
-    def register_clip(self, path: Path) -> str:
+    def reserve(self, session: Session, suffix: str = ".mp4") -> Path:
+        """Return a unique in-session path that sweeps will skip until commit."""
+        path = session.output_dir / f"{uuid4()}{suffix}"
+        with self._lock:
+            self._reserved.add(path)
+        return path
+
+    def abort(self, path: Path) -> None:
+        """Release a reservation and delete any partial file written to it."""
+        path = Path(path)
+        with self._lock:
+            self._reserved.discard(path)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def reserved_paths(self) -> set[Path]:
+        with self._lock:
+            return set(self._reserved)
+
+    def register_clip(self, path: Path, *, session_id: str | None = None) -> str:
         clip_id = str(uuid4())
-        self._clips[clip_id] = Path(path)
-        if len(self._clips) > self._max_clips:
-            self._clips.popitem(last=False)
+        path = Path(path)
+        entry = _Entry(
+            path=path,
+            session_id=session_id,
+            size=_safe_size(path),
+            created_at=time.time(),
+        )
+        evicted: list[_Entry] = []
+        with self._lock:
+            self._reserved.discard(path)
+            self._clips[clip_id] = entry
+            self._expire_ttl_locked(evicted)
+            self._enforce_global_cap_locked(self._clips, self._max_clips, evicted)
+            self._enforce_session_bytes_locked(session_id, evicted)
+        _delete_files(evicted)
         return clip_id
 
     def get_clip(self, clip_id: str) -> Path | None:
-        return self._clips.get(clip_id)
+        with self._lock:
+            entry = self._clips.get(clip_id)
+        return entry.path if entry is not None else None
 
-    def register_thumbnail(self, path: Path) -> str:
+    def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str:
         thumb_id = str(uuid4())
-        self._thumbnails[thumb_id] = Path(path)
-        if len(self._thumbnails) > self._max_thumbnails:
-            self._thumbnails.popitem(last=False)
+        path = Path(path)
+        entry = _Entry(
+            path=path,
+            session_id=session_id,
+            size=_safe_size(path),
+            created_at=time.time(),
+        )
+        evicted: list[_Entry] = []
+        with self._lock:
+            self._reserved.discard(path)
+            self._thumbnails[thumb_id] = entry
+            self._expire_ttl_locked(evicted)
+            self._enforce_global_cap_locked(self._thumbnails, self._max_thumbnails, evicted)
+            self._enforce_session_bytes_locked(session_id, evicted)
+        _delete_files(evicted)
         return thumb_id
 
     def get_thumbnail(self, thumb_id: str) -> Path | None:
-        return self._thumbnails.get(thumb_id)
+        with self._lock:
+            entry = self._thumbnails.get(thumb_id)
+        return entry.path if entry is not None else None
+
+    def sweep_orphans(self) -> int:
+        """Delete files under root_dir that no live entry or reservation owns.
+
+        Registries live in memory only, so on process boot every file under
+        root_dir is by definition orphaned — this reclaims disk left behind by
+        the previous run. Also safe to call at runtime: registered and reserved
+        paths are skipped, so an in-flight render is never disturbed.
+        """
+        if not self._root.exists():
+            return 0
+        with self._lock:
+            keep = {e.path for e in self._clips.values()}
+            keep.update(e.path for e in self._thumbnails.values())
+            keep.update(self._reserved)
+        removed = 0
+        for session_dir in self._root.iterdir():
+            if not session_dir.is_dir():
+                continue
+            for f in session_dir.iterdir():
+                if f.is_dir() or f in keep:
+                    continue
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
+
+    # --- internal ----------------------------------------------------------
+
+    def _drop_session_entries_locked(self, session_id: str) -> None:
+        for reg in (self._clips, self._thumbnails):
+            stale = [k for k, e in reg.items() if e.session_id == session_id]
+            for k in stale:
+                del reg[k]
+
+    def _expire_ttl_locked(self, evicted: list[_Entry]) -> None:
+        if self._ttl_seconds is None:
+            return
+        cutoff = time.time() - self._ttl_seconds
+        for reg in (self._clips, self._thumbnails):
+            stale = [k for k, e in reg.items() if e.created_at < cutoff]
+            for k in stale:
+                evicted.append(reg.pop(k))
+
+    @staticmethod
+    def _enforce_global_cap_locked(
+        reg: OrderedDict[str, _Entry], cap: int, evicted: list[_Entry]
+    ) -> None:
+        while len(reg) > cap:
+            _, e = reg.popitem(last=False)
+            evicted.append(e)
+
+    def _enforce_session_bytes_locked(
+        self, session_id: str | None, evicted: list[_Entry]
+    ) -> None:
+        if session_id is None:
+            return
+        cap = self._max_bytes_per_session
+        while True:
+            total = sum(
+                e.size
+                for reg in (self._clips, self._thumbnails)
+                for e in reg.values()
+                if e.session_id == session_id
+            )
+            if total <= cap:
+                return
+            oldest_id, oldest_reg = self._oldest_for_session_locked(session_id)
+            if oldest_id is None:
+                return
+            evicted.append(oldest_reg.pop(oldest_id))
+
+    def _oldest_for_session_locked(
+        self, session_id: str
+    ) -> tuple[str | None, OrderedDict[str, _Entry]]:
+        best_id: str | None = None
+        best_reg: OrderedDict[str, _Entry] = self._clips
+        best_ts = float("inf")
+        for reg in (self._clips, self._thumbnails):
+            for k, e in reg.items():
+                if e.session_id != session_id:
+                    continue
+                if e.created_at < best_ts:
+                    best_id, best_reg, best_ts = k, reg, e.created_at
+                break  # OrderedDict is insertion-ordered; first hit per reg is oldest
+        return best_id, best_reg
+
+
+def _safe_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _delete_files(entries: list[_Entry]) -> None:
+    for e in entries:
+        try:
+            e.path.unlink(missing_ok=True)
+        except OSError:
+            pass

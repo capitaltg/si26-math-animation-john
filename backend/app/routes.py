@@ -503,7 +503,11 @@ def render(session_id: str | None = Cookie(default=None)):
             clip_url: str | None = None
             render_ms: float | None = None
             render_gate_status: Literal["passed", "failed"] = "failed"
-            output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
+            # `reserve` marks the target path so the orphan sweep can't delete
+            # a file that is currently being written; `abort` releases it and
+            # removes any partial output on every failure path below.
+            output_path = store.reserve(session, suffix=".mp4")
+            still_current = False
             try:
                 started = time.perf_counter()
                 if chained:
@@ -529,7 +533,9 @@ def render(session_id: str | None = Cookie(default=None)):
                         and current.revision == scene.revision
                     )
                     if still_current:
-                        clip_id = store.register_clip(output_path)
+                        clip_id = store.register_clip(
+                            output_path, session_id=session.session_id
+                        )
                         clip_url = f"/clips/{clip_id}"
                         status = "fallback" if scene.fallback_reason else "approved"
                         render_gate_status = "passed"
@@ -546,12 +552,15 @@ def render(session_id: str | None = Cookie(default=None)):
                         scene.scene_id,
                     )
                     status = "error"
+                    store.abort(output_path)
             except RenderTimeout:
                 logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
                 status = "timeout"
+                store.abort(output_path)
             except Exception:
                 logger.exception("Full render failed for scene %s", scene.scene_id)
                 status = "error"
+                store.abort(output_path)
 
             results.append(
                 _clip_result(
