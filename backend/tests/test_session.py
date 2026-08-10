@@ -307,6 +307,51 @@ def test_sweep_orphans_skips_registered_paths(tmp_path):
     assert kept.exists()
 
 
+def test_eviction_keeps_file_when_a_newer_entry_still_points_at_it(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_thumbnails=1)
+    session = store.create([_candidate("x")])
+    thumb = session.output_dir / "t.png"; thumb.write_bytes(b"z")
+
+    store.register_thumbnail(thumb)
+    newest_id = store.register_thumbnail(thumb)  # evicts the first row
+
+    assert thumb.exists(), "eviction must not delete a path still owned by another entry"
+    assert store.get_thumbnail(newest_id) == thumb
+
+
+def test_eviction_keeps_file_when_a_reservation_still_holds_it(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_clips=1)
+    session = store.create([_candidate("x")])
+    p = session.output_dir / "clip.mp4"; p.write_bytes(b"z")
+
+    store.register_clip(p, session_id=session.session_id)
+    # Same path is now reserved for a re-render in flight; eviction of the
+    # first entry must not blow away the writer's target.
+    with store._lock:
+        store._reserved.add(p)
+    q = session.output_dir / "other.mp4"; q.write_bytes(b"z")
+    store.register_clip(q, session_id=session.session_id)  # evicts first entry
+
+    assert p.exists()
+
+
+def test_session_thumbnails_evicted_when_session_evicted(tmp_path):
+    from app.session import SessionStore
+
+    store = SessionStore(tmp_path, max_sessions=1)
+    first = store.create([_candidate("a")])
+    thumb = first.output_dir / "t.png"; thumb.write_bytes(b"z")
+    tid = store.register_thumbnail(thumb, session_id=first.session_id)
+
+    store.create([_candidate("b")])  # evicts first
+
+    assert store.get_thumbnail(tid) is None
+
+
 def test_session_eviction_purges_its_registry_entries(tmp_path):
     from app.session import SessionStore
 

@@ -161,7 +161,7 @@ class SessionStore:
             self._expire_ttl_locked(evicted)
             self._enforce_global_cap_locked(self._clips, self._max_clips, evicted)
             self._enforce_session_bytes_locked(session_id, evicted)
-        _delete_files(evicted)
+            self._delete_orphaned_files_locked(evicted)
         return clip_id
 
     def get_clip(self, clip_id: str) -> Path | None:
@@ -185,7 +185,7 @@ class SessionStore:
             self._expire_ttl_locked(evicted)
             self._enforce_global_cap_locked(self._thumbnails, self._max_thumbnails, evicted)
             self._enforce_session_bytes_locked(session_id, evicted)
-        _delete_files(evicted)
+            self._delete_orphaned_files_locked(evicted)
         return thumb_id
 
     def get_thumbnail(self, thumb_id: str) -> Path | None:
@@ -228,6 +228,22 @@ class SessionStore:
             stale = [k for k, e in reg.items() if e.session_id == session_id]
             for k in stale:
                 del reg[k]
+
+    def _delete_orphaned_files_locked(self, evicted: list[_Entry]) -> None:
+        # The same path may be registered under multiple IDs — _scene_out
+        # re-registers a scene's thumbnail every time it serializes the scene,
+        # and rev-hash tracking can re-register a clip. Only unlink once no
+        # live entry or in-flight reservation still points at the path.
+        live = {e.path for e in self._clips.values()}
+        live.update(e.path for e in self._thumbnails.values())
+        live.update(self._reserved)
+        for e in evicted:
+            if e.path in live:
+                continue
+            try:
+                e.path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _expire_ttl_locked(self, evicted: list[_Entry]) -> None:
         if self._ttl_seconds is None:
@@ -287,11 +303,3 @@ def _safe_size(path: Path) -> int:
         return path.stat().st_size
     except OSError:
         return 0
-
-
-def _delete_files(entries: list[_Entry]) -> None:
-    for e in entries:
-        try:
-            e.path.unlink(missing_ok=True)
-        except OSError:
-            pass

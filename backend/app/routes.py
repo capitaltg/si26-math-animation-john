@@ -36,7 +36,7 @@ from app.render.full_render import (
     render_scene_thumbnail,
     render_scene_to_mp4,
 )
-from app.session import SessionStore
+from app.session import Session, SessionStore
 from app.templates.registry import (
     get_chained_template,
     get_template,
@@ -584,7 +584,7 @@ def get_clip(clip_id: str):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
-def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
+def _scene_out(session: Session, scene: Scene, candidates: list[Candidate]) -> SceneOut:
     schema: dict = {}
     if scene.template is not None:
         if scene.candidate_ids:
@@ -594,7 +594,9 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         schema = params_cls.model_json_schema()
     thumbnail_url = None
     if scene.thumbnail_path is not None:
-        thumb_id = store.register_thumbnail(scene.thumbnail_path)
+        thumb_id = store.register_thumbnail(
+            scene.thumbnail_path, session_id=session.session_id
+        )
         thumbnail_url = f"/thumbnails/{thumb_id}"
     if candidates:
         source_excerpt = " / ".join(c.source_excerpt for c in candidates)
@@ -729,7 +731,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scenes[scene.scene_id] = scene
         session.scene_order.append(scene.scene_id)
         session.scene_requested_template[scene.scene_id] = template
-        scenes_out.append(_scene_out(scene, [candidate]))
+        scenes_out.append(_scene_out(session, scene, [candidate]))
         record_unsupported_shape(
             candidate_id=candidate.candidate_id,
             source_excerpt=candidate.source_excerpt,
@@ -828,7 +830,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     session.scene_chain_members[new_scene.scene_id] = screen_order_ids
 
     candidates = _lookup_candidates(session, new_scene)
-    return _scene_out(new_scene, candidates)
+    return _scene_out(session, new_scene, candidates)
 
 
 @router.post("/storyboard/{scene_id}/ungroup", response_model=UngroupResponse)
@@ -852,7 +854,7 @@ def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     for member_id in members:
         member_scene = session.scenes[member_id]
         candidates = _lookup_candidates(session, member_scene)
-        restored.append(_scene_out(member_scene, candidates))
+        restored.append(_scene_out(session, member_scene, candidates))
     return UngroupResponse(scenes=restored)
 
 
@@ -1011,7 +1013,7 @@ def edit_scene(
     updated = _write_scene_cas(
         session, scene_id, scene.revision, updates, bump_revision=content_changed
     )
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 def _guard_approval_mismatch(scene: Scene) -> None:
@@ -1040,7 +1042,7 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
         # this so a later edit (or a lost race) can't ride on a stale approval.
         updates["approved_revision"] = scene.revision + 1
     updated = _write_scene_cas(session, scene_id, scene.revision, updates)
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
@@ -1068,7 +1070,7 @@ def acknowledge_mismatch(scene_id: str, session_id: str | None = Cookie(default=
     updated = _write_scene_cas(
         session, scene_id, scene.revision, {"mismatch_acknowledged": True}
     )
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/reject", response_model=SceneOut)
@@ -1099,4 +1101,4 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         update={"scene_id": scene_id, "grade_overridden": scene.grade_overridden}
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, [candidate])
+    return _scene_out(session, updated, [candidate])
