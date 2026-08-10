@@ -369,15 +369,29 @@ def _render_params_hash(template: TemplateRef, params_data: dict, chained: bool)
 
 
 def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
-    """Return a clip_url to reuse when the last render still matches this hash."""
-    if scene.rendered_params_hash != params_hash:
-        return None
-    if scene.render_path is None or not Path(scene.render_path).exists():
-        return None
-    clip_id = session.scene_clip_id.get(scene.scene_id)
-    if clip_id is None or store.get_clip(clip_id) is None:
-        clip_id = store.register_clip(scene.render_path)
-        session.scene_clip_id[scene.scene_id] = clip_id
+    """Return a clip_url to reuse when the last render still matches this hash
+    AND the scene is still approved at exactly the revision the caller captured.
+
+    Runs the freshness check under `scenes_lock` so an edit or reject that
+    lands between snapshot and lookup cannot cause us to hand back a clip that
+    belongs to a superseded approval.
+    """
+    with session.scenes_lock:
+        current = session.scenes.get(scene.scene_id)
+        if (
+            current is None
+            or not _is_render_ready(current)
+            or current.revision != scene.revision
+        ):
+            return None
+        if current.rendered_params_hash != params_hash:
+            return None
+        if current.render_path is None or not Path(current.render_path).exists():
+            return None
+        clip_id = session.scene_clip_id.get(scene.scene_id)
+        if clip_id is None or store.get_clip(clip_id) is None:
+            clip_id = store.register_clip(current.render_path)
+            session.scene_clip_id[scene.scene_id] = clip_id
     return f"/clips/{clip_id}"
 
 
@@ -488,24 +502,37 @@ def render(session_id: str | None = Cookie(default=None)):
 
             clip_url: str | None = None
             render_ms: float | None = None
+            render_gate_status: Literal["passed", "failed"] = "failed"
             output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
             try:
                 started = time.perf_counter()
                 if chained:
-                    render_chained_scene_to_mp4(scene.template, params, output_path)
+                    render_chained_scene_to_mp4(
+                        scene.template, params, output_path, deadline=deadline
+                    )
                 else:
-                    render_scene_to_mp4(scene.template, params, output_path)
+                    render_scene_to_mp4(
+                        scene.template, params, output_path, deadline=deadline
+                    )
                 render_ms = (time.perf_counter() - started) * 1000.0
-                clip_id = store.register_clip(output_path)
-                clip_url = f"/clips/{clip_id}"
-                status = "fallback" if scene.fallback_reason else "approved"
-                render_gate_status: Literal["passed", "failed"] = "passed"
+                # Only publish the artifact when the scene is still approved
+                # at the exact revision we rendered — an edit or rejection that
+                # landed mid-render must not let us return a stale "approved"
+                # clip. `_is_render_ready` covers approval + revision alignment;
+                # the explicit `revision` compare pins us to this render's inputs
+                # even after an edit+re-approve cycle bumps both fields together.
                 with session.scenes_lock:
                     current = session.scenes.get(scene.scene_id)
-                    if (
+                    still_current = (
                         current is not None
-                        and current.approved_revision == scene.approved_revision
-                    ):
+                        and _is_render_ready(current)
+                        and current.revision == scene.revision
+                    )
+                    if still_current:
+                        clip_id = store.register_clip(output_path)
+                        clip_url = f"/clips/{clip_id}"
+                        status = "fallback" if scene.fallback_reason else "approved"
+                        render_gate_status = "passed"
                         session.scenes[scene.scene_id] = current.model_copy(
                             update={
                                 "render_path": output_path,
@@ -513,14 +540,18 @@ def render(session_id: str | None = Cookie(default=None)):
                             }
                         )
                         session.scene_clip_id[scene.scene_id] = clip_id
+                if not still_current:
+                    logger.info(
+                        "Discarding render for scene %s; superseded before publish",
+                        scene.scene_id,
+                    )
+                    status = "error"
             except RenderTimeout:
                 logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
                 status = "timeout"
-                render_gate_status = "failed"
             except Exception:
                 logger.exception("Full render failed for scene %s", scene.scene_id)
                 status = "error"
-                render_gate_status = "failed"
 
             results.append(
                 _clip_result(

@@ -80,7 +80,7 @@ def test_render_respects_whole_job_deadline():
 
     call_count = {"n": 0}
 
-    def slow_render(template, params, out):
+    def slow_render(template, params, out, **_):
         call_count["n"] += 1
         time.sleep(0.15)  # blow through the 0.1s budget mid-batch
         out.write_bytes(b"mp4")
@@ -119,7 +119,7 @@ def test_render_timeout_maps_to_timeout_status():
     session.scenes[scene.scene_id] = scene
     session.scene_order.append(scene.scene_id)
 
-    def timeout_render(template, params, out):
+    def timeout_render(template, params, out, **_):
         raise RenderTimeout("simulated")
 
     with patch("app.routes.render_scene_to_mp4", side_effect=timeout_render):
@@ -140,7 +140,7 @@ def test_render_reuses_cached_clip_on_identical_params():
 
     calls = {"n": 0}
 
-    def counting_render(template, params, out):
+    def counting_render(template, params, out, **_):
         calls["n"] += 1
         out.write_bytes(b"mp4")
         return out
@@ -154,6 +154,64 @@ def test_render_reuses_cached_clip_on_identical_params():
     assert first.json()["clips"][0]["clip_url"] == second.json()["clips"][0]["clip_url"]
 
 
+def test_render_drops_clip_when_scene_edited_mid_render():
+    """A render that finishes after an edit lands must NOT publish its clip.
+
+    The scene's revision has advanced past what we captured at snapshot,
+    so returning "approved" for the just-finished (now-stale) params would
+    hand the teacher back a clip that no longer matches the storyboard.
+    """
+    client = _new_client()
+    session = _session_for(client)
+    scene = _approved_scene("s1")
+    session.scenes[scene.scene_id] = scene
+    session.scene_order.append(scene.scene_id)
+
+    def race_render(template, params, out, **_):
+        # Simulate an edit that landed while the render was running: bump the
+        # revision so approved_revision no longer matches, moving the scene
+        # out of the `_is_render_ready` state.
+        current = session.scenes["s1"]
+        session.scenes["s1"] = current.model_copy(
+            update={"revision": current.revision + 1}
+        )
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=race_render):
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    clip = resp.json()["clips"][0]
+    assert clip["status"] == "error"
+    assert clip["clip_url"] is None
+    # No cached clip should be recorded for a discarded render.
+    assert "s1" not in session.scene_clip_id
+    assert session.scenes["s1"].rendered_params_hash is None
+
+
+def test_render_drops_clip_when_scene_rejected_mid_render():
+    client = _new_client()
+    session = _session_for(client)
+    scene = _approved_scene("s1")
+    session.scenes[scene.scene_id] = scene
+    session.scene_order.append(scene.scene_id)
+
+    def reject_mid_render(template, params, out, **_):
+        current = session.scenes["s1"]
+        session.scenes["s1"] = current.model_copy(update={"status": "rejected"})
+        out.write_bytes(b"mp4")
+        return out
+
+    with patch("app.routes.render_scene_to_mp4", side_effect=reject_mid_render):
+        resp = client.post("/render")
+
+    assert resp.status_code == 200
+    clip = resp.json()["clips"][0]
+    assert clip["status"] == "error"
+    assert clip["clip_url"] is None
+
+
 def test_render_bypasses_cache_when_params_change():
     client = _new_client()
     session = _session_for(client)
@@ -163,7 +221,7 @@ def test_render_bypasses_cache_when_params_change():
 
     calls = {"n": 0}
 
-    def counting_render(template, params, out):
+    def counting_render(template, params, out, **_):
         calls["n"] += 1
         out.write_bytes(b"mp4")
         return out

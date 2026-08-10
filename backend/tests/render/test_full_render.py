@@ -1,10 +1,16 @@
+import time
 from subprocess import CompletedProcess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.models.scene import TemplateName
-from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
+from app.render.full_render import (
+    RENDER_TIMEOUT_SECONDS,
+    RenderTimeout,
+    render_scene_thumbnail,
+    render_scene_to_mp4,
+)
 from app.templates.array_grid.params import ArrayGridParams
 from app.templates.number_line.params import NumberLineParams, NumberLineStep
 from app.templates.registry import static_ref
@@ -120,3 +126,35 @@ def test_run_render_worker_passes_the_full_template_ref_as_json(tmp_path):
 
     passed_ref = _json.loads(argv[3])
     assert passed_ref == {"name": "number_line", "version_id": ref.version_id, "artifact_hash": ref.artifact_hash}
+
+
+def test_run_render_worker_caps_subprocess_timeout_by_remaining_deadline(tmp_path):
+    """Subprocess timeout must not exceed the caller's remaining budget so a
+    single render can't overshoot the whole-job deadline advertised upstream.
+    """
+    ref = static_ref(TemplateName.NUMBER_LINE)
+    params = NumberLineParams(start=1, steps=[NumberLineStep(operation="add", amount=1)])
+    output_path = tmp_path / "out.mp4"
+    deadline = time.monotonic() + 5.0  # 5s remaining budget, well under RENDER_TIMEOUT_SECONDS
+
+    with patch("app.render.full_render.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        render_scene_to_mp4(ref, params, output_path, deadline=deadline)
+
+    passed_timeout = mock_run.call_args.kwargs["timeout"]
+    assert passed_timeout <= 5.0
+    assert passed_timeout > 0
+    # Sanity: without a deadline, the subprocess would get the full budget.
+    assert passed_timeout < RENDER_TIMEOUT_SECONDS
+
+
+def test_run_render_worker_raises_timeout_when_deadline_already_expired(tmp_path):
+    ref = static_ref(TemplateName.NUMBER_LINE)
+    params = NumberLineParams(start=1, steps=[NumberLineStep(operation="add", amount=1)])
+    output_path = tmp_path / "out.mp4"
+    deadline = time.monotonic() - 0.01  # already in the past
+
+    with patch("app.render.full_render.subprocess.run") as mock_run:
+        with pytest.raises(RenderTimeout):
+            render_scene_to_mp4(ref, params, output_path, deadline=deadline)
+        mock_run.assert_not_called()
