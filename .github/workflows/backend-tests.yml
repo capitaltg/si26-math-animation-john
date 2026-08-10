@@ -57,6 +57,16 @@ jobs:
           sudo texhash
           sudo fmtutil-sys --all
 
+      # cache-apt-pkgs-action restores .so files but does not refresh the
+      # dynamic linker cache -- ffmpeg then dlopen()s libblas/liblapack and
+      # fails with "libblas.so.3: cannot open shared object file". Only
+      # matters for callers that invoke ffmpeg's binary directly (preflight
+      # does; pytest calls into it via manim's own subprocess launcher and
+      # picks up LD paths differently), so this reproduces only on cache
+      # hits, not on the initial cold run.
+      - name: Refresh ldconfig cache
+        run: sudo ldconfig
+
       - name: Install backend and dev deps
         run: pip install -e ".[dev]"
 
