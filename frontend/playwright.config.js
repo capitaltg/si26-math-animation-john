@@ -28,6 +28,13 @@ export default defineConfig({
       timeout: 60_000,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: {
+        // Route Bedrock calls to the canned-response stub in
+        // app.pipeline.bedrock_mocks so the E2E smoke does not need
+        // AWS credentials. Any tool call the stub does not know about
+        // raises NotImplementedError, so silent drift is impossible.
+        MATH_ANIM_MOCK_BEDROCK: '1',
+      },
     },
     {
       command: 'npm run dev -- --host 127.0.0.1 --port 5173 --strictPort',
