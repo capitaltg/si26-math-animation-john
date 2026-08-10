@@ -33,9 +33,16 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # Upload path only needs fastapi + python-pptx + guard + discovery.
-      # Skipping the Manim/LaTeX/ffmpeg stack keeps this job under 2 min;
-      # full render is out of scope for Phase A per issue #152.
+      # Manim is a hard runtime dep of the backend, so `pip install -e .`
+      # builds pycairo, which needs the cairo/pango headers on the system.
+      # Skipping the LaTeX/ffmpeg pieces of the backend workflow keeps this
+      # job fast — Phase A never renders.
+      - name: Install cairo + pango headers for pycairo build
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libcairo2-dev libpango1.0-dev pkg-config
+          version: 1
+
       - name: Install backend into venv the playwright config expects
         working-directory: backend
         run: |
