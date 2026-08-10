@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 from botocore.exceptions import NoCredentialsError
 from fastapi import FastAPI
@@ -6,13 +7,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routes import router
+from app.routes import router, store
 
 logger = logging.getLogger(__name__)
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Registries live in memory; anything left under root_dir belongs to a
+    # previous process and no live entry or reservation can claim it.
+    try:
+        removed = store.sweep_orphans()
+        if removed:
+            logger.info("Removed %d orphan session file(s) on startup", removed)
+    except Exception:
+        logger.exception("Orphan sweep failed during startup")
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Math Animation Generator")
+    app = FastAPI(title="Math Animation Generator", lifespan=_lifespan)
 
     @app.exception_handler(NoCredentialsError)
     async def missing_aws_credentials(_request, exc):
