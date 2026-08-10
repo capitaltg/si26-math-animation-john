@@ -522,12 +522,22 @@ def approve(
         record_computed_answers(db_session, draft)
 
     try:
+        # Fixture threshold + name-space checks still use the teacher's
+        # session_id: teachers get the soft, built-from cap, not the strict
+        # shared bar meant for admin publications. publish_shared=True is the
+        # visibility switch: the row is written with owner_session_id=NULL so
+        # it survives the teacher's in-process session dropping -- backend
+        # restart, cookie loss, or a new browser -- and is visible to every
+        # session on this box. Product is single-teacher today; per-teacher
+        # visibility comes back as an explicit "make private" action when
+        # multi-tenant lands.
         version = approve_draft_service(
             draft_id=draft_id,
             template_name=request.template_name,
             reviewer_label=f"teacher:{session.session_id}",
             math_semantics_confirmed=request.math_semantics_confirmed,
             owner_session_id=session.session_id,
+            publish_shared=True,
         )
     except DraftNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

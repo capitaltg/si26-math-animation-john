@@ -155,7 +155,21 @@ def approve_draft_service(
     reviewer_label: str,
     math_semantics_confirmed: bool,
     owner_session_id: str | None = None,
+    publish_shared: bool = False,
 ) -> TemplateVersion:
+    """Publish a reviewed draft as a live TemplateVersion.
+
+    ``owner_session_id`` gates the fixture-count threshold and the name/scoping
+    collision checks (a teacher approval uses the soft, built-from cap; an admin
+    approval uses the full configured count).
+
+    ``publish_shared=True`` writes ``owner_session_id=NULL`` on the version row
+    even when ``owner_session_id`` was passed for the threshold decision, so a
+    teacher approval survives their in-process session dropping and is visible
+    to every session on this box. Product is single-teacher today; the split
+    lets a future multi-tenant surface re-tighten visibility without moving the
+    threshold back at the same time.
+    """
     settings = get_settings()
     now = datetime.now(timezone.utc)
 
@@ -274,6 +288,10 @@ def approve_draft_service(
                 )
             # Scoped so that no session can end up seeing two live templates
             # under one name; see _name_is_reserved for why this is asymmetric.
+            # The visibility scope is what governs collisions -- when publish_shared
+            # is set, the new row will be shared regardless of who is publishing,
+            # so both checks below use owner=None.
+            visibility_scope = None if publish_shared else owner_session_id
             # Re-publishing the same fingerprint under its existing name is a
             # replacement, not a collision, so it is excluded first.
             replaces_own = session.execute(
@@ -283,11 +301,11 @@ def approve_draft_service(
                     TemplateVersion.template_name == template_name,
                     TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
                     TemplateVersion.fingerprint_key == draft.fingerprint_key,
-                    _same_owner(owner_session_id),
+                    _same_owner(visibility_scope),
                 )
             ).scalar_one()
             if not replaces_own and _name_is_reserved(
-                session, template_name, owner_session_id
+                session, template_name, visibility_scope
             ):
                 raise TemplateNameConflictError(
                     f"Template name {template_name!r} is already in use"
@@ -310,23 +328,40 @@ def approve_draft_service(
                     "draft approval was claimed by another request"
                 )
 
-            # 2. Disable this owner's prior enabled version for this fingerprint
-            #    before inserting the new one, so the partial unique index never
-            #    sees two enabled rows at once. Scoped to the same owner: another
-            #    session's private version, and the shared one, are not ours to
-            #    disable.
+            # 2. Disable every prior enabled version for this fingerprint that
+            #    would collide with the new row's visibility, before inserting,
+            #    so the partial unique index never sees two enabled rows at
+            #    once.
+            #    - Private publish: this owner's prior private row. Another
+            #      session's private version and the shared one stay put.
+            #    - Shared publish: the prior shared row AND this owner's prior
+            #      private row (the caller's own history for this fingerprint,
+            #      which would otherwise haunt their next `_name_is_reserved`
+            #      check). Other sessions' private rows are still not ours to
+            #      touch.
+            disable_scope = (
+                or_(
+                    TemplateVersion.owner_session_id.is_(None),
+                    _same_owner(owner_session_id),
+                )
+                if publish_shared
+                else _same_owner(owner_session_id)
+            )
             session.execute(
                 update(TemplateVersion)
                 .where(
                     TemplateVersion.fingerprint_key == draft.fingerprint_key,
                     TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
-                    _same_owner(owner_session_id),
+                    disable_scope,
                 )
                 .values(status=TEMPLATE_VERSION_DISABLED, updated_at=now)
             )
 
             # 3. Insert the new enabled version. An IntegrityError from the
             #    partial unique indexes means a concurrent approval beat us.
+            #    The scope-checking above used the passed-in owner_session_id;
+            #    the row itself carries NULL when publishing shared, so the
+            #    version stays visible after the teacher's session drops.
             version = TemplateVersion(
                 id=uuid4().hex,
                 fingerprint_key=draft.fingerprint_key,
@@ -334,7 +369,7 @@ def approve_draft_service(
                 draft_id=draft.id,
                 artifact_hash=draft.artifact_hash,
                 status=TEMPLATE_VERSION_ENABLED,
-                owner_session_id=owner_session_id,
+                owner_session_id=None if publish_shared else owner_session_id,
                 created_at=now,
                 updated_at=now,
             )
