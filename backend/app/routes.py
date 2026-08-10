@@ -293,7 +293,8 @@ def get_options(
             classification = classify_candidate(candidate.source_excerpt, snapshot=snapshot)
         else:
             classification = classify_candidate(candidate.source_excerpt)
-        session.options[candidate_id] = classification
+        with session.session_lock:
+            session.options[candidate_id] = classification
         matched = {option.template for option in classification.options}
         # Ambiguity or a non-problem input suppresses every structural option
         # regardless of the model's per-template rationale, so the rejection is
@@ -400,11 +401,11 @@ def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
     """Return a clip_url to reuse when the last render still matches this hash
     AND the scene is still approved at exactly the revision the caller captured.
 
-    Runs the freshness check under `scenes_lock` so an edit or reject that
+    Runs the freshness check under `session_lock` so an edit or reject that
     lands between snapshot and lookup cannot cause us to hand back a clip that
     belongs to a superseded approval.
     """
-    with session.scenes_lock:
+    with session.session_lock:
         current = session.scenes.get(scene.scene_id)
         if (
             current is None
@@ -458,7 +459,7 @@ def render(session_id: str | None = Cookie(default=None)):
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    with session.scenes_lock:
+    with session.session_lock:
         approved = [
             session.scenes[sid]
             for sid in session.scene_order
@@ -553,7 +554,7 @@ def render(session_id: str | None = Cookie(default=None)):
                 # clip. `_is_render_ready` covers approval + revision alignment;
                 # the explicit `revision` compare pins us to this render's inputs
                 # even after an edit+re-approve cycle bumps both fields together.
-                with session.scenes_lock:
+                with session.session_lock:
                     current = session.scenes.get(scene.scene_id)
                     still_current = (
                         current is not None
@@ -597,7 +598,7 @@ def render(session_id: str | None = Cookie(default=None)):
                 )
             )
     finally:
-        with session.scenes_lock:
+        with session.session_lock:
             for scene in approved:
                 session.rendering_scene_ids.discard(scene.scene_id)
 
@@ -849,13 +850,48 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
         thumbnail_path=thumb_path,
     )
 
-    screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
-    earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
-    for sid in request.scene_ids:
-        session.scene_order.remove(sid)
-    session.scene_order.insert(earliest_index, new_scene.scene_id)
-    session.scenes[new_scene.scene_id] = new_scene
-    session.scene_chain_members[new_scene.scene_id] = screen_order_ids
+    # Read-modify-write of `scene_order` + `scenes` + `scene_chain_members`
+    # must happen under the lock: a concurrent /render walks `scene_order`
+    # and looks up each id in `scenes`, and would otherwise observe the
+    # rewrite torn (e.g. an id popped from `scene_order` before its scene
+    # lands in `scenes`, or an `earliest_index` from a stale `scene_order`).
+    expected = {scene.scene_id: scene for scene in scenes}
+    with session.session_lock:
+        # A concurrent approve/edit/retry replaces the Scene in session.scenes
+        # (identity swap and/or revision bump); a concurrent chain/ungroup
+        # rewrites scene_order. Revalidate every request.scene_ids field the
+        # pre-lock validation checked so we never commit a chain built from a
+        # scene that has since been approved, re-templated, or dropped.
+        for sid in request.scene_ids:
+            current = session.scenes.get(sid)
+            if current is None or sid not in session.scene_order:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Scene {sid} was modified by another request; reload and try again",
+                )
+            baseline = expected[sid]
+            if (
+                current is not baseline
+                or current.revision != baseline.revision
+                or current.status != "pending_review"
+                or current.template != template
+                or not current.candidate_id
+                or (
+                    scene_mismatch(current) is not None
+                    and not current.mismatch_acknowledged
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Scene {sid} was modified by another request; reload and try again",
+                )
+        screen_order_ids = sorted(request.scene_ids, key=session.scene_order.index)
+        earliest_index = min(session.scene_order.index(sid) for sid in request.scene_ids)
+        for sid in request.scene_ids:
+            session.scene_order.remove(sid)
+        session.scene_order.insert(earliest_index, new_scene.scene_id)
+        session.scenes[new_scene.scene_id] = new_scene
+        session.scene_chain_members[new_scene.scene_id] = screen_order_ids
 
     candidates = _lookup_candidates(session, new_scene)
     return _scene_out(session, new_scene, candidates)
@@ -866,21 +902,27 @@ def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
-    members = session.scene_chain_members.get(scene_id)
-    if members is None:
-        raise HTTPException(status_code=404, detail=f"Scene {scene_id} is not a combined scene")
+    # See group_scenes: the ungroup rewrite must land atomically so no
+    # concurrent reader sees the chain gone from `scene_order` while its
+    # members haven't been re-inserted yet, and no writer can race the
+    # members lookup with a re-chain.
+    with session.session_lock:
+        members = session.scene_chain_members.get(scene_id)
+        if members is None:
+            raise HTTPException(status_code=404, detail=f"Scene {scene_id} is not a combined scene")
 
-    index = session.scene_order.index(scene_id)
-    session.scene_order.pop(index)
-    for offset, member_id in enumerate(members):
-        session.scene_order.insert(index + offset, member_id)
+        index = session.scene_order.index(scene_id)
+        session.scene_order.pop(index)
+        for offset, member_id in enumerate(members):
+            session.scene_order.insert(index + offset, member_id)
 
-    del session.scenes[scene_id]
-    del session.scene_chain_members[scene_id]
+        del session.scenes[scene_id]
+        del session.scene_chain_members[scene_id]
+
+        restored_scenes = [session.scenes[member_id] for member_id in members]
 
     restored = []
-    for member_id in members:
-        member_scene = session.scenes[member_id]
+    for member_scene in restored_scenes:
         candidates = _lookup_candidates(session, member_scene)
         restored.append(_scene_out(session, member_scene, candidates))
     return UngroupResponse(scenes=restored)
@@ -950,7 +992,7 @@ def _write_scene_cas(
     no-op PATCH), so they can't drift `revision` away from `approved_revision`
     and invalidate an approval that nothing actually changed.
     """
-    with session.scenes_lock:
+    with session.session_lock:
         current = session.scenes[scene_id]
         if current.revision != base_revision:
             raise HTTPException(

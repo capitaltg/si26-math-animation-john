@@ -51,11 +51,15 @@ class Session:
     scene_requested_template: dict[str, TemplateRef] = field(default_factory=dict)
     scene_chain_members: dict[str, list[str]] = field(default_factory=dict)
     template_requests: dict[str, TemplateRequest] = field(default_factory=dict)
-    #: Guards read-modify-write of `scenes` so a concurrent edit and approve
-    #: can't silently overwrite one another; see `_write_scene_cas` in routes.py.
-    scenes_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    #: Guards read-modify-write of every mutable session field a concurrent
+    #: request can reach: `scenes`, `scene_order`, `scene_chain_members`,
+    #: `options`, and `template_requests`. A single lock keeps the invariants
+    #: between these fields intact — e.g. group/ungroup rewrites both
+    #: `scene_order` and `scenes` at once, and must not be observed torn by a
+    #: concurrent render or approve. See `_write_scene_cas` in routes.py.
+    session_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     #: Scene IDs currently being rendered by an in-flight /render call.
-    #: Guarded by `scenes_lock`. Prevents duplicate subprocess launches when a
+    #: Guarded by `session_lock`. Prevents duplicate subprocess launches when a
     #: client retries before the first request returns.
     rendering_scene_ids: set[str] = field(default_factory=set, repr=False, compare=False)
     #: scene_id -> clip_id last handed to the client for a successful render.

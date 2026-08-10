@@ -350,7 +350,8 @@ def request_build(
     pending = TemplateRequest(
         candidate_id=request.candidate_id, requested_at=datetime.now(timezone.utc)
     )
-    session.template_requests[request.candidate_id] = pending
+    with session.session_lock:
+        session.template_requests[request.candidate_id] = pending
 
     def run_build():
         outcome = request_template_build(
@@ -359,9 +360,13 @@ def request_build(
             grade_level=grade_level,
             owner_session_id=session.session_id,
         )
-        pending.fingerprint_key = outcome.fingerprint_key
-        pending.error = outcome.error
-        pending.already_available = outcome.already_available
+        # The three fields land together under the lock so `list_builds` can
+        # never observe a half-written request (e.g. fingerprint_key set but
+        # error still None, or vice versa) mid-iteration.
+        with session.session_lock:
+            pending.fingerprint_key = outcome.fingerprint_key
+            pending.error = outcome.error
+            pending.already_available = outcome.already_available
 
     background_tasks.add_task(run_build)
     return {"candidate_id": request.candidate_id}
@@ -370,13 +375,29 @@ def request_build(
 @router.get("/builds", response_model=list[BuildOut])
 def list_builds(session_id: str | None = Cookie(default=None)):
     session = _session(session_id)
-    if not session.template_requests:
-        return []
+    # Snapshot the requests under the lock so a concurrent background write or
+    # request_build can't torpedo iteration ("dictionary changed size" from
+    # request_build, or a partially-updated `pending` from the background
+    # task). Reads of each request's fields happen inside the same critical
+    # section for the same reason — see `run_build` in request_build.
+    with session.session_lock:
+        if not session.template_requests:
+            return []
+        requests_snapshot = [
+            TemplateRequest(
+                candidate_id=r.candidate_id,
+                requested_at=r.requested_at,
+                fingerprint_key=r.fingerprint_key,
+                error=r.error,
+                already_available=r.already_available,
+            )
+            for r in session.template_requests.values()
+        ]
     now = datetime.now(timezone.utc)
     with meta_session() as db_session:
         return [
             _build_out(db_session, request, now, session.session_id)
-            for request in session.template_requests.values()
+            for request in requests_snapshot
         ]
 
 
@@ -397,19 +418,41 @@ def clear_build(candidate_id: str, session_id: str | None = Cookie(default=None)
     problem for the life of the session.
     """
     session = _session(session_id)
-    request = session.template_requests.get(candidate_id)
-    if request is None:
-        raise HTTPException(status_code=404, detail=f"No build requested for {candidate_id}")
+    with session.session_lock:
+        original = session.template_requests.get(candidate_id)
+        if original is None:
+            raise HTTPException(
+                status_code=404, detail=f"No build requested for {candidate_id}"
+            )
+        # Snapshot under the lock so a background run_build mutating `original`
+        # can't feed torn fields into _stage_for below.
+        snapshot = TemplateRequest(
+            candidate_id=original.candidate_id,
+            requested_at=original.requested_at,
+            fingerprint_key=original.fingerprint_key,
+            error=original.error,
+            already_available=original.already_available,
+        )
 
     with meta_session() as db_session:
-        stage, _job, _draft = _stage_for(db_session, request, session.session_id)
+        stage, _job, _draft = _stage_for(db_session, snapshot, session.session_id)
     if stage not in CLEARABLE_STAGES:
         raise HTTPException(
             status_code=409,
             detail=f"This build is {stage}; it cannot be cleared away",
         )
 
-    del session.template_requests[candidate_id]
+    with session.session_lock:
+        # A new request_build for the same candidate (or a completion that
+        # would have moved this request out of a CLEARABLE_STAGES state) may
+        # have landed while we were resolving the stage. Delete only if the
+        # mapping still points at the exact same request object.
+        if session.template_requests.get(candidate_id) is not original:
+            raise HTTPException(
+                status_code=409,
+                detail="This build was updated by another request; reload and try again",
+            )
+        del session.template_requests[candidate_id]
     return None
 
 
