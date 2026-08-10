@@ -38,8 +38,16 @@ from app.meta.models import (
     TemplateVersion,
 )
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
+from app.models.scene import TemplateName
 
 _TEMPLATE_NAME_RE = re.compile(r"[a-z][a-z0-9_]*")
+
+#: Names owned by static (compiled-in) templates. A dynamic template cannot be
+#: published under any of these: classification.py resolves static names first,
+#: so a colliding dynamic version would be silently shadowed and never
+#: selectable. Reserved at approval time to keep the invariant one-way and
+#: cheap to check.
+_STATIC_TEMPLATE_NAMES = frozenset(member.value for member in TemplateName)
 
 
 def _same_owner(owner_session_id: str | None):
@@ -254,6 +262,15 @@ def approve_draft_service(
             if not _TEMPLATE_NAME_RE.fullmatch(template_name):
                 raise TemplateNameConflictError(
                     f"Invalid template name {template_name!r}"
+                )
+            # A static (compiled-in) template already owns this name. The
+            # classifier resolves static names first, so publishing a dynamic
+            # version under a static name would be silently shadowed — never
+            # selectable. Reject at approval time so the collision cannot
+            # enter the DB.
+            if template_name in _STATIC_TEMPLATE_NAMES:
+                raise TemplateNameConflictError(
+                    f"Template name {template_name!r} is reserved by a static template"
                 )
             # Scoped so that no session can end up seeing two live templates
             # under one name; see _name_is_reserved for why this is asymmetric.

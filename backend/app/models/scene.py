@@ -52,6 +52,10 @@ class Scene(BaseModel):
     failure_kind: Literal["render_failure"] | None = None
     thumbnail_path: Path | None = None
     render_path: Path | None = None
+    #: Hash of (template_ref, params) blob at the moment `render_path` was
+    #: written. Lets `/render` short-circuit an approved-scene re-render when
+    #: params match — even when `revision` bumped due to an unrelated edit.
+    rendered_params_hash: str | None = None
 
     @model_validator(mode="after")
     def _check_workflow_invariants(self):

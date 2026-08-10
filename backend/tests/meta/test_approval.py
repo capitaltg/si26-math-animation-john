@@ -544,6 +544,24 @@ def test_invalid_template_name_raises_name_conflict(engine, session, bad_name):
         )
 
 
+def test_static_template_name_raises_name_conflict(engine, session):
+    """A dynamic template published under a static enum name (e.g. 'number_line')
+    would be silently shadowed by the static dispatch in classification.py.
+    Approval must reject the collision so it cannot enter the DB."""
+    from app.models.scene import TemplateName
+
+    static_names = [member.value for member in TemplateName]
+    assert static_names, "TemplateName enum is empty; test would trivially pass"
+    for i, name in enumerate(static_names):
+        draft_id = f"static-collision-{i}"
+        _seed_draft(session, draft_id=draft_id, fingerprint_key=f"k-{i}")
+        with pytest.raises(TemplateNameConflictError, match="reserved by a static template"):
+            approve_draft_service(
+                draft_id=draft_id, template_name=name, reviewer_label="dev",
+                math_semantics_confirmed=True,
+            )
+
+
 def test_name_collision_across_fingerprint_raises_name_conflict(engine, session):
     _seed_draft(session, draft_id="draft-1", fingerprint_key="k1")
     other = models.TemplateVersion(

@@ -1,11 +1,18 @@
+import asyncio
+import hashlib
+import json
 import logging
+import os
 import tempfile
+import time
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
+from typing import Literal
 
 from app.config import get_settings
 from app.meta.db import meta_session
@@ -14,21 +21,25 @@ from app.meta.ingest import record_unsupported_shape
 from app.models.candidate import Candidate
 from app.models.scene import (
     Scene,
+    TemplateName,
     TemplateRef,
     TemplateVersionMismatchError,
 )
 from app.pipeline.classification import ClassificationResult, classify_candidate
+from app.pipeline.compile import compile_scene_program
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
+from app.pipeline.pptx_guard import PptxGuardError, inspect_pptx_archive
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
+    RenderTimeout,
     render_chained_scene_thumbnail,
     render_chained_scene_to_mp4,
     render_scene_thumbnail,
     render_scene_to_mp4,
 )
-from app.session import SessionStore
+from app.session import Session, SessionStore
 from app.templates.registry import (
     get_chained_template,
     get_template,
@@ -39,6 +50,18 @@ from app.templates.registry import (
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
+#: Hard ceiling on wall-clock for python-pptx parsing. Guards against a
+#: malformed-but-preflight-passing archive that stalls the parser. Runs in a
+#: threadpool so the event loop is freed even if the worker thread hangs.
+PPTX_PARSE_TIMEOUT_SECONDS = float(os.environ.get("PPTX_PARSE_TIMEOUT_SECONDS", "30"))
+
+#: Ceiling on how many scenes /render will accept in one call. Bounds the
+#: worst-case wall-clock a single request can occupy a threadpool worker.
+MAX_RENDER_BATCH = int(os.environ.get("RENDER_MAX_BATCH", "12"))
+#: Overall wall-clock budget for a /render request. Skips remaining scenes
+#: as `timeout` once exceeded — bounds the request to something operators can
+#: reason about (per-scene timeout alone can stack).
+RENDER_JOB_DEADLINE_SECONDS = float(os.environ.get("RENDER_JOB_DEADLINE_SECONDS", str(15 * 60)))
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +91,18 @@ class TemplateOptionOut(BaseModel):
     rationale: str
 
 
+class RejectedTemplateOut(BaseModel):
+    template: str
+    reason: Literal["not_applicable", "schema_fail", "low_confidence"]
+
+
 class CandidateOptionsOut(BaseModel):
     candidate_id: str
     grade_level: int
     ambiguous: bool
     templates: list[TemplateOptionOut]
+    vocabulary_size: int
+    rejected: list[RejectedTemplateOut]
 
 
 class OptionsResponse(BaseModel):
@@ -84,6 +114,17 @@ class RenderPick(BaseModel):
     template: str
 
 
+# Each named gate the pipeline runs. `category` mirrors the meta-flow taxonomy
+# (Pacing / Anchor alignment / Rendered output / Fixture) so the audience sees
+# gates ran under one vocabulary across every surface, not just the meta panel.
+# `duration_ms` is optional: not every gate reports timing today.
+class Gate(BaseModel):
+    name: str
+    category: Literal["Pacing", "Anchor alignment", "Rendered output", "Fixture"]
+    status: Literal["passed", "failed", "pending"]
+    duration_ms: float | None = None
+
+
 class ClipResult(BaseModel):
     scene_id: str
     candidate_id: str | None
@@ -91,6 +132,7 @@ class ClipResult(BaseModel):
     status: str
     clip_url: str | None = None
     fallback_reason: str | None = None
+    gates: list[Gate] = []
 
 
 class RenderResponse(BaseModel):
@@ -115,6 +157,13 @@ class SceneOut(BaseModel):
     stated_answer_source: str | None = None
     mismatch: dict | None = None
     mismatch_acknowledged: bool = False
+    # Deterministic compile of (template, params) → executable scene program.
+    # Same inputs always yield the same hash; audiences can rerun to verify.
+    scene_program: dict | None = None
+    scene_program_hash: str | None = None
+    compile_ms: float | None = None
+    program_size: int | None = None
+    gates: list[Gate] = []
 
 
 class StoryboardRequest(BaseModel):
@@ -160,7 +209,28 @@ async def upload(response: Response, file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
     try:
         try:
-            slide_blocks = extract_slide_blocks(tmp_path)
+            inspect_pptx_archive(tmp_path)
+        except PptxGuardError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail},
+            ) from exc
+        try:
+            slide_blocks = await asyncio.wait_for(
+                run_in_threadpool(extract_slide_blocks, tmp_path),
+                timeout=PPTX_PARSE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "parse_timeout",
+                    "message": (
+                        "Parsing the .pptx file took longer than "
+                        f"{PPTX_PARSE_TIMEOUT_SECONDS:.0f}s and was aborted."
+                    ),
+                },
+            ) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Could not parse .pptx file") from exc
     finally:
@@ -214,12 +284,30 @@ def get_options(
                 meta_db_session, owner_session_id=session.session_id
             )
 
+    static_names = {member.value for member in TemplateName}
+    dynamic_names = set(snapshot.names()) if snapshot is not None else set()
+    vocabulary = static_names | dynamic_names
+
     for candidate_id, candidate in candidates:
         if snapshot is not None:
             classification = classify_candidate(candidate.source_excerpt, snapshot=snapshot)
         else:
             classification = classify_candidate(candidate.source_excerpt)
         session.options[candidate_id] = classification
+        matched = {option.template for option in classification.options}
+        # Ambiguity or a non-problem input suppresses every structural option
+        # regardless of the model's per-template rationale, so the rejection is
+        # about confidence in the input, not applicability of the template.
+        low_confidence = (
+            classification.ambiguous or classification.problem_kind == "not_a_problem"
+        )
+        rejected = [
+            RejectedTemplateOut(
+                template=name,
+                reason="low_confidence" if low_confidence else "not_applicable",
+            )
+            for name in sorted(vocabulary - matched)
+        ]
         results.append(
             CandidateOptionsOut(
                 candidate_id=candidate_id,
@@ -233,9 +321,55 @@ def get_options(
                     )
                     for option in classification.options
                 ],
+                vocabulary_size=len(vocabulary),
+                rejected=rejected,
             )
         )
     return OptionsResponse(options=results)
+
+
+# The named gates the deck flow runs per scene. Categories mirror the meta
+# flow's taxonomy so the audience sees one gate vocabulary across surfaces.
+# `duration_ms` is only reported for the compile step today (measured); the
+# others are pass/fail-only for now.
+def _scene_gates(
+    scene: Scene,
+    *,
+    program_hash: str | None,
+    compile_ms: float | None,
+) -> list[Gate]:
+    fallback = scene.status == "fallback"
+    extracted = bool(scene.params) and not fallback
+    schema_passed = extracted
+    semantic_passed = extracted and not scene_mismatch(scene)
+    compiled = program_hash is not None
+    preview_ready = scene.thumbnail_path is not None
+
+    def _state(passed: bool, ran: bool) -> Literal["passed", "failed", "pending"]:
+        if not ran:
+            return "pending"
+        return "passed" if passed else "failed"
+
+    return [
+        Gate(name="Values extracted", category="Fixture", status=_state(extracted, True)),
+        Gate(name="Schema check", category="Fixture", status=_state(schema_passed, extracted)),
+        Gate(
+            name="Semantic check",
+            category="Anchor alignment",
+            status=_state(semantic_passed, extracted),
+        ),
+        Gate(
+            name="Compiled deterministically",
+            category="Rendered output",
+            status=_state(compiled and semantic_passed, extracted),
+            duration_ms=compile_ms,
+        ),
+        Gate(
+            name="Preview rendered",
+            category="Rendered output",
+            status=_state(preview_ready, True),
+        ),
+    ]
 
 
 def _is_render_ready(scene: Scene) -> bool:
@@ -246,49 +380,227 @@ def _is_render_ready(scene: Scene) -> bool:
     return scene.approved_revision is None or scene.approved_revision == scene.revision
 
 
+def _render_params_hash(template: TemplateRef, params_data: dict, chained: bool) -> str:
+    """Content hash for the (template ref, params, chain-mode) tuple.
+
+    Used as the idempotency key so an approved scene re-render whose inputs
+    haven't changed can short-circuit — even when `scene.revision` bumped due
+    to an unrelated edit that a subsequent re-approve replayed.
+    """
+    payload = {
+        "template": template.model_dump(mode="json"),
+        "params": params_data,
+        "chained": chained,
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
+    """Return a clip_url to reuse when the last render still matches this hash
+    AND the scene is still approved at exactly the revision the caller captured.
+
+    Runs the freshness check under `scenes_lock` so an edit or reject that
+    lands between snapshot and lookup cannot cause us to hand back a clip that
+    belongs to a superseded approval.
+    """
+    with session.scenes_lock:
+        current = session.scenes.get(scene.scene_id)
+        if (
+            current is None
+            or not _is_render_ready(current)
+            or current.revision != scene.revision
+        ):
+            return None
+        if current.rendered_params_hash != params_hash:
+            return None
+        if current.render_path is None or not Path(current.render_path).exists():
+            return None
+        clip_id = session.scene_clip_id.get(scene.scene_id)
+        if clip_id is None or store.get_clip(clip_id) is None:
+            clip_id = store.register_clip(current.render_path)
+            session.scene_clip_id[scene.scene_id] = clip_id
+    return f"/clips/{clip_id}"
+
+
+def _clip_result(
+    scene: Scene,
+    *,
+    status: str,
+    clip_url: str | None,
+    render_gate_status: Literal["passed", "failed"],
+    render_ms: float | None,
+) -> ClipResult:
+    _, program_hash, _, compile_ms = compile_scene_program(scene)
+    scene_gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
+    scene_gates.append(
+        Gate(
+            name="Full render",
+            category="Rendered output",
+            status=render_gate_status,
+            duration_ms=render_ms,
+        )
+    )
+    return ClipResult(
+        scene_id=scene.scene_id,
+        candidate_id=scene.candidate_id,
+        candidate_ids=scene.candidate_ids,
+        status=status,
+        clip_url=clip_url,
+        fallback_reason=scene.fallback_reason,
+        gates=scene_gates,
+    )
+
+
 @router.post("/render", response_model=RenderResponse)
 def render(session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    approved = [
-        session.scenes[sid]
-        for sid in session.scene_order
-        if _is_render_ready(session.scenes[sid])
-    ]
-    if not approved:
-        raise HTTPException(status_code=400, detail="No approved scenes to render")
+    with session.scenes_lock:
+        approved = [
+            session.scenes[sid]
+            for sid in session.scene_order
+            if _is_render_ready(session.scenes[sid])
+        ]
+        if not approved:
+            raise HTTPException(status_code=400, detail="No approved scenes to render")
+        if len(approved) > MAX_RENDER_BATCH:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Batch too large: {len(approved)} approved scenes exceeds "
+                    f"the cap of {MAX_RENDER_BATCH}"
+                ),
+            )
+        collision = [s.scene_id for s in approved if s.scene_id in session.rendering_scene_ids]
+        if collision:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Render already in progress for scene(s) {collision}",
+            )
+        for scene in approved:
+            session.rendering_scene_ids.add(scene.scene_id)
 
     results: list[ClipResult] = []
-    for scene in approved:
-        clip_url = None
-        try:
-            output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
-            if scene.candidate_ids:
-                _, params_cls = get_chained_template(scene.template)
-                params = params_cls.model_validate(scene.params)
-                render_chained_scene_to_mp4(scene.template, params, output_path)
-            else:
-                _, params_cls = get_template(scene.template)
-                params = params_cls.model_validate(scene.params)
-                render_scene_to_mp4(scene.template, params, output_path)
-            clip_id = store.register_clip(output_path)
-            clip_url = f"/clips/{clip_id}"
-            status = "fallback" if scene.fallback_reason else "approved"
-        except Exception:
-            logger.exception("Full render failed for scene %s", scene.scene_id)
-            status = "error"
-        results.append(
-            ClipResult(
-                scene_id=scene.scene_id,
-                candidate_id=scene.candidate_id,
-                candidate_ids=scene.candidate_ids,
-                status=status,
-                clip_url=clip_url,
-                fallback_reason=scene.fallback_reason,
+    deadline = time.monotonic() + RENDER_JOB_DEADLINE_SECONDS
+    try:
+        for scene in approved:
+            chained = bool(scene.candidate_ids)
+            _, params_cls = (
+                get_chained_template(scene.template) if chained else get_template(scene.template)
             )
-        )
+            try:
+                params = params_cls.model_validate(scene.params)
+            except ValidationError:
+                logger.exception("Stored params invalid for scene %s", scene.scene_id)
+                results.append(
+                    _clip_result(
+                        scene, status="error", clip_url=None,
+                        render_gate_status="failed", render_ms=None,
+                    )
+                )
+                continue
+
+            params_hash = _render_params_hash(
+                scene.template, params.model_dump(mode="json"), chained
+            )
+            cached = _resolve_cached_clip(session, scene, params_hash)
+            if cached is not None:
+                results.append(
+                    _clip_result(
+                        scene,
+                        status="fallback" if scene.fallback_reason else "approved",
+                        clip_url=cached,
+                        render_gate_status="passed",
+                        render_ms=None,
+                    )
+                )
+                continue
+
+            if time.monotonic() > deadline:
+                results.append(
+                    _clip_result(
+                        scene, status="timeout", clip_url=None,
+                        render_gate_status="failed", render_ms=None,
+                    )
+                )
+                continue
+
+            clip_url: str | None = None
+            render_ms: float | None = None
+            render_gate_status: Literal["passed", "failed"] = "failed"
+            # `reserve` marks the target path so the orphan sweep can't delete
+            # a file that is currently being written; `abort` releases it and
+            # removes any partial output on every failure path below.
+            output_path = store.reserve(session, suffix=".mp4")
+            still_current = False
+            try:
+                started = time.perf_counter()
+                if chained:
+                    render_chained_scene_to_mp4(
+                        scene.template, params, output_path, deadline=deadline
+                    )
+                else:
+                    render_scene_to_mp4(
+                        scene.template, params, output_path, deadline=deadline
+                    )
+                render_ms = (time.perf_counter() - started) * 1000.0
+                # Only publish the artifact when the scene is still approved
+                # at the exact revision we rendered — an edit or rejection that
+                # landed mid-render must not let us return a stale "approved"
+                # clip. `_is_render_ready` covers approval + revision alignment;
+                # the explicit `revision` compare pins us to this render's inputs
+                # even after an edit+re-approve cycle bumps both fields together.
+                with session.scenes_lock:
+                    current = session.scenes.get(scene.scene_id)
+                    still_current = (
+                        current is not None
+                        and _is_render_ready(current)
+                        and current.revision == scene.revision
+                    )
+                    if still_current:
+                        clip_id = store.register_clip(
+                            output_path, session_id=session.session_id
+                        )
+                        clip_url = f"/clips/{clip_id}"
+                        status = "fallback" if scene.fallback_reason else "approved"
+                        render_gate_status = "passed"
+                        session.scenes[scene.scene_id] = current.model_copy(
+                            update={
+                                "render_path": output_path,
+                                "rendered_params_hash": params_hash,
+                            }
+                        )
+                        session.scene_clip_id[scene.scene_id] = clip_id
+                if not still_current:
+                    logger.info(
+                        "Discarding render for scene %s; superseded before publish",
+                        scene.scene_id,
+                    )
+                    status = "error"
+                    store.abort(output_path)
+            except RenderTimeout:
+                logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
+                status = "timeout"
+                store.abort(output_path)
+            except Exception:
+                logger.exception("Full render failed for scene %s", scene.scene_id)
+                status = "error"
+                store.abort(output_path)
+
+            results.append(
+                _clip_result(
+                    scene, status=status, clip_url=clip_url,
+                    render_gate_status=render_gate_status, render_ms=render_ms,
+                )
+            )
+    finally:
+        with session.scenes_lock:
+            for scene in approved:
+                session.rendering_scene_ids.discard(scene.scene_id)
+
     return RenderResponse(clips=results)
 
 
@@ -300,7 +612,7 @@ def get_clip(clip_id: str):
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
-def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
+def _scene_out(session: Session, scene: Scene, candidates: list[Candidate]) -> SceneOut:
     schema: dict = {}
     if scene.template is not None:
         if scene.candidate_ids:
@@ -310,7 +622,9 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         schema = params_cls.model_json_schema()
     thumbnail_url = None
     if scene.thumbnail_path is not None:
-        thumb_id = store.register_thumbnail(scene.thumbnail_path)
+        thumb_id = store.register_thumbnail(
+            scene.thumbnail_path, session_id=session.session_id
+        )
         thumbnail_url = f"/thumbnails/{thumb_id}"
     if candidates:
         source_excerpt = " / ".join(c.source_excerpt for c in candidates)
@@ -322,6 +636,8 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         format_answer(scene.stated_answer) if scene.stated_answer is not None else None
     )
     mismatch = scene_mismatch(scene)
+    program, program_hash, program_size, compile_ms = compile_scene_program(scene)
+    gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -340,6 +656,11 @@ def _scene_out(scene: Scene, candidates: list[Candidate]) -> SceneOut:
         stated_answer_source=scene.stated_answer_source,
         mismatch=mismatch,
         mismatch_acknowledged=scene.mismatch_acknowledged,
+        scene_program=program,
+        scene_program_hash=program_hash,
+        compile_ms=compile_ms,
+        program_size=program_size,
+        gates=gates,
     )
 
 
@@ -438,7 +759,7 @@ def build_storyboard(request: StoryboardRequest, session_id: str | None = Cookie
         session.scenes[scene.scene_id] = scene
         session.scene_order.append(scene.scene_id)
         session.scene_requested_template[scene.scene_id] = template
-        scenes_out.append(_scene_out(scene, [candidate]))
+        scenes_out.append(_scene_out(session, scene, [candidate]))
         record_unsupported_shape(
             candidate_id=candidate.candidate_id,
             source_excerpt=candidate.source_excerpt,
@@ -537,7 +858,7 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     session.scene_chain_members[new_scene.scene_id] = screen_order_ids
 
     candidates = _lookup_candidates(session, new_scene)
-    return _scene_out(new_scene, candidates)
+    return _scene_out(session, new_scene, candidates)
 
 
 @router.post("/storyboard/{scene_id}/ungroup", response_model=UngroupResponse)
@@ -561,7 +882,7 @@ def ungroup_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
     for member_id in members:
         member_scene = session.scenes[member_id]
         candidates = _lookup_candidates(session, member_scene)
-        restored.append(_scene_out(member_scene, candidates))
+        restored.append(_scene_out(session, member_scene, candidates))
     return UngroupResponse(scenes=restored)
 
 
@@ -573,8 +894,48 @@ def get_thumbnail(thumb_id: str):
     return FileResponse(path, media_type="image/png", filename=path.name)
 
 
+# Pydantic tags every @model_validator / @field_validator raise as
+# value_error / assertion_error; everything else is a primitive schema check.
+_SEMANTIC_ERROR_TYPES = frozenset({"value_error", "assertion_error"})
+
+
+def _semantic_rule_id(err: dict) -> str:
+    # For a `raise ValueError("<msg>")` in a validator, pydantic sets
+    # ctx.error to the original exception and prepends "Value error, " to
+    # `msg`. The exception's own string is the stable per-rule identifier
+    # (the literal we typed at the raise site); fall back to the prefixed
+    # `msg` if pydantic omitted the ctx.
+    ctx = err.get("ctx") or {}
+    exc = ctx.get("error")
+    if exc is not None:
+        return str(exc)
+    return err.get("msg", err["type"])
+
+
+def _classify_error(err: dict) -> tuple[str, str]:
+    err_type = err["type"]
+    if err_type in _SEMANTIC_ERROR_TYPES:
+        return "semantic", _semantic_rule_id(err)
+    return "schema", err_type
+
+
 def _field_errors(exc: ValidationError) -> dict:
-    return {"errors": [{"loc": list(e["loc"]), "msg": e["msg"]} for e in exc.errors()]}
+    # Each entry carries the raw pydantic `type`, plus `category`
+    # (schema|semantic) and a stable `rule` label — the UI routes by
+    # category and renders `rule` instead of a shared "value_error" tag.
+    out = []
+    for e in exc.errors():
+        category, rule = _classify_error(e)
+        out.append(
+            {
+                "loc": list(e["loc"]),
+                "msg": e["msg"],
+                "type": e["type"],
+                "rule": rule,
+                "category": category,
+            }
+        )
+    return {"errors": out}
 
 
 def _write_scene_cas(
@@ -617,11 +978,19 @@ def edit_scene(
         raise HTTPException(status_code=400, detail="Cannot edit a scene without a template")
 
     if request.grade_level is not None and not (0 <= request.grade_level <= 8):
+        # Route range check, not a cross-field rule — the UI splits by
+        # category and treats this as a Schema failure.
         raise HTTPException(
             status_code=422,
             detail={
                 "errors": [
-                    {"loc": ["grade_level"], "msg": "grade_level must be between 0 and 8"}
+                    {
+                        "loc": ["grade_level"],
+                        "msg": "grade_level must be between 0 and 8",
+                        "type": "grade_range",
+                        "rule": "grade_range",
+                        "category": "schema",
+                    }
                 ]
             },
         )
@@ -672,7 +1041,7 @@ def edit_scene(
     updated = _write_scene_cas(
         session, scene_id, scene.revision, updates, bump_revision=content_changed
     )
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 def _guard_approval_mismatch(scene: Scene) -> None:
@@ -701,7 +1070,7 @@ def _set_scene_status(session_id: str | None, scene_id: str, status: str) -> Sce
         # this so a later edit (or a lost race) can't ride on a stale approval.
         updates["approved_revision"] = scene.revision + 1
     updated = _write_scene_cas(session, scene_id, scene.revision, updates)
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/approve", response_model=SceneOut)
@@ -729,7 +1098,7 @@ def acknowledge_mismatch(scene_id: str, session_id: str | None = Cookie(default=
     updated = _write_scene_cas(
         session, scene_id, scene.revision, {"mismatch_acknowledged": True}
     )
-    return _scene_out(updated, candidates)
+    return _scene_out(session, updated, candidates)
 
 
 @router.post("/storyboard/{scene_id}/reject", response_model=SceneOut)
@@ -760,4 +1129,4 @@ def retry_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         update={"scene_id": scene_id, "grade_overridden": scene.grade_overridden}
     )
     session.scenes[scene_id] = updated
-    return _scene_out(updated, [candidate])
+    return _scene_out(session, updated, [candidate])

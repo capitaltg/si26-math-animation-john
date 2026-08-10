@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import CompileBadge from './CompileBadge'
+import GatePanel from './GatePanel'
 import MetaReviewPanel from './MetaReviewPanel'
 import SchemaForm from './SchemaForm'
 import TemplateWorkshop from './TemplateWorkshop'
@@ -11,7 +13,6 @@ import {
   IconCross,
   IconDownload,
   IconFilm,
-  IconPending,
   IconRedo,
   IconSeedling,
   IconTray,
@@ -52,6 +53,67 @@ function templateLabel(template) {
   return template.replace(/_/g, ' ')
 }
 
+const REJECTION_REASON_LABEL = {
+  not_applicable: 'structure does not fit',
+  schema_fail: 'schema check failed',
+  low_confidence: 'operands ambiguous',
+}
+
+function rejectionReasonLabel(reason) {
+  return REJECTION_REASON_LABEL[reason] || reason
+}
+
+// Compiler-boundary claim: the model picks from a finite allowed vocabulary,
+// not free-form text. The strip below shows the raw counts; the drawer lists
+// every allowed template and why the non-matched ones were dropped.
+function VocabularyStrip({ item }) {
+  const [open, setOpen] = useState(false)
+  const matched = item.templates.length
+  const vocabSize = item.vocabulary_size ?? matched
+  const rejected = item.rejected ?? []
+  const matchedRows = item.templates.map((option) => ({
+    template: option.template,
+    status: 'matched',
+    detail: option.rationale,
+  }))
+  const rejectedRows = rejected.map((row) => ({
+    template: row.template,
+    status: 'rejected',
+    detail: rejectionReasonLabel(row.reason),
+  }))
+  const rows = [...matchedRows, ...rejectedRows].sort((a, b) =>
+    a.template.localeCompare(b.template),
+  )
+  return (
+    <div className="vocab-strip">
+      <button
+        type="button"
+        className="vocab-strip__summary"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        Model considered {vocabSize} templates. {matched} matched.{' '}
+        {rejected.length} rejected (schema/applicability).
+      </button>
+      {open && (
+        <ul className="vocab-strip__list">
+          {rows.map((row) => (
+            <li key={row.template} className={`vocab-strip__row vocab-strip__row--${row.status}`}>
+              <span className="chip" data-template={row.template}>
+                {templateLabel(row.template)}
+              </span>
+              <span className="vocab-strip__status">
+                {row.status === 'matched' ? 'pass' : 'reject'}
+              </span>
+              <span className="vocab-strip__detail">{row.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // Server validation errors arrive as Pydantic paths ("steps.0.amount"). A teacher
 // reads "Steps 1 → Amount", not a dotted accessor.
 function humanLoc(loc) {
@@ -60,6 +122,232 @@ function humanLoc(loc) {
     .map((part) => (typeof part === 'number' ? String(part + 1) : part.replace(/_/g, ' ')))
     .join(' → ')
     .replace(/^./, (c) => c.toUpperCase())
+}
+
+// Backend `_field_errors` tags each entry with a category (schema|semantic).
+// Fall back to the pydantic `type` slug when an older/mocked response omits it.
+const SEMANTIC_ERROR_TYPES = new Set(['value_error', 'assertion_error'])
+
+function isSemanticError(err) {
+  if (err?.category) return err.category === 'semantic'
+  return SEMANTIC_ERROR_TYPES.has(err?.type)
+}
+
+// Human labels for pydantic's primitive schema checks. Semantic rules carry
+// their own stable identifier in `err.rule` (the message the validator raised);
+// anything not listed falls through to the raw slug so nothing hides silently.
+const RULE_LABELS = {
+  int_type: 'Must be an integer',
+  int_parsing: 'Must be an integer',
+  float_type: 'Must be a number',
+  string_type: 'Must be text',
+  bool_type: 'Must be true or false',
+  list_type: 'Must be a list',
+  enum: 'Must be one of the allowed values',
+  literal_error: 'Must be one of the allowed values',
+  missing: 'Required',
+  greater_than: 'Below allowed minimum',
+  greater_than_equal: 'Below allowed minimum',
+  less_than: 'Above allowed maximum',
+  less_than_equal: 'Above allowed maximum',
+  too_short: 'Too few items',
+  too_long: 'Too many items',
+  string_too_short: 'Too short',
+  string_too_long: 'Too long',
+  grade_range: 'Grade must be between 0 and 8',
+}
+
+function humanRule(type) {
+  if (!type) return 'Rule'
+  return RULE_LABELS[type] || type.replace(/_/g, ' ')
+}
+
+function ruleLabel(err) {
+  if (err?.rule) return err.rule
+  return humanRule(err?.type)
+}
+
+// Resolve one { "$ref": "#/$defs/Name" } hop; leaves other nodes untouched.
+function resolveSchemaRef(node, root) {
+  if (node && node.$ref) {
+    const name = node.$ref.replace('#/$defs/', '')
+    return root?.$defs?.[name] ?? {}
+  }
+  return node || {}
+}
+
+// Pydantic emits `int | None` as `anyOf: [{type: integer, …}, {type: null}]`.
+// Return the resolved branches so type + constraint rendering can merge them.
+function anyOfBranches(node, root) {
+  const branches = node?.anyOf || node?.oneOf
+  if (!branches || !Array.isArray(branches)) return null
+  return branches.map((b) => resolveSchemaRef(b, root))
+}
+
+function singleTypeLabel(resolved, root) {
+  if (resolved.enum) return `enum(${resolved.enum.join('|')})`
+  if (Array.isArray(resolved.type)) return resolved.type.join(' | ')
+  if (resolved.type === 'array') {
+    const item = resolveSchemaRef(resolved.items, root)
+    const inner = item.enum
+      ? `enum(${item.enum.join('|')})`
+      : item.type || 'object'
+    return `array<${inner}>`
+  }
+  return resolved.type || (resolved.properties ? 'object' : 'any')
+}
+
+function schemaTypeLabel(node, root) {
+  const resolved = resolveSchemaRef(node, root)
+  const branches = anyOfBranches(resolved, root)
+  if (branches) {
+    const seen = new Set()
+    const labels = []
+    for (const b of branches) {
+      const label = singleTypeLabel(b, root)
+      if (!seen.has(label)) {
+        seen.add(label)
+        labels.push(label)
+      }
+    }
+    return labels.join(' | ')
+  }
+  return singleTypeLabel(resolved, root)
+}
+
+// JSON-Schema constraint keys pydantic emits and that we know how to render as
+// a short "type/range/enum" summary. Anything unlisted is skipped rather than
+// stringified verbatim — the goal is a readable schema, not a JSON dump.
+const CONSTRAINT_KEYS = [
+  ['minimum', (v) => `≥ ${v}`],
+  ['exclusiveMinimum', (v) => `> ${v}`],
+  ['maximum', (v) => `≤ ${v}`],
+  ['exclusiveMaximum', (v) => `< ${v}`],
+  ['minLength', (v) => `min length ${v}`],
+  ['maxLength', (v) => `max length ${v}`],
+  ['minItems', (v) => `min items ${v}`],
+  ['maxItems', (v) => `max items ${v}`],
+  ['pattern', (v) => `pattern /${v}/`],
+]
+
+function schemaConstraints(node, root) {
+  const resolved = resolveSchemaRef(node, root)
+  // For an `int | None` union the constraints live inside the integer branch,
+  // not on the top-level node — walk the branches and merge, skipping the
+  // pure-null branch which contributes nothing.
+  const branches = anyOfBranches(resolved, root)
+  const sources = branches
+    ? branches.filter((b) => b && b.type !== 'null')
+    : [resolved]
+  const parts = []
+  const seen = new Set()
+  for (const src of sources) {
+    for (const [key, fmt] of CONSTRAINT_KEYS) {
+      if (src[key] !== undefined) {
+        const rendered = fmt(src[key])
+        if (!seen.has(rendered)) {
+          seen.add(rendered)
+          parts.push(rendered)
+        }
+      }
+    }
+  }
+  return parts.join(', ')
+}
+
+// Walk the schema breadth-first and emit one row per leaf-ish field, so the
+// table matches what the SchemaForm would actually render. Object children get
+// their own indented rows; array-of-objects show the item shape once.
+function schemaRows(schema, root, value, prefix = '', depth = 0) {
+  if (depth > 4) return []
+  const resolved = resolveSchemaRef(schema, root)
+  const properties = resolved.properties || {}
+  const rows = []
+  for (const [name, propSchema] of Object.entries(properties)) {
+    const prop = resolveSchemaRef(propSchema, root)
+    const path = prefix ? `${prefix}.${name}` : name
+    const propValue = value != null ? value[name] : undefined
+    const isObject = prop.type === 'object' || !!prop.properties
+    const isArrayOfObjects =
+      prop.type === 'array' &&
+      (resolveSchemaRef(prop.items, root).type === 'object' ||
+        !!resolveSchemaRef(prop.items, root).properties)
+    rows.push({
+      path,
+      type: schemaTypeLabel(propSchema, root),
+      constraint: schemaConstraints(propSchema, root),
+      value: isObject || isArrayOfObjects ? '—' : propValue,
+    })
+    if (isObject) {
+      rows.push(...schemaRows(prop, root, propValue, path, depth + 1))
+    } else if (isArrayOfObjects) {
+      // Show item shape once with a `[]` suffix, so a 3-element list doesn't
+      // print 3 identical schema rows.
+      rows.push(
+        ...schemaRows(
+          resolveSchemaRef(prop.items, root),
+          root,
+          Array.isArray(propValue) && propValue.length > 0 ? propValue[0] : undefined,
+          `${path}[]`,
+          depth + 1,
+        ),
+      )
+    }
+  }
+  return rows
+}
+
+function formatSchemaValue(value) {
+  if (value === undefined) return ''
+  if (value === '—') return '—'
+  if (value === null) return 'null'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+// Collapsed by default — the schema is here to prove "we checked it", not to
+// take up scene-card real estate.
+function SchemaView({ schema, value }) {
+  const [open, setOpen] = useState(false)
+  if (!schema || !schema.properties) return null
+  const rows = schemaRows(schema, schema, value)
+  return (
+    <div className="schema-view">
+      <button
+        type="button"
+        className="btn btn--quiet btn--tiny"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? 'Hide schema' : 'View schema'}
+      </button>
+      {open && (
+        <table className="schema-view__table">
+          <caption className="sr-only">
+            Typed schema every proposed value was checked against
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Field</th>
+              <th scope="col">Type</th>
+              <th scope="col">Constraint</th>
+              <th scope="col">Proposed value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.path}>
+                <td>{row.path}</td>
+                <td><code>{row.type}</code></td>
+                <td>{row.constraint || <span className="dim">—</span>}</td>
+                <td>{formatSchemaValue(row.value) || <span className="dim">—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
 }
 
 function sceneIds(entry) {
@@ -181,57 +469,70 @@ function StageRail({ current }) {
   )
 }
 
-const STAMP_STATE_WORDS = {
-  done: 'done',
-  active: 'in progress',
-  failed: 'failed',
-  todo: 'not started',
-}
-
-function Stamp({ label, state }) {
-  const mark =
-    state === 'done' ? <IconCheck size={16} />
-      : state === 'active' ? <IconWorking size={16} />
-      : state === 'failed' ? <IconAlert size={16} />
-      : <IconPending size={16} />
-  return (
-    <li className="stamp" data-state={state}>
-      <span className="stamp__mark">{mark}</span>
-      {label}
-      {/* The icons are decorative, so the state is carried in text too. */}
-      <span className="sr-only"> — {STAMP_STATE_WORDS[state]}</span>
-    </li>
-  )
-}
-
-// Discrete, countable stages, every one read from real scene state and every one
-// reachable. There is no percentage to show: POST /render is a single blocking
-// batch call with no progress stream, so the render itself is reported by the
+// Discrete, countable named gates. The backend returns the authoritative
+// `scene.gates` list on SceneOut; we render that verbatim so a gate never
+// reads as passed unless the backend actually ran it. Local overlays only
+// *demote* gates when the client knows the backend snapshot is stale:
+//   - `isDirty`: the draft has unsaved edits, so no backend gate has run
+//     against the current draft — everything is pending until save.
+//   - `schemaFailed` / `semanticFailed`: a live PATCH ValidationError the
+//     backend has not yet committed — mark that specific gate failed and
+//     downstream gates pending until the draft revalidates.
+// There is no percentage to show: POST /render is a single blocking batch
+// call with no progress stream, so the render itself is reported by the
 // dock rather than faked as a per-scene bar here.
-function StampColumn({ scene, hasErrors, draft }) {
-  const extracted = draft != null && Object.keys(draft).length > 0
+const DOWNSTREAM_OF_VALIDATION = new Set([
+  'Compiled deterministically',
+  'Preview rendered',
+])
+
+function StampColumn({ scene, schemaFailed, semanticFailed, isDirty }) {
   const rejected = scene.status === 'rejected'
-  const stamps = [
-    { label: 'Values extracted', state: extracted ? 'done' : 'todo' },
-    {
-      label: 'Validated in Python',
-      state: hasErrors ? 'failed' : extracted ? 'done' : 'todo',
-    },
-    { label: 'Preview rendered', state: scene.thumbnail_url ? 'done' : 'todo' },
-    {
-      label: rejected ? 'Rejected — will not render' : 'Approved for render',
-      state: rejected ? 'failed' : scene.status === 'approved' ? 'done' : 'todo',
-    },
-  ]
-  const done = stamps.filter((stamp) => stamp.state === 'done').length
+  const hasLiveErrors = schemaFailed || semanticFailed
+  const baseline = Array.isArray(scene.gates) ? scene.gates : []
+  const gates = baseline.map((gate) => {
+    // A live 422 PATCH is fresh validation info — apply per-gate overrides
+    // and leave the gates the PATCH didn't complain about at their backend
+    // status (the PATCH validated them successfully).
+    if (hasLiveErrors) {
+      if (schemaFailed && gate.name === 'Schema check') {
+        return { ...gate, status: 'failed' }
+      }
+      if (semanticFailed && gate.name === 'Semantic check') {
+        return { ...gate, status: 'failed' }
+      }
+      if (DOWNSTREAM_OF_VALIDATION.has(gate.name)) {
+        return { ...gate, status: 'pending' }
+      }
+      return gate
+    }
+    // No PATCH has run against the current draft — the backend snapshot's
+    // gate results are stale, so demote them all to pending until save.
+    if (isDirty) {
+      return { ...gate, status: 'pending' }
+    }
+    return gate
+  })
+  // Backend's SceneOut gate list does not include the approval decision;
+  // append it here so the deck surface still shows N countable gates.
+  const approvalStatus = isDirty
+    ? 'pending'
+    : rejected
+      ? 'failed'
+      : scene.status === 'approved'
+        ? 'passed'
+        : 'pending'
+  gates.push({
+    name: rejected ? 'Rejected — will not render' : 'Approved for render',
+    category: 'Rendered output',
+    status: approvalStatus,
+  })
+  const done = gates.filter((g) => g.status === 'passed').length
   return (
     <div>
-      <p className="stamps__count">{done} of {stamps.length} stages complete</p>
-      <ul className="stamps">
-        {stamps.map((stamp) => (
-          <Stamp key={stamp.label} label={stamp.label} state={stamp.state} />
-        ))}
-      </ul>
+      <p className="stamps__count">{done} of {gates.length} gates passed</p>
+      <GatePanel gates={gates} />
+      <CompileBadge scene={scene} />
     </div>
   )
 }
@@ -897,6 +1198,7 @@ function MainApp() {
               return (
                 <fieldset className="option-set" key={item.candidate_id} disabled={loading}>
                   <legend>{candidate?.one_line_summary || item.candidate_id}</legend>
+                  <VocabularyStrip item={item} />
                   {isUnsupportedShape(item) && (
                     <div className="notice notice--teach">
                       <IconSeedling />
@@ -960,6 +1262,20 @@ function MainApp() {
                 a scene can be approved.
               </p>
             </div>
+            {(() => {
+              // "Rejected drafts" counter: survivors are not the whole story.
+              // Show the funnel so the audience sees rejects and fallbacks
+              // were caught before render, not silently dropped.
+              const rejected = storyboard.filter(
+                (s) => s.status === 'rejected' || s.status === 'fallback',
+              ).length
+              if (rejected === 0) return null
+              return (
+                <p className="stamps__count">
+                  {rejected} draft{rejected === 1 ? '' : 's'} rejected or fell back before render
+                </p>
+              )
+            })()}
 
             {batchFailure && (
               <div className="notice notice--danger" role="alert">
@@ -1011,6 +1327,9 @@ function MainApp() {
               const combinable =
                 scene.status === 'pending_review' && !!scene.candidate_id && !isChain
               const errors = fieldErrors[scene.scene_id]
+              const errorList = errors || []
+              const semanticFailed = errorList.some(isSemanticError)
+              const schemaFailed = errorList.some((e) => !isSemanticError(e))
               const mismatchUnacked = !!scene.mismatch && !scene.mismatch_acknowledged
               return (
                 <article
@@ -1079,8 +1398,9 @@ function MainApp() {
                       </div>
                       <StampColumn
                         scene={scene}
-                        hasErrors={!!errors}
-                        draft={drafts[scene.scene_id]}
+                        schemaFailed={schemaFailed}
+                        semanticFailed={semanticFailed}
+                        isDirty={isDirty}
                       />
                       <Rods params={drafts[scene.scene_id]} />
                     </div>
@@ -1102,11 +1422,16 @@ function MainApp() {
                           </p>
                           <ul className="errors__list">
                             {errors.map((e, i) => (
-                              <li key={i}>{humanLoc(e.loc)}: {e.msg}</li>
+                              <li key={i}>
+                                {humanLoc(e.loc)} — <strong>{ruleLabel(e)}</strong>
+                                {!isSemanticError(e) && e.msg ? `: ${e.msg}` : ''}
+                              </li>
                             ))}
                           </ul>
                         </div>
                       )}
+
+                      <SchemaView schema={scene.params_schema} value={scene.params} />
 
                       <label className="grade">
                         Grade

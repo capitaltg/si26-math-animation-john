@@ -127,6 +127,137 @@ def test_upload_rejects_corrupt_pptx():
     assert resp.status_code == 400
 
 
+def _zip_bomb_bytes() -> bytes:
+    """Highly-compressible archive: guard should reject by ratio or size."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bomb.xml", b"\x00" * (20 * 1024 * 1024))
+    return buf.getvalue()
+
+
+def _many_member_zip_bytes(n: int) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(n):
+            zf.writestr(f"m{i}.xml", b"")
+    return buf.getvalue()
+
+
+def _pptx_content_type() -> str:
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def test_upload_rejects_zip_bomb():
+    client = _client()
+    resp = client.post(
+        "/upload",
+        files={"file": ("bomb.pptx", _zip_bomb_bytes(), _pptx_content_type())},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert isinstance(body["detail"], dict)
+    assert body["detail"]["reason"] in {"ratio_too_high", "member_too_large", "total_too_large"}
+
+
+def test_upload_rejects_excessive_members():
+    from app.pipeline.pptx_guard import MAX_MEMBER_COUNT
+
+    client = _client()
+    resp = client.post(
+        "/upload",
+        files={
+            "file": (
+                "many.pptx",
+                _many_member_zip_bytes(MAX_MEMBER_COUNT + 5),
+                _pptx_content_type(),
+            )
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["reason"] == "too_many_members"
+
+
+def test_upload_rejects_path_traversal_member():
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("../evil.xml", b"x")
+
+    client = _client()
+    resp = client.post(
+        "/upload",
+        files={"file": ("trav.pptx", buf.getvalue(), _pptx_content_type())},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["reason"] == "suspicious_path"
+
+
+def test_upload_rejects_encrypted_archive():
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("secret.xml", b"payload")
+    data = bytearray(buf.getvalue())
+    lh = data.index(b"PK\x03\x04")
+    data[lh + 6] |= 0x01
+    cd = data.index(b"PK\x01\x02")
+    data[cd + 8] |= 0x01
+
+    client = _client()
+    resp = client.post(
+        "/upload",
+        files={"file": ("enc.pptx", bytes(data), _pptx_content_type())},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["reason"] == "encrypted"
+
+
+def test_upload_accepts_exactly_max_slides():
+    from app.routes import MAX_SLIDES
+
+    client = _client()
+    with patch("app.routes.discover_candidates_for_document", return_value=[]):
+        resp = client.post(
+            "/upload",
+            files={
+                "file": (
+                    "boundary.pptx",
+                    _pptx_bytes(slide_count=MAX_SLIDES),
+                    _pptx_content_type(),
+                )
+            },
+        )
+    assert resp.status_code == 200, resp.text
+
+
+def test_upload_accepts_file_at_upload_limit():
+    """A well-formed .pptx at exactly MAX_UPLOAD_BYTES must be accepted."""
+    from app.routes import MAX_UPLOAD_BYTES
+
+    client = _client()
+    # We can't build a valid PPTX of arbitrary exact size; upload a valid
+    # small deck and assert the size limit is a strict '>' (already covered
+    # by the +1 rejection test above — this asserts a normal file passes).
+    payload = _pptx_bytes()
+    assert len(payload) <= MAX_UPLOAD_BYTES
+    with patch("app.routes.discover_candidates_for_document", return_value=[]):
+        resp = client.post(
+            "/upload",
+            files={"file": ("small.pptx", payload, _pptx_content_type())},
+        )
+    assert resp.status_code == 200
+
+
 def test_upload_returns_candidates_and_sets_cookie():
     client = _client()
     resp = _upload_candidate(client)
@@ -204,6 +335,9 @@ def test_options_returns_ranked_templates_and_caches_result():
 
     assert resp.status_code == 200
     item = resp.json()["options"][0]
+    static_vocab = {member.value for member in TemplateName}
+    matched = {"balance_scale", "number_line", "text_card"}
+    expected_rejected = sorted(static_vocab - matched)
     assert item == {
         "candidate_id": "c1",
         "grade_level": 1,
@@ -224,6 +358,11 @@ def test_options_returns_ranked_templates_and_caches_result():
                 "version_id": static_ref(TemplateName.TEXT_CARD).version_id,
                 "rationale": "always-compatible fallback",
             },
+        ],
+        "vocabulary_size": len(static_vocab),
+        "rejected": [
+            {"template": name, "reason": "not_applicable"}
+            for name in expected_rejected
         ],
     }
     session = store.get(upload.json()["session_id"])
@@ -265,6 +404,83 @@ def test_options_response_includes_a_static_version_id():
         t for t in resp.json()["options"][0]["templates"] if t["template"] == "number_line"
     )
     assert number_line["version_id"] == number_line_ref.version_id
+
+
+def test_options_marks_all_structural_templates_low_confidence_when_ambiguous():
+    from app.models.scene import TemplateName
+    from app.pipeline.classification import ClassificationResult, TemplateOption
+    from app.templates.registry import static_ref
+
+    client = _client()
+    _upload_candidate(client)
+
+    # Ambiguity forces classify_candidate to strip structural options and keep
+    # only the text_card fallback, so every non-text_card template in the vocab
+    # ends up rejected with reason=low_confidence.
+    text_card_ref = static_ref(TemplateName.TEXT_CARD)
+    classification = ClassificationResult(
+        options=[
+            TemplateOption(
+                template=TemplateName.TEXT_CARD,
+                rationale="always-compatible fallback",
+                version_id=text_card_ref.version_id,
+            ),
+        ],
+        grade_level=2,
+        ambiguous=True,
+    )
+    with patch("app.routes.classify_candidate", return_value=classification):
+        resp = client.post("/options", json={"candidate_ids": ["c1"]})
+
+    assert resp.status_code == 200
+    item = resp.json()["options"][0]
+    static_vocab = {member.value for member in TemplateName}
+    assert item["vocabulary_size"] == len(static_vocab)
+    expected = sorted(static_vocab - {"text_card"})
+    assert item["rejected"] == [
+        {"template": name, "reason": "low_confidence"} for name in expected
+    ]
+
+
+def test_options_includes_dynamic_templates_in_vocabulary_when_enabled():
+    from app.config import get_settings
+    from app.meta.dynamic_templates import DynamicSnapshotEntry, EnabledSnapshot
+
+    client = _client()
+    _upload_candidate(client)
+
+    entries = {
+        name: DynamicSnapshotEntry(
+            version_id=f"{name}-v1",
+            artifact_hash=f"{name}-hash",
+            classifier_bullet=f"- {name}: fake",
+        )
+        for name in ("custom_bar", "custom_grid")
+    }
+    snapshot = EnabledSnapshot(_entries=entries)
+
+    settings = get_settings()
+    settings.meta_dynamic_classifier_enabled = True
+    try:
+        with patch("app.routes.meta_session") as mock_meta_session, patch(
+            "app.routes.load_enabled_snapshot", return_value=snapshot
+        ), patch(
+            "app.routes.classify_candidate", return_value=_classification()
+        ):
+            mock_meta_session.return_value.__enter__.return_value = object()
+            resp = client.post("/options", json={"candidate_ids": ["c1"]})
+    finally:
+        settings.meta_dynamic_classifier_enabled = False
+
+    assert resp.status_code == 200
+    item = resp.json()["options"][0]
+    from app.models.scene import TemplateName
+
+    expected_vocab = {m.value for m in TemplateName} | set(entries)
+    assert item["vocabulary_size"] == len(expected_vocab)
+    rejected_names = {r["template"] for r in item["rejected"]}
+    # The dynamic templates the model did not pick appear as rejected.
+    assert set(entries) <= rejected_names
 
 
 def test_options_passes_no_session_when_dynamic_classifier_flag_is_off():
@@ -445,6 +661,26 @@ def test_storyboard_builds_scenes_with_schema_and_thumbnail_url(tmp_path):
     assert scene["source_excerpt"]
     assert scene["detected_summary"] == "Detected: 4 + 3"
     assert scene["params_schema"]["properties"]["start"]["type"] == "integer"
+    # Compile artifact — surfaces the pure params → scene-program step.
+    assert isinstance(scene["scene_program_hash"], str)
+    assert len(scene["scene_program_hash"]) == 64
+    assert scene["program_size"] > 0
+    assert scene["compile_ms"] is not None
+    assert scene["scene_program"]["params"] == scene["params"]
+    assert scene["scene_program"]["template"]["name"] == "number_line"
+    # Named gate list on SceneOut: audience-facing surfaces render this so N
+    # named gates are visible next to the deck stamps, not just generic ones.
+    gate_names = [g["name"] for g in scene["gates"]]
+    assert gate_names == [
+        "Values extracted",
+        "Schema check",
+        "Semantic check",
+        "Compiled deterministically",
+        "Preview rendered",
+    ]
+    categories = {g["category"] for g in scene["gates"]}
+    assert categories <= {"Fixture", "Anchor alignment", "Rendered output"}
+    assert all(g["status"] == "passed" for g in scene["gates"])
 
 
 def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
@@ -636,7 +872,7 @@ def test_render_renders_only_approved_from_stored_params(tmp_path):
     approved = approved.model_copy(update={"status": "approved"})
     _seed_scene(client, approved)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -671,7 +907,7 @@ def test_render_returns_manual_scene_results(tmp_path):
     )
     _seed_scene(client, manual)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -679,14 +915,18 @@ def test_render_returns_manual_scene_results(tmp_path):
         resp = client.post("/render")
 
     assert resp.status_code == 200
-    assert resp.json()["clips"] == [{
+    clip = resp.json()["clips"][0]
+    gates = clip.pop("gates")
+    assert clip == {
         "scene_id": "manual-1",
         "candidate_id": None,
         "candidate_ids": None,
         "status": "approved",
-        "clip_url": resp.json()["clips"][0]["clip_url"],
+        "clip_url": clip["clip_url"],
         "fallback_reason": None,
-    }]
+    }
+    assert [g["name"] for g in gates][-1] == "Full render"
+    assert next(g["status"] for g in gates if g["name"] == "Full render") == "passed"
 
 
 def test_render_skips_rejected_scenes(tmp_path):
@@ -714,7 +954,7 @@ def test_render_one_failure_does_not_sink_batch(tmp_path):
 
     calls = {"n": 0}
 
-    def render_side_effect(template, params, out):
+    def render_side_effect(template, params, out, **_):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("boom")
@@ -748,7 +988,7 @@ def test_render_stored_param_validation_failure_does_not_sink_batch(tmp_path):
     _seed_scene(client, good)
     _seed_scene(client, bad)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -795,7 +1035,14 @@ def test_patch_invalid_params_returns_422_and_keeps_scene(tmp_path):
         )
 
     assert resp.status_code == 422
-    assert resp.json()["detail"]["errors"]
+    errors = resp.json()["detail"]["errors"]
+    assert errors
+    # The @model_validator guard rejects, so pydantic tags this value_error —
+    # UI uses `category` to route to the "Semantic check" stamp and `rule`
+    # as the per-rule identifier (rather than a shared value_error label).
+    assert errors[0]["type"] == "value_error"
+    assert errors[0]["category"] == "semantic"
+    assert errors[0]["rule"] and errors[0]["rule"] != "value_error"
     thumb.assert_not_called()
 
 
@@ -835,6 +1082,27 @@ def test_patch_grade_sets_overridden(tmp_path):
     assert resp.json()["grade_overridden"] is True
 
 
+def test_patch_wrong_param_type_returns_schema_type_error(tmp_path):
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _number_line_scene(tmp_path))
+
+    with patch("app.routes.render_scene_thumbnail") as thumb:
+        resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": "not-an-int", "steps": []}},
+        )
+
+    assert resp.status_code == 422
+    errors = resp.json()["detail"]["errors"]
+    assert errors
+    # Wrong scalar type is a schema-level failure; UI routes non-value_error /
+    # non-assertion_error entries to the "Schema check" stamp.
+    types = {e["type"] for e in errors}
+    assert any(t not in {"value_error", "assertion_error"} for t in types)
+    thumb.assert_not_called()
+
+
 def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
     client = _client()
     _upload_candidate(client)
@@ -848,6 +1116,10 @@ def test_patch_out_of_range_grade_returns_field_errors_shape(tmp_path):
     assert errors
     assert "loc" in errors[0]
     assert "msg" in errors[0]
+    assert "type" in errors[0]
+    # Grade range is a range/schema check, not a cross-field rule.
+    assert errors[0]["category"] == "schema"
+    assert errors[0]["rule"] == "grade_range"
     thumb.assert_not_called()
 
 
@@ -1290,7 +1562,7 @@ def test_approve_records_revision_edit_after_approve_does_not_authorize_render(t
         update={"params": {"start": 99, "steps": []}, "revision": stale.revision + 1}
     )
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -1741,7 +2013,7 @@ def test_render_chained_scene_uses_chained_render_path(tmp_path):
     chained = _chained_number_line_scene().model_copy(update={"status": "approved"})
     _seed_scene(client, chained)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 

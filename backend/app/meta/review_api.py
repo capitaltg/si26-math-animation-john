@@ -13,6 +13,7 @@ from app.meta.artifacts import artifact_path
 from app.meta.db import meta_session
 from app.meta.models import (
     DRAFT_PENDING_REVIEW,
+    DRAFT_REJECTED,
     FallbackObservation,
     GenerationJob,
     TemplateDraft,
@@ -223,6 +224,28 @@ def list_drafts():
             .all()
         )
         return [_draft_summary(row) for row in rows]
+
+
+class RejectedDraftsCountOut(BaseModel):
+    count: int
+
+
+# The audience sees only survivors on the deck, but the funnel is the story:
+# how many drafts were caught and thrown out before anyone saw them. This
+# endpoint feeds the "Rejected drafts" counter on the reviewer panel.
+@router.get(
+    "/drafts/rejected_count",
+    response_model=RejectedDraftsCountOut,
+    dependencies=[Depends(require_reviewer_token)],
+)
+def rejected_drafts_count():
+    with meta_session() as session:
+        count = (
+            session.query(TemplateDraft)
+            .filter(TemplateDraft.status == DRAFT_REJECTED)
+            .count()
+        )
+        return RejectedDraftsCountOut(count=count)
 
 
 @router.get(
