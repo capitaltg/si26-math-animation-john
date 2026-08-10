@@ -764,3 +764,12 @@ undesigned by decision). A notice may carry its own `.actions` row for recovery.
   control.
 - **Don't** uppercase or letter-space UI labels.
 - **Don't** announce a ticking value in a live region.
+
+## Runtime
+
+- **Single process only.** Session state (`backend/app/session.py`) is a
+  per-process `OrderedDict`; clip and thumbnail registries live in the same
+  process memory. Running `uvicorn --workers N` (N > 1) or multiple backend
+  instances splits sessions per worker, so any request routed to a peer that
+  did not receive the upload returns 400. Keep one worker per instance until
+  session state is moved to a durable, versioned store.
