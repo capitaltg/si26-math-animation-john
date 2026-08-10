@@ -39,9 +39,10 @@ jobs:
         with:
           packages: >-
             ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+            libblas3 liblapack3
             texlive texlive-latex-extra texlive-fonts-extra
             texlive-latex-recommended texlive-science tipa dvisvgm
-          version: 2
+          version: 3
 
       # A restored cache copies the package files back but never runs
       # dpkg's configure step, so LaTeX's `ls-R` filename databases and its
@@ -58,6 +59,15 @@ jobs:
 
       - name: Install backend and dev deps
         run: pip install -e ".[dev]"
+
+      # Runs the same set of checks a deployment healthcheck would run:
+      # every runtime binary (ffmpeg / latex / dvisvgm) on PATH, a Text-only
+      # Manim render end-to-end, Bedrock config schema, writable storage,
+      # feature-flag values printed for the deploy log. Fails fast so a
+      # system-dep drift surfaces here with a diagnostic instead of later
+      # as a mysterious per-test error.
+      - name: Preflight
+        run: python -m scripts.preflight
 
       # No AWS creds: every Bedrock call is mocked and integration tests are skip-marked.
       - name: Run tests
