@@ -9,6 +9,13 @@ const FIXTURE = path.join(
 )
 
 test('upload known-good deck surfaces candidates in the UI', async ({ page }) => {
+  // Discovery invokes Bedrock. Enable this test by setting either
+  // MATH_ANIM_MOCK_BEDROCK=1 (once the backend hook lands — Phase B) or by
+  // providing live AWS credentials to the backend the playwright config boots.
+  test.skip(
+    !process.env.MATH_ANIM_MOCK_BEDROCK && !process.env.AWS_ACCESS_KEY_ID,
+    'happy-path calls Bedrock; enable when MATH_ANIM_MOCK_BEDROCK is set or AWS creds are configured',
+  )
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: /upload a deck/i })).toBeVisible()
