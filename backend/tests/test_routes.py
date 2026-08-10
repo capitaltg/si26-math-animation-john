@@ -2058,3 +2058,134 @@ def test_options_loads_the_snapshot_for_the_requesting_session():
         settings.meta_dynamic_classifier_enabled = False
 
     assert mock_load_snapshot.call_args.kwargs["owner_session_id"] == session_id
+
+
+def test_group_ungroup_serialize_under_session_lock(tmp_path):
+    """Concurrent chain+ungroup pairs must leave session invariants intact.
+
+    Without a lock around `scene_order` + `scenes` + `scene_chain_members` a
+    racing pair could observe a torn `scene_order` mid-rewrite (an id removed
+    but the new chain scene not yet inserted) or double-delete a chain id.
+    """
+    import threading
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+
+    from app.routes import store
+    session = store.get(client.cookies.get("session_id"))
+
+    errors = []
+
+    def loop():
+        try:
+            for _ in range(15):
+                with patch("app.routes.render_chained_scene_thumbnail"):
+                    chain = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
+                if chain.status_code == 200:
+                    new_id = chain.json()["scene_id"]
+                    client.post(f"/storyboard/{new_id}/ungroup")
+        except Exception as exc:  # pragma: no cover - propagates via `errors`
+            errors.append(exc)
+
+    threads = [threading.Thread(target=loop) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    # After the storm, every id in scene_order must resolve to a live scene,
+    # no chain must dangle, and the two originals must both be present.
+    assert set(session.scene_order) == set(session.scenes.keys())
+    assert set(session.scene_chain_members.keys()) <= set(session.scenes.keys())
+    assert "a" in session.scenes and "b" in session.scenes
+
+
+def test_template_requests_reads_are_lock_guarded(tmp_path):
+    """`list_builds` must snapshot template_requests under the session lock so a
+    concurrent background write to `pending` can't produce a torn view.
+    """
+    import threading
+
+    from app.config import get_settings
+    from app.session import TemplateRequest
+
+    settings = get_settings()
+    prev = settings.meta_templates_enabled
+    settings.meta_templates_enabled = True
+    try:
+        client = _client()
+    finally:
+        settings.meta_templates_enabled = prev
+    _upload_candidate(client)
+    session_id = client.cookies.get("session_id")
+
+    from app.routes import store
+    session = store.get(session_id)
+
+    # Seed one existing request the writer will keep mutating in-place so
+    # `list_builds` has something to iterate while the write is in-flight.
+    from datetime import datetime, timezone
+    pending = TemplateRequest(
+        candidate_id="c1", requested_at=datetime.now(timezone.utc)
+    )
+    session.template_requests["c1"] = pending
+
+    stop = threading.Event()
+    errors: list[Exception] = []
+
+    def writer():
+        try:
+            flip = False
+            while not stop.is_set():
+                flip = not flip
+                with session.session_lock:
+                    pending.fingerprint_key = "fpk" if flip else None
+                    pending.error = None if flip else "boom"
+                    pending.already_available = flip
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+
+    def reader():
+        try:
+            for _ in range(30):
+                # Feature flags gated by _feature_is_complete are off in tests,
+                # but list_builds is a read that does not require them.
+                with patch(
+                    "app.meta.teacher_api.meta_session"
+                ) as mock_meta_session:
+                    mock_meta_session.return_value.__enter__.return_value = object()
+                    with patch(
+                        "app.meta.teacher_api._stage_for",
+                        return_value=("filed", None, None),
+                    ):
+                        resp = client.get("/meta/my/builds")
+                assert resp.status_code == 200
+                # Under the lock the snapshot must show a self-consistent
+                # request: our writer only ever pairs (fpk, None, True) or
+                # (None, "boom", False).
+                for build in resp.json():
+                    fk = build["fingerprint_key"]
+                    err = build["error"]
+                    if fk is not None:
+                        assert err is None
+                    if err is not None:
+                        assert fk is None
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            stop.set()
+
+    w = threading.Thread(target=writer)
+    r = threading.Thread(target=reader)
+    w.start()
+    r.start()
+    r.join(timeout=5)
+    stop.set()
+    w.join(timeout=5)
+    assert not errors, errors
