@@ -2106,86 +2106,211 @@ def test_group_ungroup_serialize_under_session_lock(tmp_path):
     assert "a" in session.scenes and "b" in session.scenes
 
 
-def test_template_requests_reads_are_lock_guarded(tmp_path):
-    """`list_builds` must snapshot template_requests under the session lock so a
-    concurrent background write to `pending` can't produce a torn view.
+def test_group_and_render_serialize_under_session_lock(tmp_path):
+    """A concurrent /storyboard/chain rewrite must not tear /render's traversal.
+
+    /render walks `scene_order` and dereferences every id in `session.scenes`
+    under the session lock. A racing chain that removed ids from `scene_order`
+    before its new chain scene landed in `session.scenes` (or vice versa) would
+    surface here as a KeyError → 500, or as a clip list that references a chain
+    scene absent from the store. This exercises that traversal against an
+    in-flight group/ungroup pair.
     """
     import threading
 
-    from app.config import get_settings
-    from app.session import TemplateRequest
-
-    settings = get_settings()
-    prev = settings.meta_templates_enabled
-    settings.meta_templates_enabled = True
-    try:
-        client = _client()
-    finally:
-        settings.meta_templates_enabled = prev
-    _upload_candidate(client)
-    session_id = client.cookies.get("session_id")
+    client = _client()
+    _upload_candidates(
+        client, [_candidate("c1"), _candidate("c2"), _candidate("c3")]
+    )
+    a = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "a", "candidate_id": "c1"}
+    )
+    b = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "b", "candidate_id": "c2"}
+    )
+    approved = _number_line_scene(tmp_path).model_copy(
+        update={"scene_id": "app", "candidate_id": "c3", "status": "approved"}
+    )
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+    _seed_scene(client, approved)
 
     from app.routes import store
-    session = store.get(session_id)
+    session = store.get(client.cookies.get("session_id"))
 
-    # Seed one existing request the writer will keep mutating in-place so
-    # `list_builds` has something to iterate while the write is in-flight.
-    from datetime import datetime, timezone
-    pending = TemplateRequest(
-        candidate_id="c1", requested_at=datetime.now(timezone.utc)
-    )
-    session.template_requests["c1"] = pending
+    def fake_render(template, params, out, **_):
+        out.write_bytes(b"mp4")
+        return out
 
-    stop = threading.Event()
     errors: list[Exception] = []
+    stop = threading.Event()
 
-    def writer():
+    def group_loop():
         try:
-            flip = False
-            while not stop.is_set():
-                flip = not flip
-                with session.session_lock:
-                    pending.fingerprint_key = "fpk" if flip else None
-                    pending.error = None if flip else "boom"
-                    pending.already_available = flip
-        except Exception as exc:  # pragma: no cover
+            for _ in range(20):
+                if stop.is_set():
+                    return
+                with patch("app.routes.render_chained_scene_thumbnail"):
+                    chain = client.post(
+                        "/storyboard/chain", json={"scene_ids": ["a", "b"]}
+                    )
+                if chain.status_code == 200:
+                    new_id = chain.json()["scene_id"]
+                    client.post(f"/storyboard/{new_id}/ungroup")
+        except Exception as exc:  # pragma: no cover - propagates via `errors`
             errors.append(exc)
 
-    def reader():
+    def render_loop():
         try:
-            for _ in range(30):
-                # Feature flags gated by _feature_is_complete are off in tests,
-                # but list_builds is a read that does not require them.
+            for _ in range(20):
+                if stop.is_set():
+                    return
                 with patch(
-                    "app.meta.teacher_api.meta_session"
-                ) as mock_meta_session:
-                    mock_meta_session.return_value.__enter__.return_value = object()
-                    with patch(
-                        "app.meta.teacher_api._stage_for",
-                        return_value=("filed", None, None),
-                    ):
-                        resp = client.get("/meta/my/builds")
-                assert resp.status_code == 200
-                # Under the lock the snapshot must show a self-consistent
-                # request: our writer only ever pairs (fpk, None, True) or
-                # (None, "boom", False).
-                for build in resp.json():
-                    fk = build["fingerprint_key"]
-                    err = build["error"]
-                    if fk is not None:
-                        assert err is None
-                    if err is not None:
-                        assert fk is None
+                    "app.routes.render_scene_to_mp4", side_effect=fake_render
+                ), patch(
+                    "app.routes.render_chained_scene_to_mp4", side_effect=fake_render
+                ):
+                    resp = client.post("/render")
+                # Server error would signal a torn scene_order/session.scenes
+                # traversal; a collision-with-in-flight-render is 409 and OK.
+                assert resp.status_code in (200, 409), resp.text
+                if resp.status_code == 200:
+                    for clip in resp.json()["clips"]:
+                        assert clip["scene_id"]
         except Exception as exc:
             errors.append(exc)
         finally:
             stop.set()
 
-    w = threading.Thread(target=writer)
-    r = threading.Thread(target=reader)
-    w.start()
-    r.start()
-    r.join(timeout=5)
-    stop.set()
-    w.join(timeout=5)
+    threads = [threading.Thread(target=group_loop) for _ in range(2)]
+    threads.append(threading.Thread(target=render_loop))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
     assert not errors, errors
+    assert set(session.scene_order) == set(session.scenes.keys())
+    assert set(session.scene_chain_members.keys()) <= set(session.scenes.keys())
+    # The always-approved scene must survive every round.
+    assert "app" in session.scenes and "app" in session.scene_order
+
+
+def test_template_requests_reads_are_lock_guarded(tmp_path):
+    """Real request_build must not tear a concurrent list_builds.
+
+    Drives the actual POST /meta/my/builds handler so the two writes it
+    performs -- the dict insert (`template_requests[cid] = pending`) and the
+    completion field publication in the BackgroundTasks callback -- run
+    concurrently with a live GET /meta/my/builds loop. Neither must produce a
+    "dictionary changed size" iteration crash, a 500, or a snapshot that pairs
+    a fingerprint_key with an error.
+    """
+    import threading
+    import time
+
+    from app.config import get_settings
+    from app.meta.ingest import BuildRequestOutcome
+
+    settings = get_settings()
+    prev = (
+        settings.meta_templates_enabled,
+        settings.meta_codegen_enabled,
+        settings.meta_approval_enabled,
+        settings.meta_dynamic_classifier_enabled,
+    )
+    settings.meta_templates_enabled = True
+    settings.meta_codegen_enabled = True
+    settings.meta_approval_enabled = True
+    settings.meta_dynamic_classifier_enabled = True
+    try:
+        client = _client()
+        _upload_candidate(client)
+        session_id = client.cookies.get("session_id")
+        from app.routes import store
+        session = store.get(session_id)
+        # Extra candidates so multiple POSTs can race a live reader; each will
+        # produce its own insert and its own deferred completion write.
+        for cid in ("c2", "c3", "c4"):
+            session.candidates[cid] = _candidate(cid)
+
+        def controllable_build(
+            *, candidate_id, source_excerpt, grade_level, owner_session_id
+        ):
+            # A short stall widens the window between the dict insert and the
+            # completion write so the reader loop can observe the pending
+            # state mid-flight rather than only the terminal one.
+            time.sleep(0.01)
+            return BuildRequestOutcome(
+                fingerprint_key=f"fpk-{candidate_id}",
+                error=None,
+                already_available=False,
+            )
+
+        errors: list[Exception] = []
+        stop = threading.Event()
+
+        def poster(cid: str):
+            try:
+                with patch(
+                    "app.meta.teacher_api.request_template_build",
+                    side_effect=controllable_build,
+                ):
+                    # TestClient runs BackgroundTasks synchronously after the
+                    # response, so this returns only after run_build's under-
+                    # lock completion write lands.
+                    resp = client.post("/meta/my/builds", json={"candidate_id": cid})
+                assert resp.status_code == 202, resp.text
+            except Exception as exc:  # pragma: no cover
+                errors.append(exc)
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    with patch(
+                        "app.meta.teacher_api.meta_session"
+                    ) as mock_meta_session, patch(
+                        "app.meta.teacher_api._stage_for",
+                        return_value=("filed", None, None),
+                    ):
+                        mock_meta_session.return_value.__enter__.return_value = object()
+                        resp = client.get("/meta/my/builds")
+                    assert resp.status_code == 200, resp.text
+                    for build in resp.json():
+                        fk = build["fingerprint_key"]
+                        err = build["error"]
+                        # The completion write publishes all three fields at
+                        # once under the lock; controllable_build only ever
+                        # produces (fpk-<cid>, None, False), so an fpk paired
+                        # with an error would signal a torn snapshot.
+                        if fk is not None:
+                            assert err is None
+            except Exception as exc:
+                errors.append(exc)
+
+        r = threading.Thread(target=reader)
+        r.start()
+        posters = [
+            threading.Thread(target=poster, args=(cid,))
+            for cid in ("c1", "c2", "c3", "c4")
+        ]
+        for p in posters:
+            p.start()
+        for p in posters:
+            p.join(timeout=10)
+        stop.set()
+        r.join(timeout=10)
+        assert not errors, errors
+        # Every POST must have both inserted and completed its request.
+        assert set(session.template_requests) == {"c1", "c2", "c3", "c4"}
+        for cid in ("c1", "c2", "c3", "c4"):
+            entry = session.template_requests[cid]
+            assert entry.fingerprint_key == f"fpk-{cid}"
+            assert entry.error is None
+    finally:
+        (
+            settings.meta_templates_enabled,
+            settings.meta_codegen_enabled,
+            settings.meta_approval_enabled,
+            settings.meta_dynamic_classifier_enabled,
+        ) = prev

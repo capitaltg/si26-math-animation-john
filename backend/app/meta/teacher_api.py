@@ -419,12 +419,23 @@ def clear_build(candidate_id: str, session_id: str | None = Cookie(default=None)
     """
     session = _session(session_id)
     with session.session_lock:
-        request = session.template_requests.get(candidate_id)
-    if request is None:
-        raise HTTPException(status_code=404, detail=f"No build requested for {candidate_id}")
+        original = session.template_requests.get(candidate_id)
+        if original is None:
+            raise HTTPException(
+                status_code=404, detail=f"No build requested for {candidate_id}"
+            )
+        # Snapshot under the lock so a background run_build mutating `original`
+        # can't feed torn fields into _stage_for below.
+        snapshot = TemplateRequest(
+            candidate_id=original.candidate_id,
+            requested_at=original.requested_at,
+            fingerprint_key=original.fingerprint_key,
+            error=original.error,
+            already_available=original.already_available,
+        )
 
     with meta_session() as db_session:
-        stage, _job, _draft = _stage_for(db_session, request, session.session_id)
+        stage, _job, _draft = _stage_for(db_session, snapshot, session.session_id)
     if stage not in CLEARABLE_STAGES:
         raise HTTPException(
             status_code=409,
@@ -432,7 +443,16 @@ def clear_build(candidate_id: str, session_id: str | None = Cookie(default=None)
         )
 
     with session.session_lock:
-        session.template_requests.pop(candidate_id, None)
+        # A new request_build for the same candidate (or a completion that
+        # would have moved this request out of a CLEARABLE_STAGES state) may
+        # have landed while we were resolving the stage. Delete only if the
+        # mapping still points at the exact same request object.
+        if session.template_requests.get(candidate_id) is not original:
+            raise HTTPException(
+                status_code=409,
+                detail="This build was updated by another request; reload and try again",
+            )
+        del session.template_requests[candidate_id]
     return None
 
 

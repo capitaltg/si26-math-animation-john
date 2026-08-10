@@ -855,11 +855,32 @@ def chain_scenes(request: ChainRequest, session_id: str | None = Cookie(default=
     # and looks up each id in `scenes`, and would otherwise observe the
     # rewrite torn (e.g. an id popped from `scene_order` before its scene
     # lands in `scenes`, or an `earliest_index` from a stale `scene_order`).
+    expected = {scene.scene_id: scene for scene in scenes}
     with session.session_lock:
-        # Every member must still be there under the lock. A racing chain or
-        # ungroup could have moved one out between the checks above and now.
+        # A concurrent approve/edit/retry replaces the Scene in session.scenes
+        # (identity swap and/or revision bump); a concurrent chain/ungroup
+        # rewrites scene_order. Revalidate every request.scene_ids field the
+        # pre-lock validation checked so we never commit a chain built from a
+        # scene that has since been approved, re-templated, or dropped.
         for sid in request.scene_ids:
-            if sid not in session.scene_order or sid not in session.scenes:
+            current = session.scenes.get(sid)
+            if current is None or sid not in session.scene_order:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Scene {sid} was modified by another request; reload and try again",
+                )
+            baseline = expected[sid]
+            if (
+                current is not baseline
+                or current.revision != baseline.revision
+                or current.status != "pending_review"
+                or current.template != template
+                or not current.candidate_id
+                or (
+                    scene_mismatch(current) is not None
+                    and not current.mismatch_acknowledged
+                )
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=f"Scene {sid} was modified by another request; reload and try again",
