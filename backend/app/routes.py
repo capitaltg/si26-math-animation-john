@@ -1,4 +1,7 @@
+import hashlib
+import json
 import logging
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -27,6 +30,7 @@ from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
+    RenderTimeout,
     render_chained_scene_thumbnail,
     render_chained_scene_to_mp4,
     render_scene_thumbnail,
@@ -43,6 +47,14 @@ from app.templates.registry import (
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
+
+#: Ceiling on how many scenes /render will accept in one call. Bounds the
+#: worst-case wall-clock a single request can occupy a threadpool worker.
+MAX_RENDER_BATCH = int(os.environ.get("RENDER_MAX_BATCH", "12"))
+#: Overall wall-clock budget for a /render request. Skips remaining scenes
+#: as `timeout` once exceeded — bounds the request to something operators can
+#: reason about (per-scene timeout alone can stack).
+RENDER_JOB_DEADLINE_SECONDS = float(os.environ.get("RENDER_JOB_DEADLINE_SECONDS", str(15 * 60)))
 
 logger = logging.getLogger(__name__)
 
@@ -340,65 +352,187 @@ def _is_render_ready(scene: Scene) -> bool:
     return scene.approved_revision is None or scene.approved_revision == scene.revision
 
 
+def _render_params_hash(template: TemplateRef, params_data: dict, chained: bool) -> str:
+    """Content hash for the (template ref, params, chain-mode) tuple.
+
+    Used as the idempotency key so an approved scene re-render whose inputs
+    haven't changed can short-circuit — even when `scene.revision` bumped due
+    to an unrelated edit that a subsequent re-approve replayed.
+    """
+    payload = {
+        "template": template.model_dump(mode="json"),
+        "params": params_data,
+        "chained": chained,
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
+    """Return a clip_url to reuse when the last render still matches this hash."""
+    if scene.rendered_params_hash != params_hash:
+        return None
+    if scene.render_path is None or not Path(scene.render_path).exists():
+        return None
+    clip_id = session.scene_clip_id.get(scene.scene_id)
+    if clip_id is None or store.get_clip(clip_id) is None:
+        clip_id = store.register_clip(scene.render_path)
+        session.scene_clip_id[scene.scene_id] = clip_id
+    return f"/clips/{clip_id}"
+
+
+def _clip_result(
+    scene: Scene,
+    *,
+    status: str,
+    clip_url: str | None,
+    render_gate_status: Literal["passed", "failed"],
+    render_ms: float | None,
+) -> ClipResult:
+    _, program_hash, _, compile_ms = compile_scene_program(scene)
+    scene_gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
+    scene_gates.append(
+        Gate(
+            name="Full render",
+            category="Rendered output",
+            status=render_gate_status,
+            duration_ms=render_ms,
+        )
+    )
+    return ClipResult(
+        scene_id=scene.scene_id,
+        candidate_id=scene.candidate_id,
+        candidate_ids=scene.candidate_ids,
+        status=status,
+        clip_url=clip_url,
+        fallback_reason=scene.fallback_reason,
+        gates=scene_gates,
+    )
+
+
 @router.post("/render", response_model=RenderResponse)
 def render(session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    approved = [
-        session.scenes[sid]
-        for sid in session.scene_order
-        if _is_render_ready(session.scenes[sid])
-    ]
-    if not approved:
-        raise HTTPException(status_code=400, detail="No approved scenes to render")
+    with session.scenes_lock:
+        approved = [
+            session.scenes[sid]
+            for sid in session.scene_order
+            if _is_render_ready(session.scenes[sid])
+        ]
+        if not approved:
+            raise HTTPException(status_code=400, detail="No approved scenes to render")
+        if len(approved) > MAX_RENDER_BATCH:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Batch too large: {len(approved)} approved scenes exceeds "
+                    f"the cap of {MAX_RENDER_BATCH}"
+                ),
+            )
+        collision = [s.scene_id for s in approved if s.scene_id in session.rendering_scene_ids]
+        if collision:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Render already in progress for scene(s) {collision}",
+            )
+        for scene in approved:
+            session.rendering_scene_ids.add(scene.scene_id)
 
     results: list[ClipResult] = []
-    for scene in approved:
-        clip_url = None
-        rendered_ok = False
-        render_ms: float | None = None
-        try:
+    deadline = time.monotonic() + RENDER_JOB_DEADLINE_SECONDS
+    try:
+        for scene in approved:
+            chained = bool(scene.candidate_ids)
+            _, params_cls = (
+                get_chained_template(scene.template) if chained else get_template(scene.template)
+            )
+            try:
+                params = params_cls.model_validate(scene.params)
+            except ValidationError:
+                logger.exception("Stored params invalid for scene %s", scene.scene_id)
+                results.append(
+                    _clip_result(
+                        scene, status="error", clip_url=None,
+                        render_gate_status="failed", render_ms=None,
+                    )
+                )
+                continue
+
+            params_hash = _render_params_hash(
+                scene.template, params.model_dump(mode="json"), chained
+            )
+            cached = _resolve_cached_clip(session, scene, params_hash)
+            if cached is not None:
+                results.append(
+                    _clip_result(
+                        scene,
+                        status="fallback" if scene.fallback_reason else "approved",
+                        clip_url=cached,
+                        render_gate_status="passed",
+                        render_ms=None,
+                    )
+                )
+                continue
+
+            if time.monotonic() > deadline:
+                results.append(
+                    _clip_result(
+                        scene, status="timeout", clip_url=None,
+                        render_gate_status="failed", render_ms=None,
+                    )
+                )
+                continue
+
+            clip_url: str | None = None
+            render_ms: float | None = None
             output_path = session.output_dir / f"{scene.scene_id}-{uuid4()}.mp4"
-            started = time.perf_counter()
-            if scene.candidate_ids:
-                _, params_cls = get_chained_template(scene.template)
-                params = params_cls.model_validate(scene.params)
-                render_chained_scene_to_mp4(scene.template, params, output_path)
-            else:
-                _, params_cls = get_template(scene.template)
-                params = params_cls.model_validate(scene.params)
-                render_scene_to_mp4(scene.template, params, output_path)
-            render_ms = (time.perf_counter() - started) * 1000.0
-            clip_id = store.register_clip(output_path)
-            clip_url = f"/clips/{clip_id}"
-            status = "fallback" if scene.fallback_reason else "approved"
-            rendered_ok = True
-        except Exception:
-            logger.exception("Full render failed for scene %s", scene.scene_id)
-            status = "error"
-        _, program_hash, _, compile_ms = compile_scene_program(scene)
-        scene_gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
-        scene_gates.append(
-            Gate(
-                name="Full render",
-                category="Rendered output",
-                status="passed" if rendered_ok else "failed",
-                duration_ms=render_ms,
+            try:
+                started = time.perf_counter()
+                if chained:
+                    render_chained_scene_to_mp4(scene.template, params, output_path)
+                else:
+                    render_scene_to_mp4(scene.template, params, output_path)
+                render_ms = (time.perf_counter() - started) * 1000.0
+                clip_id = store.register_clip(output_path)
+                clip_url = f"/clips/{clip_id}"
+                status = "fallback" if scene.fallback_reason else "approved"
+                render_gate_status: Literal["passed", "failed"] = "passed"
+                with session.scenes_lock:
+                    current = session.scenes.get(scene.scene_id)
+                    if (
+                        current is not None
+                        and current.approved_revision == scene.approved_revision
+                    ):
+                        session.scenes[scene.scene_id] = current.model_copy(
+                            update={
+                                "render_path": output_path,
+                                "rendered_params_hash": params_hash,
+                            }
+                        )
+                        session.scene_clip_id[scene.scene_id] = clip_id
+            except RenderTimeout:
+                logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
+                status = "timeout"
+                render_gate_status = "failed"
+            except Exception:
+                logger.exception("Full render failed for scene %s", scene.scene_id)
+                status = "error"
+                render_gate_status = "failed"
+
+            results.append(
+                _clip_result(
+                    scene, status=status, clip_url=clip_url,
+                    render_gate_status=render_gate_status, render_ms=render_ms,
+                )
             )
-        )
-        results.append(
-            ClipResult(
-                scene_id=scene.scene_id,
-                candidate_id=scene.candidate_id,
-                candidate_ids=scene.candidate_ids,
-                status=status,
-                clip_url=clip_url,
-                fallback_reason=scene.fallback_reason,
-                gates=scene_gates,
-            )
-        )
+    finally:
+        with session.scenes_lock:
+            for scene in approved:
+                session.rendering_scene_ids.discard(scene.scene_id)
+
     return RenderResponse(clips=results)
 
 
