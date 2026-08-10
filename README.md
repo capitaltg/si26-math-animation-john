@@ -66,6 +66,16 @@ PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH" ../.venv/bin/uvicorn app.main
 
 Backend serves on `http://localhost:8000` (CORS allows the Vite dev origin `http://localhost:5173`).
 
+#### Deployment: single process only
+
+Session state (uploads, candidates, clips, thumbnails) is an in-memory
+`OrderedDict` in the backend process. Do **not** run with `uvicorn --workers
+N` (N > 1) or behind a load balancer across multiple backend instances: each
+worker/instance keeps its own session universe, so a request routed to a
+process that never saw the upload returns 400. Stay on one worker per
+instance until session state moves to a durable store (Redis / Postgres /
+etc.).
+
 ## Frontend
 
 ```bash

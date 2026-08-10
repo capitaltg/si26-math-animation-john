@@ -1,3 +1,14 @@
+"""Per-process session store.
+
+``SessionStore`` and its clip/thumbnail registries live in the memory of the
+Python process that instantiated them. They are **not** shared across
+``uvicorn --workers N`` processes or across multiple backend instances: a
+cookie routed to a worker that never saw the upload gets a 400. The demo runs
+a single ``uvicorn`` worker on purpose; do not raise ``--workers`` or scale
+horizontally without first moving session state to a durable, versioned store
+(Redis, Postgres row lock, etc.). See README "Deployment" note.
+"""
+
 import shutil
 import threading
 import time
