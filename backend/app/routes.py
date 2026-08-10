@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -8,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, File, HTTPException, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 from typing import Literal
@@ -28,6 +30,7 @@ from app.pipeline.compile import compile_scene_program
 from app.pipeline.discovery import discover_candidates_for_document
 from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
+from app.pipeline.pptx_guard import PptxGuardError, inspect_pptx_archive
 from app.pipeline.process_scene import assemble_scene
 from app.render.full_render import (
     RenderTimeout,
@@ -47,6 +50,10 @@ from app.templates.registry import (
 MAX_SLIDES = 50
 MAX_BATCH_SIZE = 50
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB, generous for a 50-slide PPTX with images
+#: Hard ceiling on wall-clock for python-pptx parsing. Guards against a
+#: malformed-but-preflight-passing archive that stalls the parser. Runs in a
+#: threadpool so the event loop is freed even if the worker thread hangs.
+PPTX_PARSE_TIMEOUT_SECONDS = float(os.environ.get("PPTX_PARSE_TIMEOUT_SECONDS", "30"))
 
 #: Ceiling on how many scenes /render will accept in one call. Bounds the
 #: worst-case wall-clock a single request can occupy a threadpool worker.
@@ -202,7 +209,28 @@ async def upload(response: Response, file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
     try:
         try:
-            slide_blocks = extract_slide_blocks(tmp_path)
+            inspect_pptx_archive(tmp_path)
+        except PptxGuardError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail},
+            ) from exc
+        try:
+            slide_blocks = await asyncio.wait_for(
+                run_in_threadpool(extract_slide_blocks, tmp_path),
+                timeout=PPTX_PARSE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "parse_timeout",
+                    "message": (
+                        "Parsing the .pptx file took longer than "
+                        f"{PPTX_PARSE_TIMEOUT_SECONDS:.0f}s and was aborted."
+                    ),
+                },
+            ) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Could not parse .pptx file") from exc
     finally:
