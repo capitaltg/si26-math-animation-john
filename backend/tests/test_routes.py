@@ -741,7 +741,7 @@ def test_render_renders_only_approved_from_stored_params(tmp_path):
     approved = approved.model_copy(update={"status": "approved"})
     _seed_scene(client, approved)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -776,7 +776,7 @@ def test_render_returns_manual_scene_results(tmp_path):
     )
     _seed_scene(client, manual)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -823,7 +823,7 @@ def test_render_one_failure_does_not_sink_batch(tmp_path):
 
     calls = {"n": 0}
 
-    def render_side_effect(template, params, out):
+    def render_side_effect(template, params, out, **_):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("boom")
@@ -857,7 +857,7 @@ def test_render_stored_param_validation_failure_does_not_sink_batch(tmp_path):
     _seed_scene(client, good)
     _seed_scene(client, bad)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -1431,7 +1431,7 @@ def test_approve_records_revision_edit_after_approve_does_not_authorize_render(t
         update={"params": {"start": 99, "steps": []}, "revision": stale.revision + 1}
     )
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 
@@ -1882,7 +1882,7 @@ def test_render_chained_scene_uses_chained_render_path(tmp_path):
     chained = _chained_number_line_scene().model_copy(update={"status": "approved"})
     _seed_scene(client, chained)
 
-    def fake_render(template, params, out):
+    def fake_render(template, params, out, **_):
         out.write_bytes(b"mp4")
         return out
 

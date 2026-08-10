@@ -50,6 +50,13 @@ class Session:
     #: Guards read-modify-write of `scenes` so a concurrent edit and approve
     #: can't silently overwrite one another; see `_write_scene_cas` in routes.py.
     scenes_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    #: Scene IDs currently being rendered by an in-flight /render call.
+    #: Guarded by `scenes_lock`. Prevents duplicate subprocess launches when a
+    #: client retries before the first request returns.
+    rendering_scene_ids: set[str] = field(default_factory=set, repr=False, compare=False)
+    #: scene_id -> clip_id last handed to the client for a successful render.
+    #: Lets an idempotent re-render return the same URL without re-registering.
+    scene_clip_id: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
 
 class SessionStore:
