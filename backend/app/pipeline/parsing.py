@@ -6,6 +6,11 @@ from typing import Literal
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+#: Ceiling on nested-group depth. Real decks nest a handful of levels; a
+#: crafted archive with hundreds of GroupShape wrappers would blow the Python
+#: recursion limit before python-pptx could return.
+_MAX_GROUP_DEPTH = 32
+
 
 @dataclass(frozen=True)
 class Block:
@@ -14,12 +19,16 @@ class Block:
     text: str
 
 
-def _extract_shape_blocks(shape, table_ords: "itertools.count") -> list[Block]:
+def _extract_shape_blocks(
+    shape, table_ords: "itertools.count", depth: int = 0
+) -> list[Block]:
     if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+        if depth >= _MAX_GROUP_DEPTH:
+            return []
         return [
             block
             for child in shape.shapes
-            for block in _extract_shape_blocks(child, table_ords)
+            for block in _extract_shape_blocks(child, table_ords, depth + 1)
         ]
     if getattr(shape, "has_table", False):
         table_ord = next(table_ords)
