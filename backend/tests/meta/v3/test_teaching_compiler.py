@@ -244,6 +244,33 @@ def test_perimeter_compiles_trace_before_answer(perimeter_plan, compile_context)
     assert program.timeline[trace].action.path_ref == "rectangle.perimeter"
 
 
+def test_boundary_trace_rejects_a_structural_supporting_visual(
+    perimeter_plan, perimeter_answer, compile_context,
+):
+    """The perimeter's derivation IS the traced boundary on the rectangle.
+
+    A second structural companion (e.g. a `number_line` beside the rectangle)
+    displaces the rectangle downward and invites off-lesson callouts anchored
+    to a scale the lesson never uses, so it is refused at compile time. The
+    published perimeter plan carries label supporting_visuals for a formula
+    caption, and those stay legal.
+    """
+    raw = perimeter_plan.model_dump()
+    raw["supporting_visuals"] = [{
+        "kind": "number_line", "ref": "nl",
+        "minimum": {"node": "literal", "value": 0.0},
+        "maximum": {"node": "literal", "value": 20.0},
+        "markers": [{"node": "literal", "value": 0.0}],
+    }]
+    plan = TeachingPlanDocument.model_validate(raw)
+
+    with pytest.raises(V3ValidationError, match="boundary_trace_forbids_foreign_structure_supporting_visual"):
+        compile_teaching_plan(
+            plan, perimeter_answer,
+            frozenset({"length", "width"}), compile_context,
+        )
+
+
 def test_a_visual_named_by_two_beats_is_revealed_once(
     published_perimeter_plan, perimeter_answer, compile_context,
 ):

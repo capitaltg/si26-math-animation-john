@@ -6,6 +6,7 @@ from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
 from app.meta.dsl.v3_common import TargetRef
 from app.meta.v3.beat_expander import (
+    STRUCTURE_VISUAL_KINDS,
     common_denominator_bridge_beat_id, equivalence_align_beat_id,
     expand_beats, magnitude_sweep_beat_id, percent_sweep_beat_id, regroup_beat_id,
 )
@@ -304,6 +305,8 @@ def validate_strategy_compatibility(plan, answer_expression=None):
         _validate_inverse_operation_compatibility(plan)
     if plan.strategy == "ray_shade":
         _validate_ray_shade_compatibility(plan)
+    if plan.strategy == "boundary_trace":
+        _validate_boundary_trace_compatibility(plan)
     if plan.strategy == "signed_hop":
         _validate_signed_hop_compatibility(plan)
     if plan.strategy == "distance_from_zero":
@@ -434,6 +437,38 @@ def _literal_number(expression):
     if expression is None or expression.node != "literal":
         return None
     return float(expression.value)
+
+
+def _validate_boundary_trace_compatibility(plan):
+    """`boundary_trace` teaches perimeter on the rectangle; no foreign scale.
+
+    The perimeter's derivation IS the traced boundary on the rectangle, so
+    admitting a structural companion of a DIFFERENT kind (e.g. a `number_line`
+    beside the rectangle) displaces the rectangle downward and invites
+    off-lesson callouts anchored to a scale the lesson never uses. A
+    same-kind rectangle supporting visual stays legal because it is the
+    transform target (`_TRANSFORM_COMPATIBILITY[rectangle_measurement]`
+    admits only rectangle_measurement), and label supporting_visuals stay
+    legal because they overlay the frame with text rather than claiming
+    their own placed region.
+    """
+    primary_kind = plan.primary_visual.kind
+    offending = [
+        spec for spec in plan.supporting_visuals
+        if spec.kind in STRUCTURE_VISUAL_KINDS and spec.kind != primary_kind
+    ]
+    if offending:
+        kinds = sorted({spec.kind for spec in offending})
+        _fail(
+            "boundary_trace_forbids_foreign_structure_supporting_visual",
+            "supporting_visuals",
+            f"no structural supporting visual of a kind other than {primary_kind!r}; "
+            "boundary_trace is taught on the rectangle alone (label and "
+            "same-kind supporting_visuals are still allowed)",
+            f"foreign structural supporting visual(s): {', '.join(kinds)}",
+            "remove the foreign structural supporting visual; the perimeter "
+            "trace on the rectangle is the whole derivation",
+        )
 
 
 def _validate_regroup_compatibility(plan):

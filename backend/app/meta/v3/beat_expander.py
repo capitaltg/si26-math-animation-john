@@ -38,6 +38,15 @@ _PROGRAM_VISUALS = {
     "data_display": (DataDisplayProgramVisual, "structure"),
 }
 
+#: Visual kinds that occupy layout as their own placed region rather than
+#: overlaying text. Compiler gates use this to keep a strategy that teaches on
+#: one structural visual (e.g. `boundary_trace` on a rectangle) from admitting a
+#: second structure alongside it -- neutral kinds (labels) don't displace the
+#: primary visual and stay legal.
+STRUCTURE_VISUAL_KINDS = frozenset(
+    kind for kind, (_, role) in _PROGRAM_VISUALS.items() if role == "structure"
+)
+
 _BEAT_TIMING = {
     "orient": (1.5, 1.0),
     "reveal": (2.0, 1.0),
