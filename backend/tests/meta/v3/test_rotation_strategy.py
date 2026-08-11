@@ -4,9 +4,10 @@ import math
 
 import pytest
 
-from app.meta.dsl.expression import LiteralNode
+from app.meta.dsl.expression import FieldRefNode, LiteralNode
 from app.meta.dsl.teaching_plan import (
-    CoordinatePlaneVisual, PolygonSpec, TeachingBeat, TeachingPlanDocument,
+    CoordinatePlaneVisual, CoordinatePointNode, PolygonSpec, TeachingBeat,
+    TeachingPlanDocument,
 )
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import compile_teaching_plan
@@ -133,6 +134,18 @@ def test_rotation_rejects_zero_polygons(compile_context):
     plane = _plane_with_triangle().model_copy(update={"polygons": []})
     with pytest.raises(V3ValidationError, match="rotation_requires_one_polygon"):
         _compile(_rotation_plan(primary_visual=plane), compile_context=compile_context)
+
+
+def test_rotation_rejects_field_ref_pivot(compile_context):
+    """`CoordinatePointNode.x`/`.y` are typed `ExpressionNode`, so a plan is
+    schema-legal with a field-ref pivot; `_compute_rotation_frames` must
+    refuse it with a named failure code rather than crash on arithmetic with
+    a non-numeric operand."""
+    plane = _plane_with_triangle()
+    field_ref_pivot = CoordinatePointNode(x=FieldRefNode(field="pivot_x"), y=_lit(0))
+    plane_field_ref_pivot = plane.model_copy(update={"pivot": field_ref_pivot})
+    with pytest.raises(V3ValidationError, match="rotation_requires_literal_geometry"):
+        _compile(_rotation_plan(primary_visual=plane_field_ref_pivot), compile_context=compile_context)
 
 
 def test_group_reveal_still_accepts_polygon_free_plane(compile_context):

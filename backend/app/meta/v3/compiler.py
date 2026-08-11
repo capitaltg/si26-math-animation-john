@@ -1375,10 +1375,13 @@ def _compute_rotation_frames(spec):
     x_max = _literal_number(spec.x_max)
     y_min = _literal_number(spec.y_min)
     y_max = _literal_number(spec.y_max)
-    assert None not in (pivot_x, pivot_y, x_min, x_max, y_min, y_max), (
-        "rotation requires a literal pivot and literal plane extent; "
-        "field-ref-driven rotation geometry is not supported"
-    )
+    if None in (pivot_x, pivot_y, x_min, x_max, y_min, y_max):
+        _fail(
+            "rotation_requires_literal_geometry", "primary_visual",
+            "a literal pivot and literal plane extent",
+            "pivot or plane extent is a non-literal expression node",
+            "for the M22 MVP, express pivot/x_min/x_max/y_min/y_max as literals",
+        )
 
     angle_rad = radians(spec.rotation_angle_deg)
     cos_a, sin_a = cos(angle_rad), sin(angle_rad)
@@ -1387,10 +1390,13 @@ def _compute_rotation_frames(spec):
         (_literal_number(vertex.x), _literal_number(vertex.y))
         for vertex in spec.polygons[0].vertices
     ]
-    assert all(x is not None and y is not None for x, y in current), (
-        "rotation requires literal polygon vertices; field-ref-driven "
-        "vertices are not supported"
-    )
+    if any(x is None or y is None for x, y in current):
+        _fail(
+            "rotation_requires_literal_geometry", "primary_visual.polygons",
+            "literal polygon vertices",
+            "a polygon vertex is a non-literal expression node",
+            "for the M22 MVP, express every polygon vertex as a literal",
+        )
 
     frames = []
     for iteration_index in range(spec.rotation_iterations):
