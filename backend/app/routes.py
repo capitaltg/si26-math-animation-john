@@ -32,6 +32,7 @@ from app.pipeline.mismatch import format_answer, scene_mismatch
 from app.pipeline.parsing import extract_slide_blocks
 from app.pipeline.pptx_guard import PptxGuardError, inspect_pptx_archive
 from app.pipeline.process_scene import assemble_scene
+from app.pipeline.template_answers import compute_answer_for
 from app.render.full_render import (
     RenderTimeout,
     render_chained_scene_thumbnail,
@@ -139,6 +140,11 @@ class RenderResponse(BaseModel):
     clips: list[ClipResult]
 
 
+class ComputedAnswer(BaseModel):
+    value: str
+    expression: str
+
+
 class SceneOut(BaseModel):
     scene_id: str
     candidate_id: str | None
@@ -157,6 +163,10 @@ class SceneOut(BaseModel):
     stated_answer_source: str | None = None
     mismatch: dict | None = None
     mismatch_acknowledged: bool = False
+    # Deterministic Python-computed answer for templates whose params class
+    # exposes one (e.g. array_grid). None when the template has no
+    # deterministic solution slot, or the scene is a chained group.
+    computed_answer: ComputedAnswer | None = None
     # Deterministic compile of (template, params) → executable scene program.
     # Same inputs always yield the same hash; audiences can rerun to verify.
     scene_program: dict | None = None
@@ -643,6 +653,9 @@ def _scene_out(session: Session, scene: Scene, candidates: list[Candidate]) -> S
     mismatch = scene_mismatch(scene)
     program, program_hash, program_size, compile_ms = compile_scene_program(scene)
     gates = _scene_gates(scene, program_hash=program_hash, compile_ms=compile_ms)
+    computed_answer_dict = None
+    if scene.template is not None and not scene.candidate_ids:
+        computed_answer_dict = compute_answer_for(scene.template.name, scene.params)
     return SceneOut(
         scene_id=scene.scene_id,
         candidate_id=scene.candidate_id,
@@ -666,6 +679,7 @@ def _scene_out(session: Session, scene: Scene, candidates: list[Candidate]) -> S
         compile_ms=compile_ms,
         program_size=program_size,
         gates=gates,
+        computed_answer=ComputedAnswer(**computed_answer_dict) if computed_answer_dict else None,
     )
 
 
