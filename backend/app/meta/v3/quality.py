@@ -201,7 +201,7 @@ def check_conclusion_hold(program) -> QualityCheck:
         shortest_conclusion_action + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS
         or conclusion_end > program.total_duration_seconds + 1e-9
     ):
-        return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 1.5 seconds")
+        return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 3 seconds")
     return _passed("conclusion_hold_too_short", "timeline")
 
 

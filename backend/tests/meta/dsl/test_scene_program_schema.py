@@ -22,7 +22,7 @@ def _program():
             "at_seconds": 0.0, "duration_seconds": 0.8, "beat_id": "reveal_values",
             "action": {"kind": "reveal", "targets": [{"visual_ref": "values"}], "mode": "together"},
         }],
-        "total_duration_seconds": 6.0,
+        "total_duration_seconds": 12.0,
         "variation_seed": "median-demo",
         "style_recipe": {
             "palette": "ocean", "composition": "vertical_lesson", "motion_variant": "smooth",
@@ -46,11 +46,11 @@ def test_program_rejects_generated_coordinates():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("total_duration_seconds", 5.99),
-    ("total_duration_seconds", 12.01),
-    ("timeline", [{"at_seconds": 0, "duration_seconds": 0.14, "beat_id": "x",
+    ("total_duration_seconds", 11.99),
+    ("total_duration_seconds", 24.01),
+    ("timeline", [{"at_seconds": 0, "duration_seconds": 0.29, "beat_id": "x",
                     "action": {"kind": "draw", "target": {"visual_ref": "values"}}}]),
-    ("timeline", [{"at_seconds": 0, "duration_seconds": 2.01, "beat_id": "x",
+    ("timeline", [{"at_seconds": 0, "duration_seconds": 4.01, "beat_id": "x",
                     "action": {"kind": "draw", "target": {"visual_ref": "values"}}}]),
 ])
 def test_program_enforces_shared_timing_bounds(field, value):
@@ -61,8 +61,8 @@ def test_program_enforces_shared_timing_bounds(field, value):
 
 
 @pytest.mark.parametrize("at_seconds,duration_seconds,total_duration_seconds", [
-    (11.9, 2.0, 12.0),
-    (5.5, 0.6, 6.0),
+    (23.9, 4.0, 24.0),
+    (11.5, 1.0, 12.0),
 ])
 def test_program_rejects_timeline_actions_beyond_scene_end(
     at_seconds, duration_seconds, total_duration_seconds,

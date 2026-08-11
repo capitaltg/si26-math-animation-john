@@ -39,22 +39,22 @@ _PROGRAM_VISUALS = {
 }
 
 _BEAT_TIMING = {
-    "orient": (0.75, 1.0),
-    "reveal": (1.0, 1.0),
-    "organize": (1.25, 1.25),
-    "focus": (1.0, 1.0),
-    "derive": (1.25, 1.25),
-    "conclude": (1.5, 1.5),
+    "orient": (1.5, 1.0),
+    "reveal": (2.0, 1.0),
+    "organize": (2.5, 1.25),
+    "focus": (2.0, 1.0),
+    "derive": (2.5, 1.25),
+    "conclude": (3.0, 1.5),
 }
 
 #: Seconds per eliminated pair. Below roughly a second the two partners change
 #: colour faster than a learner can register that they were a pair.
-_SECONDS_PER_PAIR = 1.3
+_SECONDS_PER_PAIR = 2.6
 #: `ordered_values` accepts up to 15 values (`dsl/limits.py`), and an uncapped
 #: seven-pair minimum overruns `MAX_SCENE_SECONDS` and raises
 #: `timeline_over_budget`. Capped, a long collection degrades to a faster pair
 #: step instead of failing to compile.
-_MAX_ELIMINATION_SECONDS = 6.0
+_MAX_ELIMINATION_SECONDS = 12.0
 
 #: Which semantic part each strategy's expander walks. Kept next to the strategy
 #: tables here rather than derived from `_PART_CARDINALITY` in `compiler.py`,

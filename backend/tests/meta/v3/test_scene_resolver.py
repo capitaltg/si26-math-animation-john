@@ -147,7 +147,7 @@ def test_resolve_scene_carries_a_declared_non_default_initial_role_through_order
             "at_seconds": 0.0, "duration_seconds": 1.0, "beat_id": "reveal_values",
             "action": {"kind": "reveal", "targets": [{"visual_ref": "values"}]},
         }],
-        "total_duration_seconds": 6.0,
+        "total_duration_seconds": 12.0,
         "variation_seed": "resolver-initial-role",
         "style_recipe": {"palette": "ocean", "composition": "vertical_lesson", "motion_variant": "smooth"},
     })

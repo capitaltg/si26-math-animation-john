@@ -800,12 +800,12 @@ def test_scheduler_batches_dense_same_beat_actions_without_exceeding_budget():
     assert all(entry.at_seconds + entry.duration_seconds <= total for entry in timeline)
 
 
-def test_scheduler_rejects_minimum_timeline_that_exceeds_twelve_seconds():
+def test_scheduler_rejects_minimum_timeline_that_exceeds_twenty_four_seconds():
     beats = [
         ExpandedBeat(
             beat_id=f"organize_{index}",
             actions=[SetRoleAction(target=TargetRef(visual_ref="values"), role="structure")],
-            minimum_seconds=1.25,
+            minimum_seconds=2.5,
             weight=1.0,
         )
         for index in range(9)
@@ -813,7 +813,7 @@ def test_scheduler_rejects_minimum_timeline_that_exceeds_twelve_seconds():
     beats.append(ExpandedBeat(
         beat_id="conclude",
         actions=[RevealAction(targets=[TargetRef(visual_ref="evaluated_answer")], mode="together")],
-        minimum_seconds=1.5,
+        minimum_seconds=3.0,
         weight=1.5,
     ))
 
@@ -827,8 +827,8 @@ def test_timeline_entries_fit_the_declared_total_duration(median_plan, answer, c
     )
 
     assert all(
-        entry.duration_seconds >= 0.15
-        and entry.duration_seconds <= 2
+        entry.duration_seconds >= 0.3
+        and entry.duration_seconds <= 4
         and entry.at_seconds + entry.duration_seconds <= program.total_duration_seconds
         for entry in program.timeline
     )

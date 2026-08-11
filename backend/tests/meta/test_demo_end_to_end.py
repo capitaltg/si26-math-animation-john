@@ -634,7 +634,7 @@ def test_demo_runbook_generates_reviews_publishes_and_reuses(lesson_fixture, req
     assert 3 <= len(beats) <= 5
     assert beats[-1]["kind"] == "conclude"
     assert detail["teaching_plan"]["strategy"] == lesson.teaching_plan["strategy"]
-    assert 6 <= detail["total_duration_seconds"] <= 12
+    assert 12 <= detail["total_duration_seconds"] <= 24
     assert detail["timeline"]
     assert detail["validation_report"]["passed"] is True
     assert detail["quality_report"]["passed"] is True

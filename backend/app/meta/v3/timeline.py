@@ -11,7 +11,7 @@ def schedule_beats(expanded_beats):
     duration.
     """
     minimum = sum(beat.minimum_seconds for beat in expanded_beats)
-    conclusion_floor = 1.5
+    conclusion_floor = 3.0
     if minimum > MAX_SCENE_SECONDS:
         raise V3ValidationError(V3Failure(
             code="timeline_over_budget",
@@ -20,7 +20,7 @@ def schedule_beats(expanded_beats):
             observed=f"{minimum:g} seconds",
             hint="simplify beats so the conclusion keeps its minimum hold",
         ))
-    target = min(12.0, max(6.0, minimum + conclusion_floor))
+    target = min(24.0, max(12.0, minimum + conclusion_floor))
     extra = target - minimum
     total_weight = sum(beat.weight for beat in expanded_beats)
     cursor = 0.0
