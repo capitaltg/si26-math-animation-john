@@ -123,3 +123,11 @@ body { margin:0; background:var(--bg); color:var(--ink);
   padding: var(--sp-3); color: var(--ink-2); text-align: center; }
 .stage__placeholder-title { font-family: var(--sans); font-size: 15px; }
 .stage__placeholder-note { color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
+
+.focus { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-4); max-width: 1280px; margin: 0 auto; }
+.focus__top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.focus__count { color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
+.focus__split { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: var(--sp-4); align-items: start; }
+@media (max-width: 900px) { .focus__split { grid-template-columns: 1fr; } }
+.focus__left, .focus__right { display: flex; flex-direction: column; gap: var(--sp-3); }
+.focus__actions { display: flex; gap: var(--sp-3); justify-content: flex-end; padding-top: var(--sp-3); border-top: 1px solid var(--line); }
