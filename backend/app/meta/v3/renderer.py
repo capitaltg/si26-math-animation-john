@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
-from math import tau
+from math import hypot, radians, tau
 
 from manim import (
     AnimationGroup,
@@ -25,12 +25,35 @@ from manim import (
 from app.meta.manim_primitives.motions import (
     build_move_along_path,
     build_role_transition,
+    rotate_polygon,
 )
 from app.meta.manim_primitives.style import resolve_semantic_style
+from app.meta.manim_primitives.visuals import build_polygon
 from app.meta.v3.geometry import Bounds, Point
 from app.meta.v3.manim_measurer import FONT_SIZES
 from app.meta.v3.resolver import ResolvedAction, ResolvedScene
 from app.meta.v3.visual_registry import DEFERRED_PARTS
+
+
+@dataclass(frozen=True)
+class RotationContext:
+    """M22 rotation geometry a `RotateAction` needs at dispatch time.
+
+    Derived once, at build time, from the same `measured.payload` fields
+    `_build_coordinate_plane` reads -- NOT re-derived from mobjects at
+    dispatch time, because a mobject's points reflect its CURRENT (i.e.
+    pre-animation) state when an `AnimationGroup` is being assembled, not
+    the pose it will occupy once the animation plays.
+    """
+    #: Degrees turned per iteration (constant across the sequence).
+    angle_deg: float
+    #: The layout scale every coordinate_plane label was built at, so a
+    #: replacement label (see `_build_rotate_animation`) matches its
+    #: siblings' font size.
+    scale: float
+    #: `label_targets[k][i]` is where vertex `i`'s letter belongs after
+    #: iteration `k + 1`, in absolute (offset-applied) scene coordinates.
+    label_targets: list[list[Point]]
 
 
 @dataclass(frozen=True)
@@ -47,6 +70,9 @@ class RenderedScene:
     #: Answer visual ref -> stage name -> mobject. Deliberately NOT in
     #: `targets`: a plan may address the answer, never one of its stages.
     answer_stages: dict[str, dict[str, object]] = field(default_factory=dict)
+    #: Visual ref -> M22 rotation geometry, for a coordinate_plane declaring
+    #: a rotation (empty otherwise). See `RotationContext`.
+    rotation_context: dict[str, RotationContext] = field(default_factory=dict)
 
 
 def render_resolved_scene(scene, resolved_scene: ResolvedScene) -> RenderedScene:
@@ -95,6 +121,7 @@ def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
     targets: dict[tuple[str, str | None, int | None], object] = {}
     roles: dict[tuple[str, str | None, int | None], str] = {}
     answer_stages: dict[str, dict[str, object]] = {}
+    rotation_context: dict[str, RotationContext] = {}
     staged_refs = _staged_answer_refs(scene.timeline)
     for placed in scene.visuals:
         payload = placed.measured.payload
@@ -112,10 +139,14 @@ def _build_vertical_lesson(scene: ResolvedScene, palette: str) -> RenderedScene:
         role = _initial_role(placed.measured.ref, payload)
         roles[(placed.measured.ref, None, None)] = role
         roles.update({(placed.measured.ref, part, index): role for part, index in children})
+        if isinstance(payload, dict):
+            context = _rotation_context(payload, placed)
+            if context is not None:
+                rotation_context[placed.measured.ref] = context
     relations = {relation.ref: _build_relation(relation, palette) for relation in scene.relations}
     return RenderedScene(
         visuals=visuals, targets=targets, relations=relations, roles=roles,
-        answer_stages=answer_stages,
+        answer_stages=answer_stages, rotation_context=rotation_context,
     )
 
 
@@ -215,7 +246,7 @@ def _build_visual(placed, palette: str):
     elif "text" in payload:
         root, children = _text(payload["text"], "label", bounds.center, placed.scale), {}
     elif "x_ticks" in payload:
-        root, children = _build_coordinate_plane(measured, placed)
+        root, children = _build_coordinate_plane(measured, placed, palette)
     elif "markers" in payload:
         root, children = _line_visual(placed, "marker")
         root.add(*_number_line_labels(measured, placed))
@@ -364,7 +395,7 @@ def _number_line_labels(measured, placed):
     ]
 
 
-def _build_coordinate_plane(measured, placed):
+def _build_coordinate_plane(measured, placed, palette: str):
     """Axes projected through the world origin, plus dots and labels.
 
     Axis endpoints and tick coordinates come from payload (unscaled) and are
@@ -375,6 +406,15 @@ def _build_coordinate_plane(measured, placed):
     group but NOT registered as children -- nothing in the compiler addresses
     them, and inventing target keys for glyphs would let a plan target a
     label the archetype does not expose (mirrors `_number_line_labels`).
+
+    M22 adds an optional pivot dot, an optional primary polygon with
+    auto-lettered vertex labels, and a hidden ghost polygon per rotation
+    frame the polygon will visit. The primary polygon, its labels, and the
+    pivot are added to `root` (visible from the visual's own reveal, like
+    everything else here); ghosts are registered as children -- so
+    `RotateAction` dispatch can address them -- but deliberately held out of
+    `root`, mirroring how `_add_ray_shade_children` holds `DEFERRED_PARTS`
+    back until their own reveal plays.
     """
     payload = measured.payload
     scale, offset = placed.scale, placed.offset
@@ -448,11 +488,105 @@ def _build_coordinate_plane(measured, placed):
             label_x = u
             label_y = v + (point_offset + point["label_height"] / 2) * scale
         point_labels.append(_text(point["label"], "label", Point(label_x, label_y), scale))
+
+    pivot_labels = []
+    pivot_payload = payload.get("pivot")
+    if pivot_payload is not None:
+        pivot_u = pivot_payload[0] * scale + cx
+        pivot_v = pivot_payload[1] * scale + cy
+        children[("pivot", None)] = Dot(_array(Point(pivot_u, pivot_v)))
+        pivot_labels.append(_text(
+            "pivot", "label", Point(pivot_u + 0.2 * scale, pivot_v + 0.2 * scale), scale,
+        ))
+
+    for polygon in payload.get("polygons", ()):
+        scene_vertices = [
+            Point(vx * scale + cx, vy * scale + cy) for vx, vy in polygon["vertices"]
+        ]
+        structure_color = resolve_semantic_style(palette, "structure")["color"]
+        children[("polygon", 0)] = build_polygon(
+            [(vertex.x, vertex.y) for vertex in scene_vertices],
+            stroke_color=structure_color, fill_color=structure_color,
+            fill_opacity=0.15, stroke_width=3.0,
+        )
+        centroid = Point(
+            sum(vertex.x for vertex in scene_vertices) / len(scene_vertices),
+            sum(vertex.y for vertex in scene_vertices) / len(scene_vertices),
+        )
+        for index, vertex in enumerate(scene_vertices):
+            letter = chr(ord("A") + index)
+            label_point = _polygon_label_point(vertex, centroid)
+            children[("polygon_vertex_label", index)] = _text(letter, "label", label_point, scale)
+
+        # Ghosts: one per pose the polygon vacates -- the initial pose plus
+        # every intermediate frame (the LAST frame is never ghosted; it is
+        # where the primary ends up, not a pose it left behind).
+        rotation_frames = payload.get("rotation_frames") or ()
+        if rotation_frames:
+            ghost_data_frames = (polygon["vertices"], *rotation_frames[:-1])
+            for ghost_index, frame in enumerate(ghost_data_frames):
+                ghost_vertices = [(vx * scale + cx, vy * scale + cy) for vx, vy in frame]
+                ghost = build_polygon(
+                    ghost_vertices,
+                    stroke_color=structure_color, fill_color=structure_color,
+                    fill_opacity=0.05, stroke_width=1.5,
+                )
+                ghost.set_stroke(opacity=0.3)
+                children[("polygon_ghost", ghost_index)] = ghost
+
+    # Ghosts stay out of `root`: `RotateAction` dispatch reveals each one with
+    # its own `FadeIn` exactly when the polygon vacates that pose.
+    visible_children = [
+        child for (part, _index), child in children.items() if part != "polygon_ghost"
+    ]
     root = VGroup(
         *grid_lines, x_axis, y_axis, *tick_mobjects, *tick_labels,
-        *children.values(), *point_labels,
+        *visible_children, *point_labels, *pivot_labels,
     )
     return root, children
+
+
+def _polygon_label_point(vertex: Point, centroid: Point) -> Point:
+    """A short outward step from `centroid` through `vertex`.
+
+    `PolygonSpec` caps a plane at one polygon (schema `max_length=1`), so
+    there is never a second polygon's label to collide with; a fixed
+    outward offset is enough to keep a vertex letter clear of the polygon's
+    own stroke without the tick/point label placer's collision search.
+    """
+    dx, dy = vertex.x - centroid.x, vertex.y - centroid.y
+    length = hypot(dx, dy) or 1.0
+    step = 0.35
+    return Point(vertex.x + step * dx / length, vertex.y + step * dy / length)
+
+
+def _rotation_context(payload, placed) -> RotationContext | None:
+    """Where each vertex letter belongs after every rotation iteration.
+
+    `None` when the visual is not a rotation (no `rotation_frames`, no
+    polygon, or no angle) -- the overwhelming majority of coordinate_plane
+    visuals, which just plot points. Computed once at build time because a
+    `RotateAction`, dispatched later, only has the polygon mobject's CURRENT
+    (pre-animation) points to read from -- not the pose it is about to
+    rotate into.
+    """
+    rotation_frames = payload.get("rotation_frames")
+    polygons = payload.get("polygons")
+    angle_deg = payload.get("rotation_angle_deg")
+    if not rotation_frames or not polygons or angle_deg is None:
+        return None
+    scale, offset = placed.scale, placed.offset
+    label_targets = []
+    for frame in rotation_frames:
+        scene_vertices = [
+            Point(vx * scale + offset.x, vy * scale + offset.y) for vx, vy in frame
+        ]
+        centroid = Point(
+            sum(vertex.x for vertex in scene_vertices) / len(scene_vertices),
+            sum(vertex.y for vertex in scene_vertices) / len(scene_vertices),
+        )
+        label_targets.append([_polygon_label_point(vertex, centroid) for vertex in scene_vertices])
+    return RotationContext(angle_deg=angle_deg, scale=scale, label_targets=label_targets)
 
 
 def _build_data_display(measured, placed, palette: str):
@@ -1016,6 +1150,8 @@ def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, p
         return Create(_build_signed_hop_arrow(action, palette))
     if kind == "distance_annotation":
         return Create(_build_distance_annotation(action, palette))
+    if kind == "rotate":
+        return _build_rotate_animation(action, rendered, palette)
     raise ValueError(f"unsupported resolved action {kind}")
 
 
@@ -1078,6 +1214,46 @@ def _build_distance_annotation(action, palette: str):
     return group
 
 
+def _build_rotate_animation(action: ResolvedAction, rendered: RenderedScene, palette: str):
+    """One discrete rotation step: reveal the vacated ghost, spin the
+    polygon about its pivot, and re-letter the vertices with one more
+    prime mark (M22).
+
+    `action.action.target` (the ORIGINAL, unresolved `TargetRef`) is read
+    directly rather than `action.targets[0].ref`: `resolver.bind_timeline`
+    has no `RotateAction` branch in `action_targets`/`_action_target_items`,
+    so a `RotateAction`'s resolved `targets` list is always empty.
+
+    `run_time` comes from `action.duration_seconds` (i.e. the timeline
+    entry's `TimedAction.duration_seconds`), not a fixed constant -- the
+    scheduler distributes slot time proportionally across a beat's actions,
+    so a per-action literal would drift out of sync with every OTHER
+    animation this same call composes into (the ghost reveal, the label
+    re-letter).
+    """
+    rotate = action.action
+    ref = rotate.target.visual_ref
+    iteration = rotate.iteration
+    context = rendered.rotation_context[ref]
+    polygon = rendered.targets[(ref, "polygon", 0)]
+    ghost = rendered.targets[(ref, "polygon_ghost", iteration - 1)]
+    pivot_point = tuple(rendered.targets[(ref, "pivot", None)].get_center())
+    animations = [
+        FadeIn(ghost),
+        rotate_polygon(
+            polygon, angle_rad=radians(context.angle_deg),
+            about_scene_point=pivot_point, run_time=action.duration_seconds,
+        ),
+    ]
+    for vertex_index, label_point in enumerate(context.label_targets[iteration - 1]):
+        label_key = (ref, "polygon_vertex_label", vertex_index)
+        letter = chr(ord("A") + vertex_index)
+        new_label = _text(letter + "′" * iteration, "label", label_point, context.scale)
+        _apply_style(new_label, resolve_semantic_style(palette, rendered.roles[label_key]))
+        animations.append(Transform(rendered.targets[label_key], new_label))
+    return AnimationGroup(*animations)
+
+
 def _stage_transition(rendered: RenderedScene, ref, stage: str, style: dict | None = None):
     """Morph the answer text into one of its later stages.
 
@@ -1096,6 +1272,11 @@ def _stage_transition(rendered: RenderedScene, ref, stage: str, style: dict | No
 def _action_target(action: ResolvedAction):
     if action.action.kind in {"draw", "move"}:
         return _target_tuple(action.targets[0].ref)
+    if action.action.kind == "rotate":
+        # `action.targets` is always empty for `rotate` (see
+        # `_build_rotate_animation`'s docstring) -- read the target straight
+        # off the action instead of the usual `action.targets[0].ref`.
+        return _target_tuple(action.action.target)
     return None
 
 
