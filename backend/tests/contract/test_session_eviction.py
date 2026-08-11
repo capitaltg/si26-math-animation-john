@@ -65,8 +65,10 @@ def test_lru_eviction_clears_every_known_state_location(tmp_path):
 
     # Sanity: everything is present before eviction.
     assert store.get(session_id) is victim
-    assert store.get_clip(clip_id) == clip_path
-    assert store.get_thumbnail(thumb_id) == thumb_path
+    assert store.get_clip(clip_id, caller_session_id=session_id) == clip_path
+    assert (
+        store.get_thumbnail(thumb_id, caller_session_id=session_id) == thumb_path
+    )
     assert output_dir.is_dir()
 
     # Trigger LRU eviction by pushing a second session past max_sessions.
