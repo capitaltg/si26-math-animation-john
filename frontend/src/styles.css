@@ -939,6 +939,13 @@ h3 {
   padding: 0.75rem;
 }
 
+.inset__caption {
+  margin: 0.45rem 0 0;
+  color: var(--ink-on-slate-soft);
+  font-size: var(--t-xs);
+  text-align: center;
+}
+
 /* ---------- Stage stamps ---------- */
 
 .stamps {
