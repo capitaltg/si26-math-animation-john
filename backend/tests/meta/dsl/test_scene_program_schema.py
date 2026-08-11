@@ -160,3 +160,37 @@ def test_the_unknown_stage_is_not_an_addressable_stage():
         ShowAnswerStageAction(
             target=TargetRef(visual_ref="evaluated_answer"), stage="unknown",
         )
+
+
+def test_rotate_action_is_a_valid_program_action():
+    """M22: RotateAction joins ProgramAction. Compiler-emitted only."""
+    from app.meta.dsl.scene_program import RotateAction
+
+    action = RotateAction(target={"visual_ref": "plane"}, iteration=2)
+    assert action.kind == "rotate"
+    assert action.iteration == 2
+
+
+def test_rotate_action_rejects_iteration_out_of_range():
+    from pydantic import ValidationError
+
+    from app.meta.dsl.scene_program import RotateAction
+
+    with pytest.raises(ValidationError):
+        RotateAction(target={"visual_ref": "plane"}, iteration=5)
+    with pytest.raises(ValidationError):
+        RotateAction(target={"visual_ref": "plane"}, iteration=0)
+
+
+def test_coordinate_plane_program_visual_defaults_rotation_frames_empty():
+    from app.meta.dsl.scene_program import CoordinatePlaneProgramVisual
+    from app.meta.dsl.teaching_plan import LiteralNode
+
+    def lit(v):
+        return LiteralNode(value=v)
+
+    program_visual = CoordinatePlaneProgramVisual(
+        ref="plane",
+        x_min=lit(-5), x_max=lit(5), y_min=lit(-5), y_max=lit(5),
+    )
+    assert program_visual.rotation_frames == []

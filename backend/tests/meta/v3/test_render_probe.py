@@ -1,9 +1,13 @@
+import hashlib
+
 import pytest
 
 from app.meta.artifacts import artifact_exists
 from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
 from app.meta.dsl.scene_program import RevealAction
-from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.teaching_plan import (
+    CoordinatePlaneVisual, PolygonSpec, TeachingBeat, TeachingPlanDocument,
+)
 from app.meta.dsl.v3_common import CompileContext, TargetRef
 from app.meta.preview_render import render_preview_and_probe
 from app.meta.v3.compiler import compile_teaching_plan
@@ -607,3 +611,105 @@ def test_a_number_line_lesson_renders_with_its_marker_labels():
     )).manifest
 
     assert "distance_line" in manifest["visual_bounds"]
+
+
+def _rotation_program():
+    """A compiled `rotation` program: one triangle, pivoted at the origin,
+    turned 90 degrees three times. Mirrors `test_rotation_strategy.py`'s
+    `_plane_with_triangle`/`_rotation_plan` fixtures.
+    """
+    plan = TeachingPlanDocument(
+        plan_version=3,
+        learning_objective="Rotate a triangle 90 degrees about the origin three times.",
+        primary_visual=CoordinatePlaneVisual(
+            ref="plane",
+            x_min=LiteralNode(value=-5), x_max=LiteralNode(value=5),
+            y_min=LiteralNode(value=-5), y_max=LiteralNode(value=5),
+            polygons=[PolygonSpec(
+                ref="tri",
+                vertices=[
+                    {"x": LiteralNode(value=1), "y": LiteralNode(value=0)},
+                    {"x": LiteralNode(value=3), "y": LiteralNode(value=0)},
+                    {"x": LiteralNode(value=2), "y": LiteralNode(value=2)},
+                ],
+            )],
+            pivot={"x": LiteralNode(value=0), "y": LiteralNode(value=0)},
+            rotation_angle_deg=90,
+            rotation_iterations=3,
+        ),
+        strategy="rotation",
+        beats=[
+            TeachingBeat(id="reveal", kind="reveal",
+                         targets=[{"visual_ref": "plane"}], intent="Show the triangle."),
+            TeachingBeat(id="derive", kind="derive",
+                         targets=[{"visual_ref": "plane"}], intent="Rotate it three times."),
+            TeachingBeat(id="conclude", kind="conclude",
+                         targets=[{"visual_ref": "plane"}], intent="Land the final image."),
+        ],
+        variation_seed="rotation-probe",
+    )
+    return compile_teaching_plan(
+        plan, LiteralNode(value=0), frozenset(),
+        CompileContext(concept_family="geometry", grade_band="6-8"),
+    )
+
+
+def test_a_rotation_lesson_renders_through_the_probe():
+    """M22 happy path: polygon + pivot + ghost trail + `RotateAction`
+    dispatch must survive a REAL render, not just direct calls into
+    `_build_vertical_lesson`. The `vertex`/`object_set` bugs this module's
+    other probe tests guard against both compiled and passed the static
+    gate, then raised inside `_build_visual` -- a real render is the only
+    proof the payload keys the M22 measurer emits and the ones the M22
+    renderer reads actually agree.
+    """
+    program = _rotation_program()
+
+    manifest = run_probe_subprocess(ProbeRequest(
+        scene_program=program, known_fields=[], field_values={},
+    )).manifest
+
+    assert "plane" in manifest["visual_bounds"]
+    # `rotation`'s answer anchor is the polygon itself (compiler._answer_anchor);
+    # its persistence to the final frame is exactly what `check_final_answer_
+    # persistence` gates on, and it passes: the polygon mobject `RotateAction`
+    # dispatch spins in place stays the SAME python object throughout, still
+    # part of the plane's root group in the final frame.
+    assert manifest["answer_anchor"] == "plane.polygon[0]"
+    assert manifest["final_answer_visible"] is True
+
+    # `state_order_invalid` used to be a known gap here: `check_state_order`
+    # requires the declared `answer_anchor` ("plane.polygon[0]") to receive
+    # its own `set_role(focus)` state event, but `beat_expander`'s rotation
+    # branch used to fire the derive beat's generic focus on the WHOLE plane
+    # (`_generic_role_change(beat, "focus", ...)`, beat.targets =
+    # [{"visual_ref": "plane"}]) rather than on the polygon part the anchor
+    # names. That branch now emits its `focus` role change on the polygon
+    # target directly (`TargetRef(visual_ref=ref, part="polygon", index=0)`),
+    # matching `compiler._answer_anchor` exactly -- `polygon` still isn't a
+    # `compiler._PART_CARDINALITY["coordinate_plane"]` entry a PLAN could
+    # target itself, but a compiler-generated action never runs back through
+    # `_validate_target`, so the mismatch was only ever in beat_expander's own
+    # emission, not in what the schema allows. The render now passes every
+    # quality check with no failures.
+    assert _failure_codes(manifest) == set()
+
+
+def test_a_rotation_lesson_probe_is_stable_across_two_runs():
+    """Same program, same field values, same rendered artifact.
+
+    A probe whose output drifted run-to-run for identical input would make
+    the generation pipeline's retry loop -- and the manifest-driven quality
+    gate itself -- meaningless; this pins the render as deterministic the
+    same way `store_artifact`'s content hash de-duplicates identical frames.
+    """
+    program = _rotation_program()
+    request = ProbeRequest(scene_program=program, known_fields=[], field_values={})
+
+    first = run_probe_subprocess(request)
+    second = run_probe_subprocess(request)
+
+    first_hash = hashlib.sha256(first.final_frame_bytes).hexdigest()
+    second_hash = hashlib.sha256(second.final_frame_bytes).hexdigest()
+    assert first_hash == second_hash
+    assert first.manifest["visual_bounds"] == second.manifest["visual_bounds"]

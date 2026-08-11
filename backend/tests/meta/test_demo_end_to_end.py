@@ -284,6 +284,79 @@ PERIMETER_LESSON = DemoLesson(
     second_answer=28,
 )
 
+# M22: "Rotate a triangle 90 degrees about the origin, 3 times -- where
+# does it land?" The rotated image itself IS the answer (there is no derived
+# numeric result), so `answer_expression` and `params_document` carry a
+# decorative `turns` field -- referenced only by the answer statement, never
+# by the polygon/pivot geometry, which `compiler._compute_rotation_frames`
+# requires to be literal. Vertices/pivot/angle/extent mirror
+# `tests/meta/v3/test_render_probe.py::_rotation_program` and
+# `tests/meta/v3/test_rotation_strategy.py::_plane_with_triangle`, both of
+# which already exercise this exact triangle through the compiler and a real
+# render.
+ROTATION_LESSON = DemoLesson(
+    template_name="rotate_triangle",
+    source_excerpt="Rotate △ABC 90° about the origin, 3 times -- where does it land?",
+    fingerprint=Fingerprint(
+        fingerprint_version=1, operation_family="transform", representation_family="coordinate",
+        number_domain="whole", operand_arity=1, step_count=3, grade_band="6-8",
+    ),
+    params_document={
+        "params_version": 1,
+        "fields": [
+            {"type": "integer", "name": "turns", "label": "Number of turns",
+             "description": "How many times the triangle is rotated", "minimum": 1, "maximum": 4},
+        ],
+    },
+    guard_document={
+        "guard_version": 1,
+        "predicates": [
+            {"predicate": "positive", "value": {"node": "field_ref", "field": "turns"}},
+        ],
+    },
+    answer_expression={"node": "field_ref", "field": "turns"},
+    teaching_plan={
+        "plan_version": 3,
+        "learning_objective": "Rotate a triangle 90 degrees about the origin three times.",
+        "primary_visual": {
+            "kind": "coordinate_plane", "ref": "plane",
+            "x_min": {"node": "literal", "value": -5}, "x_max": {"node": "literal", "value": 5},
+            "y_min": {"node": "literal", "value": -5}, "y_max": {"node": "literal", "value": 5},
+            "polygons": [{
+                "ref": "tri",
+                "vertices": [
+                    {"x": {"node": "literal", "value": 1}, "y": {"node": "literal", "value": 0}},
+                    {"x": {"node": "literal", "value": 3}, "y": {"node": "literal", "value": 0}},
+                    {"x": {"node": "literal", "value": 2}, "y": {"node": "literal", "value": 2}},
+                ],
+            }],
+            "pivot": {"x": {"node": "literal", "value": 0}, "y": {"node": "literal", "value": 0}},
+            "rotation_angle_deg": 90,
+            "rotation_iterations": 3,
+        },
+        "strategy": "rotation",
+        "beats": [
+            {"id": "reveal", "kind": "reveal", "targets": [{"visual_ref": "plane"}],
+             "intent": "Show the triangle at its starting position."},
+            {"id": "derive", "kind": "derive", "targets": [{"visual_ref": "plane"}],
+             "intent": "Rotate the triangle 90 degrees about the origin, three times."},
+            {"id": "conclude", "kind": "conclude", "targets": [{"visual_ref": "plane"}],
+             "intent": "Land on the final rotated image."},
+        ],
+        "variation_seed": "demo-rotation",
+    },
+    classifier_bullet="Rotate a polygon about a fixed point a whole number of times.",
+    primary_visual_ref="plane",
+    expected_beat_ids=["reveal", "derive", "conclude"],
+    verified_params={"turns": 3},
+    verified_answer=3,
+    negative_params=[
+        {"turns": 0},  # witnesses `positive`
+    ],
+    second_params={"turns": 4},
+    second_answer=4,
+)
+
 
 def _proposal(lesson: DemoLesson, observation_id: str) -> dict:
     """The bounded tool payload Bedrock is mocked to return for this lesson.
@@ -575,6 +648,11 @@ def rendered_perimeter(client, tmp_path):
     return _run_demo_lesson(client, PERIMETER_LESSON, tmp_path)
 
 
+@pytest.fixture
+def rendered_rotation(client, tmp_path):
+    return _run_demo_lesson(client, ROTATION_LESSON, tmp_path)
+
+
 # --------------------------------------------------------- runbook assertions
 
 
@@ -694,6 +772,62 @@ def test_demo_runbook_generates_reviews_publishes_and_reuses(lesson_fixture, req
 def test_demo_answers_are_correct_for_both_slides_of_both_lessons():
     # Semantic guard, independent of rendering: each published template's answer
     # expression resolves to the answers the runbook tells the presenter to expect.
-    for lesson in (MEDIAN_LESSON, PERIMETER_LESSON):
+    for lesson in (MEDIAN_LESSON, PERIMETER_LESSON, ROTATION_LESSON):
         assert _evaluate_answer(lesson, lesson.verified_params) == Fraction(lesson.verified_answer)
         assert _evaluate_answer(lesson, lesson.second_params) == Fraction(lesson.second_answer)
+
+
+def test_rotation_demo_slide_approves_end_to_end(rendered_rotation):
+    """M22 demo slide: 'Rotate △ABC 90° about the origin, 3 times -- where
+    does it land?' approves without hitting Bedrock beyond the mocked
+    `propose_template_draft` call, through the exact runbook
+    (`_run_demo_lesson`) the median/perimeter demo lessons drive: generate,
+    validate, preview, verify the fixture, approve, publish, and re-probe and
+    re-render the published program.
+
+    `rotation`'s answer is the rotated image itself, not a number, so this
+    doesn't reuse `_answer_text`/`_geometry_signature` (built for an
+    answer embedded in a collection's own values) -- it asserts directly on
+    the published `SceneProgramDocument`'s `rotation_frames` and `RotateAction`
+    timeline entries instead, plus that the full quality report -- which
+    includes `check_state_order` -- comes back with zero failing checks. That
+    last assertion is the end-to-end proof that staging the rotation beat's
+    `focus` role change on the polygon part (not the whole plane) actually
+    satisfies `check_state_order`'s declared-vs-observed match against
+    `answer_anchor`, not just the isolated probe fixture in
+    `test_render_probe.py`.
+    """
+    result = rendered_rotation
+    runbook = result.runbook
+
+    assert runbook["draft_status"] == models.DRAFT_PENDING_REVIEW
+    assert runbook["approval_status"] == 200, runbook["approval"]
+    assert runbook["approval"]["status"] == "enabled"
+    assert runbook["approval"]["template_name"] == "rotate_triangle"
+
+    plane = next(
+        visual for visual in result.published_program.visuals
+        if visual.kind == "coordinate_plane"
+    )
+    assert len(plane.rotation_frames) == 3
+
+    rotate_actions = [
+        entry for entry in result.published_program.timeline
+        if entry.action.kind == "rotate"
+    ]
+    assert len(rotate_actions) == 3
+    assert [entry.action.iteration for entry in rotate_actions] == [1, 2, 3]
+
+    assert result.published_program.answer_anchor.model_dump() == {
+        "visual_ref": "plane", "part": "polygon", "index": 0,
+    }
+
+    # The full quality report -- gathered from a real render of the published
+    # program -- must show every check passing, `state_order_invalid` included.
+    assert result.stored_quality_report["passed"] is True
+    assert [
+        check for check in result.stored_quality_report["checks"] if not check["passed"]
+    ] == []
+
+    # Reuse on slide 2: a real MP4 renders for a second parameter set.
+    assert result.mp4_path.exists() and result.mp4_path.stat().st_size > 0

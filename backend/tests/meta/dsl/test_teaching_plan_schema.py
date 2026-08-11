@@ -272,3 +272,86 @@ def test_answer_unit_carries_the_unit_of_the_result():
     plan = TeachingPlanDocument.model_validate(raw)
 
     assert plan.answer_unit == "meters"
+
+
+def test_coordinate_plane_accepts_polygon_pivot_and_rotation_fields():
+    """M22 (#169): rotation on coordinate_plane declares a polygon, a pivot,
+    an angle, and an iteration count."""
+    from app.meta.dsl.teaching_plan import CoordinatePlaneVisual, LiteralNode
+
+    def lit(v):
+        return LiteralNode(value=v)
+
+    plane = CoordinatePlaneVisual(
+        ref="plane",
+        x_min=lit(-5), x_max=lit(5), y_min=lit(-5), y_max=lit(5),
+        polygons=[{
+            "ref": "tri",
+            "vertices": [
+                {"x": lit(1), "y": lit(0)},
+                {"x": lit(3), "y": lit(0)},
+                {"x": lit(2), "y": lit(2)},
+            ],
+        }],
+        pivot={"x": lit(0), "y": lit(0)},
+        rotation_angle_deg=90,
+        rotation_iterations=3,
+    )
+
+    assert plane.rotation_angle_deg == 90
+    assert plane.rotation_iterations == 3
+    assert plane.polygons[0].ref == "tri"
+    assert len(plane.polygons[0].vertices) == 3
+    assert plane.pivot is not None
+
+
+def test_coordinate_plane_rejects_two_polygons_at_schema_time():
+    """MVP schema caps polygons at one primary polygon."""
+    from pydantic import ValidationError
+    from app.meta.dsl.teaching_plan import CoordinatePlaneVisual, LiteralNode
+
+    def lit(v):
+        return LiteralNode(value=v)
+
+    poly = {
+        "ref": "tri",
+        "vertices": [
+            {"x": lit(1), "y": lit(0)},
+            {"x": lit(3), "y": lit(0)},
+            {"x": lit(2), "y": lit(2)},
+        ],
+    }
+    with pytest.raises(ValidationError):
+        CoordinatePlaneVisual(
+            ref="plane",
+            x_min=lit(-5), x_max=lit(5), y_min=lit(-5), y_max=lit(5),
+            polygons=[poly, poly],
+        )
+
+
+def test_coordinate_plane_rejects_polygon_with_two_vertices():
+    """A polygon needs at least three vertices to bound area."""
+    from pydantic import ValidationError
+    from app.meta.dsl.teaching_plan import CoordinatePlaneVisual, LiteralNode
+
+    def lit(v):
+        return LiteralNode(value=v)
+
+    with pytest.raises(ValidationError):
+        CoordinatePlaneVisual(
+            ref="plane",
+            x_min=lit(-5), x_max=lit(5), y_min=lit(-5), y_max=lit(5),
+            polygons=[{
+                "ref": "tri",
+                "vertices": [{"x": lit(0), "y": lit(0)}, {"x": lit(1), "y": lit(1)}],
+            }],
+        )
+
+
+def test_teaching_plan_strategy_literal_accepts_rotation():
+    """The strategy enum gains `rotation` (M22)."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    import typing
+    hints = typing.get_type_hints(TeachingPlanDocument)
+    literal_args = typing.get_args(hints["strategy"])
+    assert "rotation" in literal_args
