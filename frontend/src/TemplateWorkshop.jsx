@@ -177,10 +177,13 @@ function ReadyBand({ draft, onApprove, onReject, busy, error }) {
       <div className="workshop__grid">
         <div className="inset">
           {draft.preview_url ? (
-            <img
-              src={draft.preview_url}
-              alt={`First frame of the visual built for this problem, attempt ${draft.revision}`}
-            />
+            <>
+              <img
+                src={draft.preview_url}
+                alt={`First frame of the visual built for this problem, attempt ${draft.revision}`}
+              />
+              <p className="inset__caption">First frame preview</p>
+            </>
           ) : (
             <div className="inset__empty">Preview unavailable</div>
           )}
@@ -224,7 +227,7 @@ function ReadyBand({ draft, onApprove, onReject, busy, error }) {
           disabled={busy}
           onChange={(event) => setConfirmed(event.target.checked)}
         />
-        I have watched the preview and it teaches this correctly
+        I have reviewed the preview frame and it teaches this correctly
       </label>
 
       <div className="actions">
