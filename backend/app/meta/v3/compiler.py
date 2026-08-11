@@ -1346,7 +1346,9 @@ def _validate_rotation_compatibility(plan):
 
     iterations = spec.rotation_iterations
     angle_deg = spec.rotation_angle_deg
-    if iterations > 1 and (iterations * angle_deg) % 360 == 0:
+    if iterations > 1 and any(
+        (k * angle_deg) % 360 == 0 for k in range(1, iterations + 1)
+    ):
         _fail(
             "rotation_returns_to_start", "primary_visual",
             "iterations * angle_deg NOT a multiple of 360 degrees",

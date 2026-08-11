@@ -130,6 +130,16 @@ def test_rotation_rejects_identity_mid_sequence(compile_context):
         _compile(_rotation_plan(primary_visual=plane), compile_context=compile_context)
 
 
+def test_rotation_rejects_intermediate_identity(compile_context):
+    """angle=180, iterations=3 lands identity at iter 2, mid-sequence -- the
+    old `(iterations * angle_deg) % 360 == 0` predicate only checked the
+    final iteration (3 * 180 = 540, not a multiple of 360) and would have
+    missed this."""
+    plane = _plane_with_triangle(angle=180, iterations=3)
+    with pytest.raises(V3ValidationError, match="rotation_returns_to_start"):
+        _compile(_rotation_plan(primary_visual=plane), compile_context=compile_context)
+
+
 def test_rotation_rejects_zero_polygons(compile_context):
     plane = _plane_with_triangle().model_copy(update={"polygons": []})
     with pytest.raises(V3ValidationError, match="rotation_requires_one_polygon"):
