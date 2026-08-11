@@ -12,6 +12,7 @@ from app.meta.drafts import load_draft_documents, persist_reviewable_draft
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
 from app.meta.fixture_mutation import (
+    drop_positives_with_ungrounded_numeric_params,
     drop_ungrounded_positive_fixtures,
     ensure_guard_predicate_witnesses,
     ensure_negative_fixtures,
@@ -110,6 +111,9 @@ def generate_and_validate_revision(
             }
             continue
         proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
+        proposal.fixtures = drop_positives_with_ungrounded_numeric_params(
+            proposal.fixtures, observations_by_id
+        )
         proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
         # A negative fixture per guard predicate still lacking one. Without this
         # the publish gate's coverage requirement can only be met by the model,
@@ -136,6 +140,14 @@ def generate_and_validate_revision(
                 "path": exc.failure.path,
                 "hint": exc.failure.hint,
             }
+            logger.warning(
+                "Draft attempt failed validation: code=%s path=%s hint=%s\n"
+                "teaching_plan_document=%s",
+                exc.failure.code,
+                exc.failure.path,
+                exc.failure.hint,
+                proposal.teaching_plan_document.model_dump_json(),
+            )
             continue
 
         with meta_session() as session:

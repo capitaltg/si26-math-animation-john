@@ -6,6 +6,7 @@ from app.meta.dsl.params import (
 )
 from app.meta.draft_generation import ProposedFixture
 from app.meta.fixture_mutation import (
+    drop_positives_with_ungrounded_numeric_params,
     drop_ungrounded_positive_fixtures,
     ensure_guard_predicate_witnesses,
     ensure_negative_fixtures,
@@ -100,6 +101,72 @@ def test_drop_ungrounded_positive_fixtures_deduplicates_observations():
     )
 
     assert drop_ungrounded_positive_fixtures([first, duplicate]) == [first]
+
+
+def _observation(obs_id: str, source_excerpt: str):
+    from datetime import datetime, timezone
+    from app.meta.models import FallbackObservation
+
+    return FallbackObservation(
+        id=obs_id, candidate_id="cand-1", source_excerpt=source_excerpt,
+        grade_level=6, observation_kind="unsupported_shape", excluded=False,
+        created_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
+    )
+
+
+def test_drop_positives_with_ungrounded_numeric_params_keeps_grounded_and_drops_the_rest():
+    """The compiled ``check_params_grounded`` gate rejects the whole draft on
+    the first ungrounded positive; a model that ships one grounded positive
+    (``turns=3`` against "Rotate ... 3 times") alongside a speculative
+    second positive (``turns=4``) therefore loses every retry to the
+    speculative fixture, even though the grounded one on its own would
+    validate. Dropping the speculative positives up front lets validation
+    see only the ones whose numeric leaves each appear as a numeric token
+    in their observation's excerpt.
+    """
+    grounded = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"turns": 3},
+    )
+    speculative = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"turns": 4},
+    )
+    boundary = ProposedFixture(
+        kind="boundary", expected_outcome="accept",
+        observation_id=None, params={"turns": 1},
+    )
+    negative = ProposedFixture(
+        kind="negative", expected_outcome="reject",
+        observation_id=None, params={"turns": 0},
+    )
+    observations = {"obs-1": _observation(
+        "obs-1", "Rotate the triangle 90° about the point, 3 times. Where does it land?",
+    )}
+
+    result = drop_positives_with_ungrounded_numeric_params(
+        [grounded, speculative, boundary, negative], observations,
+    )
+
+    assert result == [grounded, boundary, negative]
+
+
+def test_drop_positives_with_ungrounded_numeric_params_leaves_non_positives_alone():
+    """A negative fixture whose value is deliberately absent from the excerpt
+    (a guard witness at ``turns=0``, for instance) is legitimately allowed
+    to violate grounding: ``validate_fixture`` only runs the grounding gate
+    on positives. The filter must mirror that scope so it does not delete
+    the very witnesses ``ensure_guard_predicate_witnesses`` synthesized.
+    """
+    negative = ProposedFixture(
+        kind="negative", expected_outcome="reject",
+        observation_id=None, params={"turns": 0},
+    )
+    observations = {"obs-1": _observation("obs-1", "Rotate the triangle 3 times.")}
+
+    result = drop_positives_with_ungrounded_numeric_params([negative], observations)
+
+    assert result == [negative]
 
 
 def _coverage_documents():

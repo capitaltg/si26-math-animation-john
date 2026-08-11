@@ -2,6 +2,8 @@ from app.meta.dsl.errors import DslValidationError
 from app.meta.dsl.guard import GuardDocument, compile_guard, predicate_expressions
 from app.meta.dsl.params import ParamsDocument, field_contract_for
 from app.meta.draft_generation import ProposedFixture
+from app.meta.models import FallbackObservation
+from app.pipeline.grounding import _canonical_key, tokenize_for_grounding
 
 
 def drop_ungrounded_positive_fixtures(fixtures: list[ProposedFixture]) -> list[ProposedFixture]:
@@ -29,6 +31,59 @@ def drop_ungrounded_positive_fixtures(fixtures: list[ProposedFixture]) -> list[P
             continue
         positive_observation_ids.add(fixture.observation_id)
         result.append(fixture)
+    return result
+
+
+def _walk_numeric_leaves(value, out: list[float]) -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        out.append(float(value))
+    elif isinstance(value, dict):
+        for item in value.values():
+            _walk_numeric_leaves(item, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _walk_numeric_leaves(item, out)
+
+
+def drop_positives_with_ungrounded_numeric_params(
+    fixtures: list[ProposedFixture],
+    observations_by_id: dict[str, FallbackObservation],
+) -> list[ProposedFixture]:
+    """Drop positive fixtures whose numeric params are not all in the excerpt.
+
+    The full grounding check (``check_params_grounded``) only runs after a
+    proposal compiles, and it fails the whole draft on the first ungrounded
+    positive rather than trying the surviving ones. A model that ships one
+    valid positive alongside a speculative second (e.g. rotation with
+    ``turns=3`` grounded plus ``turns=4`` not grounded) therefore loses every
+    retry to the speculative fixture, even though the grounded one on its own
+    would validate.
+
+    Drop the speculative positives up front, in the same pass as
+    observation-based dedup, so downstream sees only positives whose numeric
+    leaves each appear as a numeric token in their observation's excerpt.
+    The check is a superset of the compiled grounding check for numeric
+    params, so anything this drops would have failed validation anyway.
+
+    Negative/boundary fixtures are system-generated guard cases whose values
+    intentionally violate the excerpt, so they are left untouched.
+    """
+    result: list[ProposedFixture] = []
+    for fixture in fixtures:
+        if fixture.kind != "positive" or fixture.observation_id is None:
+            result.append(fixture)
+            continue
+        observation = observations_by_id.get(fixture.observation_id)
+        if observation is None:
+            result.append(fixture)
+            continue
+        source_keys = {_canonical_key(t) for t in tokenize_for_grounding(observation.source_excerpt)}
+        leaves: list[float] = []
+        _walk_numeric_leaves(fixture.params, leaves)
+        if all(_canonical_key(str(value)) in source_keys for value in leaves):
+            result.append(fixture)
     return result
 
 

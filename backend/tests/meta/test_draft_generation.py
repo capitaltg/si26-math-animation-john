@@ -270,3 +270,7 @@ def test_the_prompt_pins_rotation_geometry_to_literals_not_fields():
 
     assert "For rotation, expose only the iteration count as a param" in _DRAFT_SYSTEM_PROMPT
     assert "must be literal nodes in the teaching_plan_document, not fields" in _DRAFT_SYSTEM_PROMPT
+    # `_require_rotation_plan_shape` refuses supporting_visuals on a rotation
+    # plan; the prompt must warn about that up front so the repair loop
+    # converges rather than rediscovering the supported shape stochastically.
+    assert "rotation plans declare no supporting_visuals" in _DRAFT_SYSTEM_PROMPT

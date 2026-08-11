@@ -1343,6 +1343,7 @@ def _validate_rotation_compatibility(plan):
             "set all three fields on the coordinate_plane",
         )
     _require_owned_rotation_beat(plan)
+    _require_rotation_plan_shape(plan)
 
     iterations = spec.rotation_iterations
     angle_deg = spec.rotation_angle_deg
@@ -1361,6 +1362,38 @@ def _validate_rotation_compatibility(plan):
     # at validation time, rather than later when `_apply_rotation_frames`
     # recomputes it to populate the program visual.
     _compute_rotation_frames(spec)
+
+
+def _require_rotation_plan_shape(plan):
+    """`rotation`'s answer is the rotated image itself, not a computed number,
+    so the plan must not introduce supporting visuals or plane-adjacent beats
+    that would let a lesson compute a total.
+
+    The compiler's ``_answer_anchor`` always points the probe gates at
+    ``plane.polygon[0]``, and ``check_state_order`` fails the draft if that
+    target never gets ``focus``. A plan that adds a supporting label and a
+    plane-targeted ``orient``/``organize`` beat drops a whole-visual
+    ``structure`` role change on the plane before the rotation beat runs;
+    ``_clear_descendant_roles`` then clears the polygon's separate role
+    bookkeeping, and the polygon inherits ``structure`` from the plane. The
+    rotation beat's own ``set_role(polygon, focus)`` still emits, but a
+    parallel whole-plane ``structure`` transition in that same beat can
+    recolour the polygon back before the focus animation applies -- the
+    probe records ``state_applied=False`` and drops the focus observation,
+    which is exactly the failure that ``state_order_invalid`` reports.
+
+    Refuse the shape up front: zero supporting visuals, and every beat
+    target must reference the primary visual. The demo lesson uses exactly
+    this shape (see ``test_demo_end_to_end.py::ROTATION_LESSON``).
+    """
+    if plan.supporting_visuals:
+        _fail(
+            "rotation_forbids_supporting_visuals", "supporting_visuals",
+            "no supporting visuals -- the rotated image itself is the lesson",
+            f"count={len(plan.supporting_visuals)}",
+            "remove every supporting_visual; label commentary belongs in the "
+            "beat intents, not in a separate visual",
+        )
 
 
 def _require_owned_rotation_beat(plan):

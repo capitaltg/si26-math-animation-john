@@ -6,8 +6,8 @@ import pytest
 
 from app.meta.dsl.expression import FieldRefNode, LiteralNode
 from app.meta.dsl.teaching_plan import (
-    CoordinatePlaneVisual, CoordinatePointNode, EmphasizeRequest, PolygonSpec,
-    TeachingBeat, TeachingPlanDocument,
+    CoordinatePlaneVisual, CoordinatePointNode, EmphasizeRequest, LabelVisual,
+    PolygonSpec, TeachingBeat, TeachingPlanDocument,
 )
 from app.meta.dsl.v3_common import CompileContext, TargetRef
 from app.meta.v3.compiler import compile_teaching_plan
@@ -240,3 +240,24 @@ def test_rotation_rejects_custom_actions_on_the_derive_beat(compile_context):
     plan = plan.model_copy(update={"beats": beats})
     with pytest.raises(V3ValidationError, match="rotation_custom_actions_forbidden"):
         _compile(plan, compile_context=compile_context)
+
+
+def test_rotation_rejects_supporting_visuals(compile_context):
+    """A supporting `label` visual invites the model to add plane-targeted
+    ``orient``/``organize`` beats around it whose whole-visual ``structure``
+    role change clears the polygon's descendant role bookkeeping. The
+    polygon then re-inherits ``structure`` from the plane, and the parallel
+    plane transition co-slotted with the rotation beat's polygon-focus
+    animation recolours the polygon back before its focus applies -- the
+    probe records ``state_applied=False`` on that focus event, drops the
+    observation, and ``check_state_order`` fails the draft with "the answer
+    target never receives focus". The demo rotation lesson intentionally
+    declares no supporting_visuals; this validator refuses the shape at
+    compile time so a repair-loop attempt actually converges on the
+    supported shape rather than rediscovering it stochastically.
+    """
+    plan = _rotation_plan(supporting_visuals=[LabelVisual(ref="info", text="One 90° turn per step")])
+    with pytest.raises(V3ValidationError, match="rotation_forbids_supporting_visuals"):
+        _compile(plan, compile_context=compile_context)
+
+
