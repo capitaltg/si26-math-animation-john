@@ -8,6 +8,7 @@ import SolutionCard from '../components/SolutionCard'
 import PreviewStage from '../components/PreviewStage'
 
 export default function Focus() {
+  // All hooks first (before any conditional returns)
   const { id } = useParams()
   const navigate = useNavigate()
   const ctx = useContext(DemoContext)
@@ -15,17 +16,27 @@ export default function Focus() {
     storyboard, drafts, fieldErrors, loading,
     saveEdits, setDrafts, approveScene, rejectScene, retryScene, setPendingRenders,
   } = ctx
+  const timerRef = useRef(null)
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
 
+  // Compute derived values
   const idx = storyboard ? storyboard.findIndex(s => s.scene_id === id) : -1
-  if (!storyboard || idx < 0) return <Navigate to="/demo" replace />
-  const scene = storyboard[idx]
-  const total = storyboard.length
+  const scene = idx >= 0 ? storyboard[idx] : null
 
+  // templates + rejected — placeholders until template alternatives are on scene
+  const templates = useMemo(
+    () => (scene?.template ? [{ template: scene.template, matched: true }] : []),
+    [scene?.template],
+  )
+
+  // Early return guard (after all hooks)
+  if (!scene) return <Navigate to="/demo" replace />
+
+  const total = storyboard.length
   const currentDraft = drafts[scene.scene_id] ?? scene.params
   const originalParams = scene.params
 
   // debounced autosave: on draft change, wait 250ms then persist
-  const timerRef = useRef(null)
   const handleParamsChange = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -36,13 +47,7 @@ export default function Focus() {
     if (timerRef.current) clearTimeout(timerRef.current)
     saveEdits(scene.scene_id) // revert immediately
   }
-  useEffect(() => () => timerRef.current && clearTimeout(timerRef.current), [])
 
-  // templates + rejected — placeholders until template alternatives are on scene
-  const templates = useMemo(
-    () => (scene.template ? [{ template: scene.template, matched: true }] : []),
-    [scene.template],
-  )
   const rejected = [] // no scene-level rejected list yet
 
   const clipUrl = null // Task 12 will feed rendered clip URLs
