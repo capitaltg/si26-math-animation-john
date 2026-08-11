@@ -1156,6 +1156,22 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         pivot_payload = (pivot_u, pivot_v)
 
     polygons = values.get("polygons") or []
+    # `parts[("polygon", 0)]` and `parts[("polygon_vertex", i)]` below are keyed
+    # by vertex position only, not by polygon position -- there is no third
+    # slot for it, since `MeasuredVisual.parts` is typed
+    # `Mapping[tuple[str, int | None], SemanticPart]` and every consumer
+    # (`.anchor(part=..., index=...)`) looks up a 2-tuple. That is safe only
+    # because `PolygonSpec.polygons` is capped at `max_length=1` in the plan
+    # schema (`teaching_plan.py`); a second polygon would silently overwrite
+    # the first's parts under these same keys. Enforce that invariant here,
+    # in code, rather than relying solely on the schema cap -- if a future
+    # ticket relaxes the cap, this assert must fail loudly until the part
+    # keys (and `.anchor()`) are redesigned to carry a polygon index too.
+    assert len(polygons) <= 1, (
+        "coordinate_plane measurer assumes at most one polygon (parts are "
+        "keyed by vertex index alone); PolygonSpec.polygons max_length was "
+        "relaxed without updating part-key addressing"
+    )
     polygon_payload = []
     for polygon in polygons:
         polygon_ref = polygon["ref"]
