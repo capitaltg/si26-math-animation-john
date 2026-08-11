@@ -7,6 +7,8 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./vitest.setup.js'],
     exclude: ['node_modules/**', 'e2e/**'],
   },
   server: {
