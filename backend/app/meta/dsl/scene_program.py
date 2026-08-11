@@ -72,6 +72,12 @@ class UnitTapeProgramVisual(UnitTapeVisual):
 
 class CoordinatePlaneProgramVisual(CoordinatePlaneVisual):
     initial_role: StyleRole = "structure"
+    #: Populated by the compiler for the `rotation` strategy (M22). One
+    #: entry per iteration; entry k is the polygon's vertex list after
+    #: iteration k+1 (so index 0 is iter-1, index N-1 is the final image).
+    #: Floats are rounded to 12 decimal places at compile time so
+    #: cross-platform hash-input parity survives.
+    rotation_frames: list[list[tuple[float, float]]] = Field(default_factory=list)
 
 
 class DataDisplayProgramVisual(DataDisplayVisual):
@@ -186,11 +192,24 @@ class DistanceAnnotationAction(BaseModel):
     label: ProseText = Field(min_length=1, max_length=8)
 
 
+class RotateAction(BaseModel):
+    """One discrete polygon rotation step (M22).
+
+    Compiler-emitted only for the `rotation` strategy — no `custom_action`
+    counterpart, like `SignedHopArrowAction`. `iteration` addresses the
+    matching `rotation_frames[iteration - 1]` on the target's program visual.
+    """
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["rotate"] = "rotate"
+    target: TargetRef
+    iteration: int = Field(ge=1, le=4)
+
+
 ProgramAction = Annotated[
     Union[
         RevealAction, SetRoleAction, TraceAction, ShowRelationAction,
         DrawAction, TransformAction, MoveAction, ShowAnswerStageAction,
-        SignedHopArrowAction, DistanceAnnotationAction,
+        SignedHopArrowAction, DistanceAnnotationAction, RotateAction,
     ],
     Field(discriminator="kind"),
 ]

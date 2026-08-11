@@ -66,7 +66,14 @@
 #    would be accepted where a version-14 compiler now refuses it, so a
 #    report stamped 13 for a plan that is percent-semantic must not be
 #    trusted as current.
-DSL_COMPILER_VERSION = 14
+# 15: `dsl/teaching_plan.py` gains the `rotation` strategy on `coordinate_plane`
+#    (M22). `CoordinatePlaneVisual` gains optional `polygons`, `pivot`,
+#    `rotation_angle_deg`, `rotation_iterations` fields; `CoordinatePlane
+#    ProgramVisual` gains a frozen `rotation_frames` payload; a new
+#    `RotateAction` joins `ProgramAction`. A version-14 compiler rejects the
+#    new strategy literal and unknown fields, so a plan authored against
+#    version 15 cannot be re-validated by a stale runtime.
+DSL_COMPILER_VERSION = 15
 # 4: `rectangle_measurement` draws its length and width; vertex anchors and
 #    `object_set` render at all; label text carries the layout scale; a
 #    supporting visual too wide to sit beside the primary takes its own row.
@@ -97,4 +104,9 @@ DSL_COMPILER_VERSION = 14
 #    thick shaded ray for `ray_shade` plans. A version-9 renderer draws
 #    neither primitive, so an artifact stamped 9 that references the new
 #    payload keys must not be replayed.
-DYNAMIC_RENDERER_VERSION = 10
+# 11: `coordinate_plane` renders declared polygons, a pivot mark, and
+#    one-step-per-iteration rotations against a persistent ghost trail. A
+#    version-10 renderer cannot deserialize `RotateAction` or the
+#    `rotation_frames` payload, so an artifact stamped 10 that references
+#    either must not be replayed.
+DYNAMIC_RENDERER_VERSION = 11

@@ -119,5 +119,24 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # whole" rather than "walk to some capacity". A version-13 compiler both
     # rejects the new strategy literals and accepts a percent-semantic
     # magnitude_comparison, so a report stamped 13 for either shape is stale.
-    assert DSL_COMPILER_VERSION == 14
-    assert DYNAMIC_RENDERER_VERSION == 10
+    #
+    # DSL_COMPILER_VERSION 15 adds the `rotation` strategy on `coordinate_plane`
+    # (M22): `CoordinatePlaneVisual` gains optional `polygons`, `pivot`,
+    # `rotation_angle_deg`, `rotation_iterations` fields, `CoordinatePlane
+    # ProgramVisual` gains a frozen `rotation_frames` payload, and a new
+    # `RotateAction` joins `ProgramAction`. A version-14 compiler rejects the
+    # new strategy literal and unknown fields.
+    #
+    # DYNAMIC_RENDERER_VERSION 11 covers rendering declared polygons, a pivot
+    # mark, and one-step-per-iteration rotations against a persistent ghost
+    # trail -- primitives a version-10 renderer has no branch for.
+    assert DSL_COMPILER_VERSION == 15
+    assert DYNAMIC_RENDERER_VERSION == 11
+
+
+def test_version_constants_carry_m22_bumps():
+    """M22 (rotation strategy + RotateAction) bumps both constants."""
+    from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
+
+    assert DSL_COMPILER_VERSION == 15
+    assert DYNAMIC_RENDERER_VERSION == 11
