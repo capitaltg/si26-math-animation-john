@@ -113,3 +113,13 @@ body { margin:0; background:var(--bg); color:var(--ink);
 .solution__k { color: var(--ink-3); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .solution__expr { color: var(--ink-2); font-family: var(--mono); font-size: 13px; }
 .paramtable button:disabled { opacity: 0.4; cursor: default; }
+
+.stage { width: 100%; }
+.stage__frame { position: relative; width: 100%; aspect-ratio: 16 / 9;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  display: grid; place-items: center; }
+.stage__media { width: 100%; height: 100%; object-fit: contain; display: block; }
+.stage__placeholder { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3); color: var(--ink-2); text-align: center; }
+.stage__placeholder-title { font-family: var(--sans); font-size: 15px; }
+.stage__placeholder-note { color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
