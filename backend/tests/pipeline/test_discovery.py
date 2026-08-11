@@ -1,7 +1,6 @@
 from unittest.mock import patch
 
 import pytest
-from pptx import Presentation
 
 from app.pipeline.parsing import Block
 
@@ -554,38 +553,56 @@ def test_discovery_prompt_admits_every_answer_form_the_pipeline_can_render(phras
     assert phrase in _DISCOVERY_SYSTEM_PROMPT
 
 
-def _build_rotation_test_deck(path):
-    presentation = Presentation()
-    layout = presentation.slide_layouts[1]
-    slide = presentation.slides.add_slide(layout)
-    slide.shapes.title.text = "Rotation"
-    slide.placeholders[1].text = (
-        "Rotate the triangle 90° about the point, three times. "
-        "Where does it land?"
+def _load_fixture_builder():
+    """Import `eval/generate_fixtures.py` off-path so the test covers the exact
+    artifact the manual-upload runbook uses. Reimplementing the deck locally
+    would let this regression stay green while a change to the real fixture
+    silently broke the workshop upload -- the very failure mode this test
+    exists to catch.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    fixtures_module_path = repo_root / "eval" / "generate_fixtures.py"
+    spec = importlib.util.spec_from_file_location(
+        "eval_generate_fixtures", fixtures_module_path
     )
-    presentation.save(path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @patch("app.pipeline.discovery.call_with_tool")
 def test_discover_candidates_flags_rotation_problem_on_real_fixture(mock_call, tmp_path):
-    """End-to-end guard for the M22 rotation fixture: parse the same .pptx that
-    `eval/generate_fixtures.py::build_rotation_test_deck` produces, then run
-    real discovery against a Bedrock stub that returns the excerpt a
-    prompt-compliant model would return. The candidate must survive grounding
-    and reach the frontend as a Candidate, so the upload flow does not empty
-    out on "No solvable problems found in this document".
+    """End-to-end guard for the M22 rotation fixture: build the deck through
+    `eval/generate_fixtures.py::build_rotation_test_deck` (the same builder the
+    manual-upload runbook uses), parse it, then run real discovery against a
+    Bedrock stub that returns the excerpt the parsed deck actually contains.
+    The candidate must survive grounding and reach the frontend as a Candidate,
+    so the upload flow does not empty out on "No solvable problems found in
+    this document" the next time this deck is uploaded.
     """
     from app.pipeline.discovery import discover_candidates_for_document
     from app.pipeline.parsing import extract_slide_blocks
 
+    fixture_builder = _load_fixture_builder()
     pptx_path = tmp_path / "rotation_test_deck.pptx"
-    _build_rotation_test_deck(pptx_path)
+    fixture_builder.build_rotation_test_deck(pptx_path)
     slide_blocks = extract_slide_blocks(pptx_path)
 
-    excerpt = (
-        "Rotate the triangle 90° about the point, three times. "
-        "Where does it land?"
-    )
+    # Pick the excerpt out of the parsed deck itself rather than hardcoding
+    # it, so the test tracks whatever prose the fixture builder chooses to
+    # ship. "Rotation" is the slide's title block; the problem text is the
+    # other text block, which is what a compliant LLM would flag.
+    text_blocks = [
+        block.text
+        for block in slide_blocks[0]
+        if block.kind == "text" and block.text.strip().lower() != "rotation"
+    ]
+    assert len(text_blocks) == 1, text_blocks
+    excerpt = text_blocks[0]
+
     mock_call.return_value = (
         "report_candidates",
         {
