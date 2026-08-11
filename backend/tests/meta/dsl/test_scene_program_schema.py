@@ -36,6 +36,23 @@ def test_parameterized_program_keeps_anchor_refs_not_fixture_coordinates():
     assert program.relations[0].target.anchor == "bottom"
 
 
+@pytest.mark.parametrize("total_duration_seconds,duration_seconds", [
+    (6.0, 0.15),
+    (11.99, 1.0),
+    (8.5, 1.9),
+])
+def test_program_still_accepts_pre_2x_stored_totals(total_duration_seconds, duration_seconds):
+    """Published templates were stored under the old 6-12s / 0.15-2.0s floor.
+    `dynamic_templates.load` deserializes their frozen `scene_program_json` on
+    every render, so `SceneProgramDocument` must keep accepting those values
+    even after the generator's new floor took the current-era minimum to 12s.
+    """
+    stored = _program()
+    stored["total_duration_seconds"] = total_duration_seconds
+    stored["timeline"][0]["duration_seconds"] = duration_seconds
+    SceneProgramDocument.model_validate(stored)
+
+
 def test_program_rejects_generated_coordinates():
     raw = SceneProgramDocument.model_json_schema()
     assert "x" not in raw.get("properties", {})
@@ -46,9 +63,9 @@ def test_program_rejects_generated_coordinates():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("total_duration_seconds", 11.99),
+    ("total_duration_seconds", 5.99),
     ("total_duration_seconds", 24.01),
-    ("timeline", [{"at_seconds": 0, "duration_seconds": 0.29, "beat_id": "x",
+    ("timeline", [{"at_seconds": 0, "duration_seconds": 0.14, "beat_id": "x",
                     "action": {"kind": "draw", "target": {"visual_ref": "values"}}}]),
     ("timeline", [{"at_seconds": 0, "duration_seconds": 4.01, "beat_id": "x",
                     "action": {"kind": "draw", "target": {"visual_ref": "values"}}}]),
@@ -62,7 +79,7 @@ def test_program_enforces_shared_timing_bounds(field, value):
 
 @pytest.mark.parametrize("at_seconds,duration_seconds,total_duration_seconds", [
     (23.9, 4.0, 24.0),
-    (11.5, 1.0, 12.0),
+    (5.5, 0.6, 6.0),
 ])
 def test_program_rejects_timeline_actions_beyond_scene_end(
     at_seconds, duration_seconds, total_duration_seconds,
