@@ -91,3 +91,20 @@ body { margin:0; background:var(--bg); color:var(--ink);
 .gate__category { color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
 .gate__tip { border: 1px solid var(--line); background: transparent; color: var(--ink-2);
   font-family: var(--mono); font-size: 11px; padding: 0 var(--sp-1); border-radius: 6px; cursor: help; }
+
+.paramtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.paramtable th, .paramtable td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.paramtable thead th { font-family: var(--mono); color: var(--ink-3); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.paramtable tbody th { font-family: var(--mono); color: var(--ink-2); font-weight: 500; }
+.paramtable__type { color: var(--ink-3); font-family: var(--mono); font-size: 12px; }
+.paramtable input[type="text"], .paramtable input[type="number"] {
+  width: 100%; padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--ink); font-family: var(--sans); font-size: 13px;
+}
+.paramtable input[type="checkbox"] { accent-color: var(--accent); }
+.paramtable__errrow td { border-bottom: 1px solid var(--line); padding: 0 var(--sp-3) var(--sp-2); }
+.paramtable__err { color: var(--danger); font-size: 12px; font-family: var(--mono); }
+.paramtable button { border: 1px solid var(--line); background: transparent; color: var(--ink-2);
+  font-family: var(--mono); font-size: 11px; padding: 2px var(--sp-1); border-radius: 6px; cursor: pointer; }
+.paramtable button:disabled { opacity: 0.4; cursor: default; }
