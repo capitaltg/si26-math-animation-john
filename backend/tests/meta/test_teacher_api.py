@@ -10,6 +10,7 @@ most of this file is about that boundary.
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -482,7 +483,16 @@ def test_a_first_attempt_has_no_history(client):
 # ------------------------------------------------------------------ verdict
 
 
-def test_approving_a_draft_publishes_it_for_this_session_only(client):
+def test_approving_a_draft_publishes_it_shared(client, monkeypatch):
+    # Teacher publications land shared (see teacher_api.approve), so the
+    # approval gate applies the strict configured-count floor -- the same
+    # invariant promotion.py enforces on any globally visible row. The seed
+    # here builds one grounded fixture, so drop the floor to match; a
+    # count-mismatch is covered by a dedicated precondition test elsewhere.
+    monkeypatch.setattr(
+        "app.meta.approval.get_settings",
+        lambda: SimpleNamespace(meta_required_fixture_count=1),
+    )
     session_id = _start_session(client)
     draft_id, _ = _seed_owned_draft(owner=session_id)
 
@@ -495,7 +505,9 @@ def test_approving_a_draft_publishes_it_for_this_session_only(client):
     assert resp.json()["template_name"] == "leftover_pair"
     with db.meta_session() as session:
         version = session.query(models.TemplateVersion).one()
-        assert version.owner_session_id == session_id
+        # Shared publication: teacher's approved template must survive their
+        # in-process session dropping and be visible to any session on this box.
+        assert version.owner_session_id is None
         assert version.status == models.TEMPLATE_VERSION_ENABLED
 
 

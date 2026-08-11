@@ -9,11 +9,42 @@ from app.meta.dsl.params import ParamsDocument
 from app.meta.dsl.teaching_plan import TeachingPlanDocument
 from app.meta.fingerprint import Fingerprint
 from app.meta.models import FallbackObservation
+from app.meta.v3.compiler import _DECLARED_PATHS, _PART_CARDINALITY
 from app.pipeline.bedrock_client import call_with_tool
 
 MAX_CLASSIFIER_BULLET_LENGTH = 400
 MIN_PROPOSED_FIXTURES = 1
 MAX_PROPOSED_FIXTURES = 20
+
+
+def _legal_parts_summary() -> str:
+    """One line per visual kind naming its closed set of semantic parts.
+
+    Sourced from `_PART_CARDINALITY` so the prompt cannot drift from the
+    compiler's actual acceptance set. The observed failure mode we're guarding
+    against: the model, seeing "the declared path today is perimeter" nearby,
+    invents a hybrid semantic part like `rectangle_measurement.perimeter_edge`
+    -- a name that mashes a path and a part together. Naming the closed list
+    per kind gives the model something concrete to select from.
+    """
+    lines = []
+    for kind in sorted(_PART_CARDINALITY):
+        parts = sorted(_PART_CARDINALITY[kind])
+        lines.append(f"- {kind}: {', '.join(parts) if parts else '(none)'}")
+    return "\n".join(lines)
+
+
+def _declared_paths_summary() -> str:
+    """One line per visual kind naming its closed set of declared paths."""
+    lines = []
+    for kind in sorted(_DECLARED_PATHS):
+        paths = sorted(_DECLARED_PATHS[kind])
+        lines.append(f"- {kind}: {', '.join(paths)}")
+    return "\n".join(lines) if lines else "(no visual kind exposes a declared path)"
+
+
+_LEGAL_PARTS_TABLE = _legal_parts_summary()
+_DECLARED_PATHS_TABLE = _declared_paths_summary()
 
 
 class ProposedFixture(BaseModel):
@@ -67,11 +98,20 @@ _DRAFT_SYSTEM_PROMPT = (
     "one organize beat, a focus beat after it whose only target is the middle "
     "item, and no dim, emphasize, or restore action on any item of the primary "
     "visual. "
-    "A custom "
-    "trace or move action's path_ref must be visual_ref.path_name; the only "
-    "declared path today is perimeter, on rectangle_measurement visuals only "
-    "-- address any other sub-part (an edge, vertex, or item) through a "
-    "target's part and index, never through path_ref. Never "
+    "Semantic parts and paths are two DIFFERENT closed vocabularies; do not "
+    "combine them into a hybrid name (e.g. `perimeter_edge` is neither a part "
+    "nor a path). Every target's `part` field must be exactly one of the names "
+    "in the legal-parts table below for that target's visual kind -- no "
+    "prefix, no suffix, no invention. Address a specific sub-part by "
+    "`part` + `index` (a numeric index into that part's collection), not by "
+    "path_ref.\n"
+    "Legal semantic parts by visual kind (closed set):\n"
+    f"{_LEGAL_PARTS_TABLE}\n"
+    "A custom trace or move action's `path_ref` must be `<visual_ref>.<path_name>`. "
+    "Declared paths by visual kind (closed set):\n"
+    f"{_DECLARED_PATHS_TABLE}\n"
+    "Never invoke a path outside this list, and never write a `part` value from "
+    "the paths list or vice versa. Never "
     "include URLs, raw controls, positions, durations beyond requested bounded "
     "actions, colors, code, renderer objects, or Manim concepts.\n\n"
     "Provide at least one 'positive' fixture whose observation_id references a "

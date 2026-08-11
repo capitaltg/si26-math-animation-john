@@ -19,7 +19,10 @@ _TEMPLATE_CONTRACTS = (
     "(e.g. 6 + 3 or 4 + 3 - 1). A single operation is one valid jump. Requires an actual "
     "add or subtract operation that moves along the line. Do NOT use for plotting, drawing, "
     "or labeling given numbers or fractions on a line when no operation is performed — a "
-    "static plot-the-points task has no journey and belongs to text_card.\n"
+    "static plot-the-points task has no journey and belongs to text_card. Do NOT use by "
+    "expanding a multiplication or a geometry formula into equivalent repeated adds "
+    "(e.g. rewriting 2 × (L + W) or L + L + W + W as a jump sequence) — the SOURCE problem "
+    "must state add/subtract operations, not a product or a perimeter/area formula.\n"
     "- balance_scale: a single equation with exactly two addends on one side equalling a "
     "total (e.g. 6 + 3 = ?, 10 + 2 = 12). Useful for single-operation sums.\n"
     "- array_grid: equal groups / repeated addition / multiplication shown as rows x columns. "
@@ -162,7 +165,7 @@ def classify_candidate(
         _TEXT_CARD_OPTION,
     )
     structural_options = []
-    seen_templates: set[TemplateName] = set()
+    seen_templates: set[str] = set()
     if not classification.ambiguous:
         for option in classification.options:
             if (
@@ -172,6 +175,16 @@ def classify_candidate(
                 continue
             seen_templates.add(option.template)
             structural_options.append(option)
+    # Dynamic templates first, preserving the classifier's relative ranking
+    # within each group. A dynamic template is a teacher-crafted contract for a
+    # specific problem shape, so when the classifier accepts both a dynamic
+    # option and a static one, the dynamic one is almost always the closer
+    # match -- and the frontend defaults to templates[0], so ranking is what
+    # the teacher actually sees.
+    static_name_set = frozenset(member.value for member in TemplateName)
+    dynamic_first = [
+        option for option in structural_options if option.template not in static_name_set
+    ] + [option for option in structural_options if option.template in static_name_set]
     return classification.model_copy(
-        update={"options": [*structural_options, text_card]},
+        update={"options": [*dynamic_first, text_card]},
     )
