@@ -1,7 +1,12 @@
+from pydantic import ValidationError
+
 from app.meta.dsl.errors import DslValidationError
+from app.meta.dsl.expression import ExpressionNode
 from app.meta.dsl.guard import GuardDocument, compile_guard, predicate_expressions
 from app.meta.dsl.params import ParamsDocument, field_contract_for
 from app.meta.draft_generation import ProposedFixture
+from app.meta.models import FallbackObservation
+from app.pipeline.grounding import check_params_grounded
 
 
 def drop_ungrounded_positive_fixtures(fixtures: list[ProposedFixture]) -> list[ProposedFixture]:
@@ -28,6 +33,73 @@ def drop_ungrounded_positive_fixtures(fixtures: list[ProposedFixture]) -> list[P
         if fixture.observation_id in positive_observation_ids:
             continue
         positive_observation_ids.add(fixture.observation_id)
+        result.append(fixture)
+    return result
+
+
+def drop_positives_with_ungrounded_numeric_params(
+    fixtures: list[ProposedFixture],
+    observations_by_id: dict[str, FallbackObservation],
+    params_document: ParamsDocument,
+    guard_document: GuardDocument,
+) -> list[ProposedFixture]:
+    """Drop positive fixtures the compiled grounding gate would reject.
+
+    ``validate_fixture`` runs ``check_params_grounded`` per positive and
+    fails the whole draft on the first ungrounded one, so a model that
+    ships one valid positive alongside a speculative second (rotation with
+    ``turns=3`` grounded plus ``turns=4`` not) loses every retry to the
+    speculative fixture even though the grounded one on its own would
+    validate. Drop the speculative positives up front so downstream sees
+    only positives whose params ground against their observation.
+
+    Uses the same ``check_params_grounded`` the compiled gate does, so the
+    filter is by-construction a subset of what validation would reject:
+    the multiset semantics that let two ``3``s only ground against two
+    ``3``s in the excerpt hold, and a legitimate derived-total (e.g. a
+    ``right_total=7`` vouched for by ``3 + 4 = ?``) survives because the
+    template's ``grounding_derived_totals`` hook allows it. Fixtures that
+    fail params-schema validation itself are also kept -- ``validate_fixture``
+    already reports those failures with the right code, and reproducing
+    that logic here would double-report.
+
+    Called BEFORE observation-based dedup so an ungrounded positive
+    ordered ahead of a grounded one for the same observation cannot
+    starve the surviving positive: dedup keeps the first, so filtering
+    first is what makes the grounded one the first.
+
+    Negative/boundary fixtures are system-generated guard cases whose
+    values intentionally violate the excerpt, so they are left untouched.
+
+    If the params/guard documents cannot be compiled at all, the filter
+    is a no-op: ``validate_candidate`` will surface the real compilation
+    failure via its own error path.
+    """
+    from app.meta.dsl.params import compile_template_params
+
+    try:
+        field_contract = field_contract_for(params_document)
+        compiled_guard = compile_guard(guard_document, field_contract)
+        params_cls = compile_template_params(params_document, compiled_guard)
+    except DslValidationError:
+        return fixtures
+
+    result: list[ProposedFixture] = []
+    for fixture in fixtures:
+        if fixture.kind != "positive" or fixture.observation_id is None:
+            result.append(fixture)
+            continue
+        observation = observations_by_id.get(fixture.observation_id)
+        if observation is None:
+            result.append(fixture)
+            continue
+        try:
+            params = params_cls.model_validate(fixture.params)
+        except ValidationError:
+            result.append(fixture)
+            continue
+        if check_params_grounded(params, observation.source_excerpt):
+            continue
         result.append(fixture)
     return result
 

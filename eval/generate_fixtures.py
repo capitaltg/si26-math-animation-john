@@ -76,7 +76,7 @@ def build_rotation_test_deck(path: Path) -> None:
     slide = presentation.slides.add_slide(layout)
     slide.shapes.title.text = "Rotation"
     slide.placeholders[1].text = (
-        "Rotate the triangle 90° about the point, three times. "
+        "Rotate the triangle 90° about the point, 3 times. "
         "Where does it land?"
     )
 

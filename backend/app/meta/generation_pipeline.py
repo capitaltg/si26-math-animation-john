@@ -12,6 +12,7 @@ from app.meta.drafts import load_draft_documents, persist_reviewable_draft
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.fingerprint import Fingerprint
 from app.meta.fixture_mutation import (
+    drop_positives_with_ungrounded_numeric_params,
     drop_ungrounded_positive_fixtures,
     ensure_guard_predicate_witnesses,
     ensure_negative_fixtures,
@@ -109,6 +110,18 @@ def generate_and_validate_revision(
                 "hint": last_failure.hint,
             }
             continue
+        # Ungrounded-positive filtering runs BEFORE observation dedup so an
+        # ungrounded fixture that happens to be ordered first for its
+        # observation cannot starve the surviving positive: `drop_ungrounded
+        # _positive_fixtures` keeps the first-seen fixture per observation,
+        # so removing the ungrounded ones ahead of time is what makes the
+        # grounded fixture the first-seen one.
+        proposal.fixtures = drop_positives_with_ungrounded_numeric_params(
+            proposal.fixtures,
+            observations_by_id,
+            proposal.params_document,
+            proposal.guard_document,
+        )
         proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
         proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
         # A negative fixture per guard predicate still lacking one. Without this
@@ -136,6 +149,14 @@ def generate_and_validate_revision(
                 "path": exc.failure.path,
                 "hint": exc.failure.hint,
             }
+            logger.warning(
+                "Draft attempt failed validation: code=%s path=%s hint=%s\n"
+                "teaching_plan_document=%s",
+                exc.failure.code,
+                exc.failure.path,
+                exc.failure.hint,
+                proposal.teaching_plan_document.model_dump_json(),
+            )
             continue
 
         with meta_session() as session:
