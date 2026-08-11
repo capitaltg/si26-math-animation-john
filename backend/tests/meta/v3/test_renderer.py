@@ -3,16 +3,16 @@ from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
-from manim import FadeIn, Line, Text
+from manim import FadeIn, Line, Text, Transform
 
-from app.meta.dsl.expression import FieldRefNode, MultiplyNode
+from app.meta.dsl.expression import FieldRefNode, LiteralNode, MultiplyNode
 from app.meta.dsl.scene_program import StyleRecipeDocument
-from app.meta.dsl.teaching_plan import TeachingPlanDocument
+from app.meta.dsl.teaching_plan import CoordinatePlaneVisual, PolygonSpec, TeachingBeat, TeachingPlanDocument
 from app.meta.dsl.v3_common import CompileContext
 from app.meta.v3.compiler import _PART_CARDINALITY, compile_teaching_plan
 from app.meta.v3.geometry import Bounds, PlacedVisual, Point
 from app.meta.v3.manim_measurer import FONT_SIZES, ManimTextMeasurer
-from app.meta.v3.renderer import _build_visual, render_resolved_scene
+from app.meta.v3.renderer import _build_vertical_lesson, _build_visual, render_resolved_scene
 from app.meta.v3.resolver import ResolvedAction, ResolvedScene, ResolvedTarget, resolve_scene
 from app.meta.v3.visual_registry import DEFERRED_PARTS, default_visual_registry
 
@@ -218,6 +218,140 @@ def test_rectangle_renderer_maps_edges_and_plays_its_resolved_trace():
 
     assert all(("rectangle", "edge", index) in rendered.targets for index in range(4))
     assert any(call.kind == "trace" for call in scene.play_calls)
+
+
+def _resolved_rotation_scene(*, iterations=3, angle=90):
+    """A minimal rotation-strategy program: one triangle, pivoted at the
+    origin, rotated `angle` degrees `iterations` times. Mirrors
+    `test_rotation_strategy.py`'s `_plane_with_triangle`/`_rotation_plan`
+    helpers, through the same compile -> resolve pipeline production uses.
+    """
+    plan = TeachingPlanDocument(
+        plan_version=3,
+        learning_objective="Rotate a triangle about the origin.",
+        primary_visual=CoordinatePlaneVisual(
+            ref="plane",
+            x_min=LiteralNode(value=-5), x_max=LiteralNode(value=5),
+            y_min=LiteralNode(value=-5), y_max=LiteralNode(value=5),
+            polygons=[PolygonSpec(
+                ref="tri",
+                vertices=[
+                    {"x": LiteralNode(value=1), "y": LiteralNode(value=0)},
+                    {"x": LiteralNode(value=3), "y": LiteralNode(value=0)},
+                    {"x": LiteralNode(value=2), "y": LiteralNode(value=2)},
+                ],
+            )],
+            pivot={"x": LiteralNode(value=0), "y": LiteralNode(value=0)},
+            rotation_angle_deg=angle,
+            rotation_iterations=iterations,
+        ),
+        strategy="rotation",
+        beats=[
+            TeachingBeat(id="reveal", kind="reveal",
+                         targets=[{"visual_ref": "plane"}], intent="Show the triangle."),
+            TeachingBeat(id="derive", kind="derive",
+                         targets=[{"visual_ref": "plane"}], intent="Rotate it in steps."),
+            TeachingBeat(id="conclude", kind="conclude",
+                         targets=[{"visual_ref": "plane"}], intent="Land the final image."),
+        ],
+        variation_seed="rotation-renderer",
+    )
+    program = compile_teaching_plan(
+        plan, LiteralNode(value=0), frozenset(),
+        CompileContext(concept_family="geometry", grade_band="6-8"),
+    )
+    return resolve_scene(program, {}, LiteralTextMeasurer())
+
+
+def test_coordinate_plane_renderer_builds_polygon_pivot_and_ghost_trail():
+    """M22: at build time the renderer puts a primary polygon, a pivot dot,
+    and one hidden ghost per vacated pose on the plane; each ghost is
+    registered as a target but held out of every visual's root group, the
+    same way `_add_ray_shade_children` holds `DEFERRED_PARTS` back.
+    """
+    from manim import Dot, Polygon
+
+    resolved = _resolved_rotation_scene(iterations=3, angle=90)
+    rendered = _build_vertical_lesson(resolved, "ocean")
+
+    primary = rendered.targets[("plane", "polygon", 0)]
+    assert isinstance(primary, Polygon)
+
+    ghosts = [rendered.targets[("plane", "polygon_ghost", index)] for index in range(3)]
+    assert all(isinstance(ghost, Polygon) for ghost in ghosts)
+    assert all(ghost.stroke_opacity < primary.stroke_opacity for ghost in ghosts)
+    # Ghosts stay off-screen until their own `RotateAction` reveals them.
+    assert not any(
+        ghost in mobject.get_family() for ghost in ghosts for mobject in rendered.visuals.values()
+    )
+
+    pivot = rendered.targets[("plane", "pivot", None)]
+    assert isinstance(pivot, Dot)
+
+    labels = [rendered.targets[("plane", "polygon_vertex_label", index)] for index in range(3)]
+    for label in labels:
+        assert label.text in {"A", "B", "C"}
+
+
+def test_rotate_action_dispatch_reveals_its_ghost_spins_the_polygon_and_reletters_vertices():
+    """Each `RotateAction` in sequence: fades in the ghost of the pose the
+    polygon is about to leave (iteration k leaves ghost k-1), rotates the
+    primary polygon about the declared pivot, and morphs every vertex
+    letter to carry one more prime mark.
+
+    `Transform`'s destination -- not the source mobject's `.text`, which
+    a `Transform` never mutates (only its POINTS; see `_final_answer_text`
+    in `dynamic_render_worker.py`) -- is where the new lettering lives, so
+    assertions read `target_mobject.text` on the label `Transform`s exactly
+    like `test_concluding_the_answer_recolours_and_resolves_it_in_one_animation`
+    reads `animations[0].target_mobject` for the answer's stage morph.
+    """
+    from manim import FadeIn, Rotate
+
+    from app.meta.v3.renderer import _action_animation
+
+    resolved = _resolved_rotation_scene(iterations=3, angle=90)
+    rendered = _build_vertical_lesson(resolved, "ocean")
+    rotate_actions = [action for action in resolved.timeline if action.action.kind == "rotate"]
+    assert [action.action.iteration for action in rotate_actions] == [1, 2, 3]
+
+    primary = rendered.targets[("plane", "polygon", 0)]
+    for action in rotate_actions:
+        iteration = action.action.iteration
+        animation = _action_animation(action, rendered, _reveal, "ocean")
+        sub_animations = list(animation.animations)
+
+        ghost_reveal = next(a for a in sub_animations if isinstance(a, FadeIn))
+        assert ghost_reveal.mobject is rendered.targets[("plane", "polygon_ghost", iteration - 1)]
+
+        rotate = next(a for a in sub_animations if isinstance(a, Rotate))
+        assert rotate.mobject is primary
+        assert rotate.run_time == pytest.approx(action.duration_seconds)
+
+        # `Rotate` and `FadeIn` both subclass `Transform`, so an exact type
+        # match is required here to isolate the three label morphs from the
+        # ghost reveal and the polygon spin already claimed above.
+        label_transforms = [a for a in sub_animations if type(a) is Transform]
+        assert len(label_transforms) == 3
+        destinations = {transform.target_mobject.text for transform in label_transforms}
+        assert destinations == {letter + "′" * iteration for letter in "ABC"}
+
+
+def test_rotate_action_run_time_comes_from_the_timeline_entry():
+    """Run time must track the scheduler's per-action slot, not a fixed
+    per-iteration constant -- three iterations sharing a beat divide that
+    beat's time unevenly once a co-slotted focus role change is accounted
+    for, so a constant would drift out of sync with the resolved timeline."""
+    resolved = _resolved_rotation_scene(iterations=3, angle=90)
+    rotate_actions = [action for action in resolved.timeline if action.action.kind == "rotate"]
+    assert len(rotate_actions) == 3
+
+    scene = RecordingScene()
+    render_resolved_scene(scene, resolved)
+    rotate_calls = [call for call in scene.play_calls if call.kind == "rotate"]
+    assert [call.run_time for call in rotate_calls] == pytest.approx(
+        [action.duration_seconds for action in rotate_actions]
+    )
 
 
 _MEASURABLE_VALUES = {

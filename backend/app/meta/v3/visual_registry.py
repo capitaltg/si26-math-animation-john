@@ -1231,6 +1231,16 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         )
         polygon_payload.append({"ref": polygon_ref, "vertices": tuple(projected_vertices)})
 
+    # M22: per-iteration ghost frames, projected through the same `project()`
+    # closure as `points` and `polygons` above. Frames arrive already
+    # validated (off-plane / self-intersecting checks ran once at compile
+    # time in `compiler._compute_rotation_frames`); re-checking them here
+    # would just repeat that work against the same literal geometry.
+    rotation_frames_payload = tuple(
+        tuple(project(vx, vy) for vx, vy in frame)
+        for frame in (values.get("rotation_frames") or ())
+    )
+
     if grid_enabled:
         # Grid contract: a line at every integer. Do NOT reuse the tick helper,
         # which thins to at most COORDINATE_PLANE_MAX_TICKS_PER_AXIS values --
@@ -1286,6 +1296,8 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "y_grid_lines": y_grid_lines,
             "polygons": tuple(polygon_payload),
             "pivot": pivot_payload,
+            "rotation_angle_deg": values.get("rotation_angle_deg"),
+            "rotation_frames": rotation_frames_payload,
         },
     )
 

@@ -156,6 +156,29 @@ def evaluate_program_visual(
                 for point in visual.points
             ],
             "grid": bool(visual.grid),
+            # M22: polygon/pivot/rotation geometry. `polygons` and `pivot`
+            # still run through `_evaluate` (their coordinates are typed
+            # `ExpressionNode` the same as `points`, even though the
+            # `rotation` strategy additionally requires them to be literal --
+            # a `group_reveal` plane may declare a field-ref polygon).
+            # `rotation_frames` is already a list of literal (x, y) floats
+            # frozen by the compiler, so it passes through unevaluated.
+            "polygons": [
+                {
+                    "ref": polygon.ref,
+                    "vertices": [
+                        {"x": _evaluate(vertex.x, values), "y": _evaluate(vertex.y, values)}
+                        for vertex in polygon.vertices
+                    ],
+                }
+                for polygon in visual.polygons
+            ],
+            "pivot": (
+                {"x": _evaluate(visual.pivot.x, values), "y": _evaluate(visual.pivot.y, values)}
+                if visual.pivot is not None else None
+            ),
+            "rotation_angle_deg": visual.rotation_angle_deg,
+            "rotation_frames": visual.rotation_frames,
         }
     if kind == "label":
         return _evaluated_spec(visual), {"text": visual.text}
