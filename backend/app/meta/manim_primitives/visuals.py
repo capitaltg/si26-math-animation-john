@@ -7,6 +7,7 @@ from manim import (
     LEFT,
     Line,
     NumberLine,
+    Polygon,
     Rectangle,
     Sector,
     Square,
@@ -171,3 +172,28 @@ def build_rectangle(
     group = VGroup(rectangle, length_brace, length_label, width_brace, width_label)
     fit_width(group)
     return group
+
+
+def build_polygon(
+    vertices: list[tuple[float, float]],
+    *,
+    stroke_color,
+    fill_color,
+    fill_opacity: float,
+    stroke_width: float,
+) -> Polygon:
+    """Build a manim Polygon from a list of (x, y) tuples in scene-space.
+
+    Callers pass scene-space coordinates already transformed from data-space
+    by the caller's axes helpers. z is fixed to 0 (this codebase does not
+    render 3D). Used by the coordinate_plane renderer to draw declared
+    polygons and their per-iteration ghosts (M22).
+    """
+    points = [(x, y, 0.0) for (x, y) in vertices]
+    return Polygon(
+        *points,
+        stroke_color=stroke_color,
+        fill_color=fill_color,
+        fill_opacity=fill_opacity,
+        stroke_width=stroke_width,
+    )
