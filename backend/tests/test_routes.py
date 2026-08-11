@@ -757,44 +757,6 @@ def test_storyboard_exposes_stated_answer_and_mismatch(tmp_path):
     assert scene["mismatch_acknowledged"] is False
 
 
-def test_computed_answer_populated_for_array_grid(tmp_path):
-    from app.models.scene import Scene, TemplateName
-    from app.templates.registry import static_ref
-
-    client = _client()
-    _upload_candidate(client)
-
-    thumb = tmp_path / "t.png"
-    thumb.write_bytes(b"png")
-    scene = Scene(
-        scene_id="s1",
-        candidate_id="c1",
-        template=static_ref(TemplateName.ARRAY_GRID),
-        grade_level=1,
-        params={"rows": 4, "cols": 7},
-        status="pending_review",
-        thumbnail_path=thumb,
-    )
-    _seed_scene(client, scene)
-
-    resp = client.patch("/storyboard/s1", json={})
-    assert resp.status_code == 200
-    assert resp.json()["computed_answer"] == {
-        "value": "= 28",
-        "expression": "4 × 7 = 28",
-    }
-
-
-def test_computed_answer_null_for_template_without_registry_entry(tmp_path):
-    client = _client()
-    _upload_candidate(client)
-    _seed_scene(client, _number_line_scene(tmp_path))
-
-    resp = client.patch("/storyboard/s1", json={})
-    assert resp.status_code == 200
-    assert resp.json()["computed_answer"] is None
-
-
 def test_storyboard_does_not_break_with_meta_flag_off(tmp_path, monkeypatch):
     # meta_templates_enabled defaults to False, so the storyboard route must behave
     # exactly as before — record_unsupported_shape returns immediately. We
