@@ -8,7 +8,7 @@ const STAGES = [
 export default function StageRail({ current }) {
   const idx = STAGES.findIndex(s => s.key === current)
   return (
-    <ol className="rail">
+    <ol className="rail" aria-label="Pipeline stages">
       {STAGES.map((s, i) => {
         const state = i < idx ? 'done' : i === idx ? 'active' : 'todo'
         return (
