@@ -12,9 +12,9 @@ test('upload known-good deck surfaces candidates in the UI', async ({ page }) =>
   // Discovery invokes Bedrock. The playwright config boots the backend
   // with MATH_ANIM_MOCK_BEDROCK=1, so `call_with_tool` routes to the
   // canned handler in app.pipeline.bedrock_mocks — no AWS creds needed.
-  await page.goto('/demo')
+  await page.goto('/')
 
-  await expect(page.getByLabel(/upload a pptx/i)).toBeVisible()
+  await expect(page.getByRole('heading', { name: /upload a deck/i })).toBeVisible()
 
   await page.setInputFiles('input[type="file"]', FIXTURE)
   await page.getByRole('button', { name: /^upload$/i }).click()
@@ -24,5 +24,5 @@ test('upload known-good deck surfaces candidates in the UI', async ({ page }) =>
   ).toBeVisible({ timeout: 30_000 })
 
   await expect(page.locator('.picklist .pick').first()).toBeVisible()
-  await expect(page.locator('.upload__error')).toHaveCount(0)
+  await expect(page.locator('[role="alert"].notice--danger')).toHaveCount(0)
 })
