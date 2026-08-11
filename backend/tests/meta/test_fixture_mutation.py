@@ -114,6 +114,19 @@ def _observation(obs_id: str, source_excerpt: str):
     )
 
 
+def _turns_params_document():
+    return ParamsDocument(
+        params_version=1,
+        fields=[IntegerFieldSpec(name="turns", label="T", description="", minimum=1, maximum=4)],
+    )
+
+
+def _turns_guard_document():
+    return GuardDocument(predicates=[
+        {"predicate": "positive", "value": {"node": "field_ref", "field": "turns"}},
+    ])
+
+
 def test_drop_positives_with_ungrounded_numeric_params_keeps_grounded_and_drops_the_rest():
     """The compiled ``check_params_grounded`` gate rejects the whole draft on
     the first ungrounded positive; a model that ships one grounded positive
@@ -121,8 +134,7 @@ def test_drop_positives_with_ungrounded_numeric_params_keeps_grounded_and_drops_
     second positive (``turns=4``) therefore loses every retry to the
     speculative fixture, even though the grounded one on its own would
     validate. Dropping the speculative positives up front lets validation
-    see only the ones whose numeric leaves each appear as a numeric token
-    in their observation's excerpt.
+    see only the ones whose params ground against their observation.
     """
     grounded = ProposedFixture(
         kind="positive", expected_outcome="accept",
@@ -145,10 +157,112 @@ def test_drop_positives_with_ungrounded_numeric_params_keeps_grounded_and_drops_
     )}
 
     result = drop_positives_with_ungrounded_numeric_params(
-        [grounded, speculative, boundary, negative], observations,
+        [grounded, speculative, boundary, negative],
+        observations,
+        _turns_params_document(),
+        _turns_guard_document(),
     )
 
     assert result == [grounded, boundary, negative]
+
+
+def test_drop_positives_with_ungrounded_numeric_params_runs_before_dedup_so_grounded_wins():
+    """When two positives share an observation, ``drop_ungrounded_positive
+    _fixtures`` keeps the first-seen one and drops the rest. If the numeric
+    filter ran AFTER dedup, an ungrounded positive ordered first would
+    survive dedup and then be dropped by the filter -- leaving no positive
+    at all. Running the numeric filter first strips the ungrounded fixture
+    so dedup then keeps the surviving grounded one.
+    """
+    ungrounded_first = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"turns": 4},
+    )
+    grounded_second = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"turns": 3},
+    )
+    observations = {"obs-1": _observation("obs-1", "Rotate the triangle 3 times.")}
+
+    filtered = drop_positives_with_ungrounded_numeric_params(
+        [ungrounded_first, grounded_second],
+        observations,
+        _turns_params_document(),
+        _turns_guard_document(),
+    )
+    assert filtered == [grounded_second]
+
+    # Dedup after the numeric filter keeps the surviving grounded positive.
+    assert drop_ungrounded_positive_fixtures(filtered) == [grounded_second]
+
+
+def test_drop_positives_with_ungrounded_numeric_params_keeps_derived_totals():
+    """A template that vouches for a derived total via
+    ``grounding_derived_totals`` (e.g. ``right_total = 3 + 4 = 7`` when the
+    excerpt states 3 and 4 but not 7) has that total accepted by
+    ``check_params_grounded``. The filter must go through the same check
+    rather than a stricter literal-appearance rule, so a legitimate
+    derived-total positive is not dropped mid-pipeline.
+    """
+    params_document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="left_addend", label="A", description="", minimum=0, maximum=20),
+            IntegerFieldSpec(name="right_addend", label="B", description="", minimum=0, maximum=20),
+            IntegerFieldSpec(name="right_total", label="T", description="", minimum=0, maximum=40),
+        ],
+    )
+    guard_document = GuardDocument(predicates=[
+        {"predicate": "sum_equals",
+         "terms": [
+             {"node": "field_ref", "field": "left_addend"},
+             {"node": "field_ref", "field": "right_addend"},
+         ],
+         "total": {"node": "field_ref", "field": "right_total"}},
+    ])
+    positive = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1",
+        params={"left_addend": 3, "right_addend": 4, "right_total": 7},
+    )
+    observations = {"obs-1": _observation("obs-1", "3 + 4 = ?")}
+
+    result = drop_positives_with_ungrounded_numeric_params(
+        [positive], observations, params_document, guard_document,
+    )
+
+    assert result == [positive]
+
+
+def test_drop_positives_with_ungrounded_numeric_params_respects_multiset_multiplicity():
+    """``check_params_grounded`` consumes source tokens from a multiset. A
+    positive that needs two ``3``s but the excerpt only states one ``3``
+    is ungrounded even though the ``3`` appears literally. The filter
+    must model that same multiplicity rather than a set-membership check,
+    or a fixture the compiled gate would still reject slips through and
+    the retry loop can still starve.
+    """
+    params_document = ParamsDocument(
+        params_version=1,
+        fields=[
+            IntegerFieldSpec(name="first", label="F", description="", minimum=0, maximum=20),
+            IntegerFieldSpec(name="second", label="S", description="", minimum=0, maximum=20),
+        ],
+    )
+    guard_document = GuardDocument(predicates=[
+        {"predicate": "positive", "value": {"node": "field_ref", "field": "first"}},
+    ])
+    fixture = ProposedFixture(
+        kind="positive", expected_outcome="accept",
+        observation_id="obs-1", params={"first": 3, "second": 3},
+    )
+    observations = {"obs-1": _observation("obs-1", "Use the number 3 once.")}
+
+    result = drop_positives_with_ungrounded_numeric_params(
+        [fixture], observations, params_document, guard_document,
+    )
+
+    assert result == []
 
 
 def test_drop_positives_with_ungrounded_numeric_params_leaves_non_positives_alone():
@@ -164,7 +278,10 @@ def test_drop_positives_with_ungrounded_numeric_params_leaves_non_positives_alon
     )
     observations = {"obs-1": _observation("obs-1", "Rotate the triangle 3 times.")}
 
-    result = drop_positives_with_ungrounded_numeric_params([negative], observations)
+    result = drop_positives_with_ungrounded_numeric_params(
+        [negative], observations,
+        _turns_params_document(), _turns_guard_document(),
+    )
 
     assert result == [negative]
 

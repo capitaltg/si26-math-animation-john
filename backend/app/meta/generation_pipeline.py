@@ -110,10 +110,19 @@ def generate_and_validate_revision(
                 "hint": last_failure.hint,
             }
             continue
-        proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
+        # Ungrounded-positive filtering runs BEFORE observation dedup so an
+        # ungrounded fixture that happens to be ordered first for its
+        # observation cannot starve the surviving positive: `drop_ungrounded
+        # _positive_fixtures` keeps the first-seen fixture per observation,
+        # so removing the ungrounded ones ahead of time is what makes the
+        # grounded fixture the first-seen one.
         proposal.fixtures = drop_positives_with_ungrounded_numeric_params(
-            proposal.fixtures, observations_by_id
+            proposal.fixtures,
+            observations_by_id,
+            proposal.params_document,
+            proposal.guard_document,
         )
+        proposal.fixtures = drop_ungrounded_positive_fixtures(proposal.fixtures)
         proposal.fixtures = ensure_negative_fixtures(proposal.params_document, proposal.fixtures)
         # A negative fixture per guard predicate still lacking one. Without this
         # the publish gate's coverage requirement can only be met by the model,
