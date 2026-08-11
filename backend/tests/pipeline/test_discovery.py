@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pytest
+from pptx import Presentation
 
 from app.pipeline.parsing import Block
 
@@ -527,3 +528,79 @@ def test_discover_candidates_rejects_malformed_top_level_envelope(mock_call):
 
     with pytest.raises(ValidationError):
         discover_candidates(_text_blocks(["The problem is 4 + 3."]))
+
+
+# The discovery prompt is the gate every candidate passes through; only the
+# answer forms it names get flagged. Downstream v3 strategies also render
+# non-arithmetic answers -- pair_elimination selects a value from a list,
+# ray_shade graphs an inequality's ray, and the M22 rotation strategy stages a
+# rigid-motion image. When the prompt described only "a specific quantity that
+# can be computed", the rotation fixture ("Rotate the triangle 90° about the
+# point, three times. Where does it land?") returned zero candidates and the
+# UI showed "No solvable problems found in this document", which is what this
+# regression guards against.
+_EXPECTED_ADMITTED_ANSWER_FORMS = (
+    "computed quantity",
+    "selected from a stated collection",
+    "graphed region on a number line",
+    "image produced by a stated geometric transformation",
+)
+
+
+@pytest.mark.parametrize("phrase", _EXPECTED_ADMITTED_ANSWER_FORMS)
+def test_discovery_prompt_admits_every_answer_form_the_pipeline_can_render(phrase):
+    from app.pipeline.discovery import _DISCOVERY_SYSTEM_PROMPT
+
+    assert phrase in _DISCOVERY_SYSTEM_PROMPT
+
+
+def _build_rotation_test_deck(path):
+    presentation = Presentation()
+    layout = presentation.slide_layouts[1]
+    slide = presentation.slides.add_slide(layout)
+    slide.shapes.title.text = "Rotation"
+    slide.placeholders[1].text = (
+        "Rotate the triangle 90° about the point, three times. "
+        "Where does it land?"
+    )
+    presentation.save(path)
+
+
+@patch("app.pipeline.discovery.call_with_tool")
+def test_discover_candidates_flags_rotation_problem_on_real_fixture(mock_call, tmp_path):
+    """End-to-end guard for the M22 rotation fixture: parse the same .pptx that
+    `eval/generate_fixtures.py::build_rotation_test_deck` produces, then run
+    real discovery against a Bedrock stub that returns the excerpt a
+    prompt-compliant model would return. The candidate must survive grounding
+    and reach the frontend as a Candidate, so the upload flow does not empty
+    out on "No solvable problems found in this document".
+    """
+    from app.pipeline.discovery import discover_candidates_for_document
+    from app.pipeline.parsing import extract_slide_blocks
+
+    pptx_path = tmp_path / "rotation_test_deck.pptx"
+    _build_rotation_test_deck(pptx_path)
+    slide_blocks = extract_slide_blocks(pptx_path)
+
+    excerpt = (
+        "Rotate the triangle 90° about the point, three times. "
+        "Where does it land?"
+    )
+    mock_call.return_value = (
+        "report_candidates",
+        {
+            "candidates": [
+                {
+                    "source_excerpt": excerpt,
+                    "slide_index": 0,
+                    "one_line_summary": "Rotate a triangle three times",
+                }
+            ]
+        },
+    )
+
+    candidates = discover_candidates_for_document(slide_blocks)
+
+    assert len(candidates) == 1
+    assert candidates[0].source_excerpt == excerpt
+    assert candidates[0].slide_index == 0
