@@ -48,6 +48,58 @@ class VisualRegistry:
         return measured
 
 
+def _segments_properly_intersect(a1, a2, b1, b2):
+    """Return True iff the closed segments a1-a2 and b1-b2 cross each other's
+    interior (touching at a shared endpoint returns False). Used to reject a
+    self-intersecting polygon vertex order (M22).
+    """
+
+    def _orient(p, q, r):
+        # Sign of (q - p) x (r - p); zero means collinear.
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    def _on_segment(p, q, r):
+        return (
+            min(p[0], r[0]) <= q[0] <= max(p[0], r[0])
+            and min(p[1], r[1]) <= q[1] <= max(p[1], r[1])
+        )
+
+    if a1 in (b1, b2) or a2 in (b1, b2):
+        return False  # shared endpoint is not a proper crossing
+
+    o1, o2 = _orient(a1, a2, b1), _orient(a1, a2, b2)
+    o3, o4 = _orient(b1, b2, a1), _orient(b1, b2, a2)
+
+    if ((o1 > 0) != (o2 > 0)) and ((o3 > 0) != (o4 > 0)) and o1 != 0 and o2 != 0:
+        return True
+
+    # Collinear touch on an interior point counts as intersection.
+    if o1 == 0 and _on_segment(a1, b1, a2) and b1 != a1 and b1 != a2:
+        return True
+    if o2 == 0 and _on_segment(a1, b2, a2) and b2 != a1 and b2 != a2:
+        return True
+    return False
+
+
+def _polygon_self_intersects(vertices):
+    """Return True iff `vertices` (in edge order) produces crossing edges.
+
+    Used both by the measurer (to reject a bowtie ordering at plan-validation
+    time) and by the compiler (Task 4), which imports this directly to check
+    the polygon's post-rotation image without re-measuring the whole plane.
+    """
+    n = len(vertices)
+    edges = [(vertices[i], vertices[(i + 1) % n]) for i in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Adjacent edges share a vertex; skip.
+            if abs(i - j) <= 1 or (i == 0 and j == n - 1):
+                continue
+            if _segments_properly_intersect(*edges[i], *edges[j]):
+                return True
+    return False
+
+
 _SUPPORTED_STRATEGIES = {
     "ordered_values": {"group_reveal", "short_stagger", "pair_elimination"},
     "rectangle_measurement": {"group_reveal", "boundary_trace"},
@@ -67,7 +119,7 @@ _SUPPORTED_STRATEGIES = {
     "object_set": {"group_reveal", "short_stagger", "regroup"},
     "label": {"group_reveal"},
     "unit_tape": {"group_reveal", "unit_substitution", "unit_rate"},
-    "coordinate_plane": {"group_reveal"},
+    "coordinate_plane": {"group_reveal", "rotation"},
     "data_display": {"group_reveal", "short_stagger"},
 }
 
@@ -783,7 +835,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
                 ),
             ))
     seen_points = set()
-    for point in values["points"]:
+    for point in values.get("points", []):
         key = (point["x"], point["y"])
         if key in seen_points:
             raise V3ValidationError(V3Failure(
@@ -949,7 +1001,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
 
     # Pre-check every point sits inside the declared span before projecting
     # anything -- an off-plane point is refused regardless of label placement.
-    for index, point in enumerate(values["points"]):
+    for index, point in enumerate(values.get("points", [])):
         px, py = point["x"], point["y"]
         if not (x_min <= px <= x_max) or not (y_min <= py <= y_max):
             raise V3ValidationError(V3Failure(
@@ -973,7 +1025,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     # Pre-project every dot so a label rect can be checked against every other
     # rendered dot (labels paint above dots -- a later dot under an earlier
     # label reads as an obscured dot).
-    projected_points = [project(p["x"], p["y"]) for p in values["points"]]
+    projected_points = [project(p["x"], p["y"]) for p in values.get("points", [])]
     dot_rects = [
         (
             pu - COORDINATE_PLANE_DOT_RADIUS, pu + COORDINATE_PLANE_DOT_RADIUS,
@@ -1014,7 +1066,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     parts: dict = {}
     point_payload = []
     point_label_rects: list = []
-    for index, point in enumerate(values["points"]):
+    for index, point in enumerate(values.get("points", [])):
         px, py = point["x"], point["y"]
         u, v = projected_points[index]
         parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
@@ -1072,6 +1124,97 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "label_dx": chosen_dx, "label_dy": chosen_dy,
         })
 
+    # M22: an optional pivot and a primary polygon, both declared inside the
+    # same span the points and axes are drawn against. Off-plane vertices are
+    # refused before projection (raw model coords compared against the exact
+    # Fraction span), and duplicate/self-intersecting vertex orders are
+    # refused before anything is projected -- a bowtie ordering would still
+    # "measure" a bounding box, so the geometric check has to run explicitly.
+    pivot = values.get("pivot")
+    pivot_payload = None
+    if pivot is not None:
+        pivot_x, pivot_y = pivot["x"], pivot["y"]
+        if not (x_min <= pivot_x <= x_max) or not (y_min <= pivot_y <= y_max):
+            raise V3ValidationError(V3Failure(
+                code="pivot_off_plane",
+                path=f"visuals.{spec.ref}.pivot",
+                expected=(
+                    f"a pivot inside the declared plane [{format_number(x_min)}, "
+                    f"{format_number(x_max)}] x [{format_number(y_min)}, "
+                    f"{format_number(y_max)}]"
+                ),
+                observed=(
+                    f"{spec.ref} pivot ({format_number(pivot_x)}, "
+                    f"{format_number(pivot_y)}) is outside the declared span"
+                ),
+                hint="move the pivot inside the declared plane bounds",
+            ))
+        pivot_u, pivot_v = project(pivot_x, pivot_y)
+        parts[("pivot", None)] = SemanticPart(
+            "pivot", None, Bounds(pivot_u, pivot_u, pivot_v, pivot_v),
+        )
+        pivot_payload = (pivot_u, pivot_v)
+
+    polygons = values.get("polygons") or []
+    polygon_payload = []
+    for polygon in polygons:
+        polygon_ref = polygon["ref"]
+        vertex_tuples = [(vertex["x"], vertex["y"]) for vertex in polygon["vertices"]]
+        for index, (vx, vy) in enumerate(vertex_tuples):
+            if not (x_min <= vx <= x_max) or not (y_min <= vy <= y_max):
+                raise V3ValidationError(V3Failure(
+                    code="polygon_vertex_off_plane",
+                    path=f"visuals.{spec.ref}.polygons[{polygon_ref}].vertices[{index}]",
+                    expected=(
+                        f"every polygon vertex inside the declared plane "
+                        f"[{format_number(x_min)}, {format_number(x_max)}] x "
+                        f"[{format_number(y_min)}, {format_number(y_max)}]"
+                    ),
+                    observed=(
+                        f"{spec.ref} polygon {polygon_ref!r} vertex[{index}] = "
+                        f"({format_number(vx)}, {format_number(vy)}) is outside "
+                        "the declared span"
+                    ),
+                    hint=(
+                        "move the vertex inside the span, or widen the axis "
+                        "span to include it"
+                    ),
+                ))
+        if len(set(vertex_tuples)) != len(vertex_tuples):
+            raise V3ValidationError(V3Failure(
+                code="polygon_vertex_collision",
+                path=f"visuals.{spec.ref}.polygons[{polygon_ref}]",
+                expected="distinct coordinates for every polygon vertex",
+                observed=(
+                    f"{spec.ref} polygon {polygon_ref!r} repeats a vertex "
+                    "coordinate"
+                ),
+                hint="move the duplicated vertex to a distinct coordinate",
+            ))
+        if _polygon_self_intersects(vertex_tuples):
+            raise V3ValidationError(V3Failure(
+                code="polygon_self_intersects",
+                path=f"visuals.{spec.ref}.polygons[{polygon_ref}]",
+                expected="a simple (non-self-intersecting) polygon vertex order",
+                observed=(
+                    f"{spec.ref} polygon {polygon_ref!r} vertex order produces "
+                    "crossing edges"
+                ),
+                hint="reorder the vertices so consecutive edges do not cross",
+            ))
+        projected_vertices = [project(vx, vy) for vx, vy in vertex_tuples]
+        for index, (u, v) in enumerate(projected_vertices):
+            parts[("polygon_vertex", index)] = SemanticPart(
+                "polygon_vertex", index, Bounds(u, u, v, v),
+            )
+        polygon_us = [u for u, _v in projected_vertices]
+        polygon_vs = [v for _u, v in projected_vertices]
+        parts[("polygon", 0)] = SemanticPart(
+            "polygon", 0,
+            Bounds(min(polygon_us), max(polygon_us), min(polygon_vs), max(polygon_vs)),
+        )
+        polygon_payload.append({"ref": polygon_ref, "vertices": tuple(projected_vertices)})
+
     if grid_enabled:
         # Grid contract: a line at every integer. Do NOT reuse the tick helper,
         # which thins to at most COORDINATE_PLANE_MAX_TICKS_PER_AXIS values --
@@ -1125,6 +1268,8 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "grid": grid_enabled,
             "x_grid_lines": x_grid_lines,
             "y_grid_lines": y_grid_lines,
+            "polygons": tuple(polygon_payload),
+            "pivot": pivot_payload,
         },
     )
 

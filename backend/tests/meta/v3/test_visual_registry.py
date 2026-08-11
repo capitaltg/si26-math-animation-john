@@ -1018,3 +1018,141 @@ def test_partition_rejects_non_integral_shaded():
             {"whole": Fraction(1), "parts": Fraction(6), "shaded": Fraction(5, 2)},
             LiteralTextMeasurer(),
         )
+
+
+def test_coordinate_plane_measures_a_polygon_inside_its_span():
+    """M22: a declared polygon is measured and exposes vertex parts."""
+    from fractions import Fraction
+    from types import SimpleNamespace
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer  # existing helper
+
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-5), "x_max": Fraction(5),
+            "y_min": Fraction(-5), "y_max": Fraction(5),
+            "points": [],
+            "polygons": [{
+                "ref": "tri",
+                "vertices": [
+                    {"x": Fraction(1), "y": Fraction(0)},
+                    {"x": Fraction(3), "y": Fraction(0)},
+                    {"x": Fraction(2), "y": Fraction(2)},
+                ],
+            }],
+        },
+        LiteralTextMeasurer(),
+    )
+
+    for index in range(3):
+        assert ("polygon_vertex", index) in measured.parts
+
+
+def test_coordinate_plane_rejects_polygon_vertex_off_plane():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    import pytest
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer
+
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-4), "x_max": Fraction(4),
+                "y_min": Fraction(-4), "y_max": Fraction(4),
+                "polygons": [{
+                    "ref": "tri",
+                    "vertices": [
+                        {"x": Fraction(0), "y": Fraction(0)},
+                        {"x": Fraction(2), "y": Fraction(0)},
+                        {"x": Fraction(5), "y": Fraction(2)},  # off plane
+                    ],
+                }],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "polygon_vertex_off_plane" in str(exc_info.value) or "outside" in str(exc_info.value)
+
+
+def test_coordinate_plane_rejects_pivot_off_plane():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    import pytest
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer
+
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-4), "x_max": Fraction(4),
+                "y_min": Fraction(-4), "y_max": Fraction(4),
+                "pivot": {"x": Fraction(99), "y": Fraction(99)},
+                "polygons": [],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "pivot_off_plane" in str(exc_info.value) or "outside" in str(exc_info.value)
+
+
+def test_coordinate_plane_rejects_self_intersecting_polygon():
+    """A bowtie ordering [(0,0),(2,2),(2,0),(0,2)] is rejected."""
+    from fractions import Fraction
+    from types import SimpleNamespace
+    import pytest
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer
+
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-5), "x_max": Fraction(5),
+                "y_min": Fraction(-5), "y_max": Fraction(5),
+                "polygons": [{
+                    "ref": "bow",
+                    "vertices": [
+                        {"x": Fraction(0), "y": Fraction(0)},
+                        {"x": Fraction(2), "y": Fraction(2)},
+                        {"x": Fraction(2), "y": Fraction(0)},
+                        {"x": Fraction(0), "y": Fraction(2)},
+                    ],
+                }],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "polygon_self_intersects" in str(exc_info.value)
+
+
+def test_coordinate_plane_rejects_duplicate_polygon_vertices():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    import pytest
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer
+
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-5), "x_max": Fraction(5),
+                "y_min": Fraction(-5), "y_max": Fraction(5),
+                "polygons": [{
+                    "ref": "tri",
+                    "vertices": [
+                        {"x": Fraction(0), "y": Fraction(0)},
+                        {"x": Fraction(0), "y": Fraction(0)},  # duplicate
+                        {"x": Fraction(2), "y": Fraction(2)},
+                    ],
+                }],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "polygon_vertex_collision" in str(exc_info.value)
+
+
+def test_coordinate_plane_supports_rotation_strategy():
+    from app.meta.v3.visual_registry import _SUPPORTED_STRATEGIES
+    assert "rotation" in _SUPPORTED_STRATEGIES["coordinate_plane"]
