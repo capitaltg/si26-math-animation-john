@@ -678,20 +678,21 @@ def test_a_rotation_lesson_renders_through_the_probe():
     assert manifest["answer_anchor"] == "plane.polygon[0]"
     assert manifest["final_answer_visible"] is True
 
-    # `state_order_invalid` is a pre-existing, known gap OUTSIDE this task's
-    # file scope (renderer.py / test_renderer.py / test_render_probe.py):
-    # `check_state_order` requires the declared `answer_anchor`
-    # ("plane.polygon[0]") to receive its own `set_role(focus)` state event,
-    # but `beat_expander`'s rotation branch fires the derive beat's generic
-    # focus on the WHOLE plane (`_generic_role_change(beat, "focus", ...)`,
-    # beat.targets = [{"visual_ref": "plane"}]) -- and `polygon` isn't even a
-    # `compiler._PART_CARDINALITY["coordinate_plane"]` entry a plan could
-    # target directly. Reconciling that is beat_expander/compiler surface
-    # from Tasks 4-5, not this task's `_build_coordinate_plane`/`RotateAction`
-    # dispatch work. Asserting the failure set explicitly -- rather than
-    # `validate_rendered_quality(manifest).passed is True` -- pins this as
-    # the ONLY known gap and turns any OTHER regression into a test failure.
-    assert _failure_codes(manifest) == {"state_order_invalid"}
+    # `state_order_invalid` used to be a known gap here: `check_state_order`
+    # requires the declared `answer_anchor` ("plane.polygon[0]") to receive
+    # its own `set_role(focus)` state event, but `beat_expander`'s rotation
+    # branch used to fire the derive beat's generic focus on the WHOLE plane
+    # (`_generic_role_change(beat, "focus", ...)`, beat.targets =
+    # [{"visual_ref": "plane"}]) rather than on the polygon part the anchor
+    # names. That branch now emits its `focus` role change on the polygon
+    # target directly (`TargetRef(visual_ref=ref, part="polygon", index=0)`),
+    # matching `compiler._answer_anchor` exactly -- `polygon` still isn't a
+    # `compiler._PART_CARDINALITY["coordinate_plane"]` entry a PLAN could
+    # target itself, but a compiler-generated action never runs back through
+    # `_validate_target`, so the mismatch was only ever in beat_expander's own
+    # emission, not in what the schema allows. The render now passes every
+    # quality check with no failures.
+    assert _failure_codes(manifest) == set()
 
 
 def test_a_rotation_lesson_probe_is_stable_across_two_runs():

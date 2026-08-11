@@ -526,16 +526,31 @@ class BeatExpander:
             plan.strategy == "rotation"
             and beat.id == getattr(self, "_rotation_beat_id", None)
         ):
-            # One `RotateAction` per iteration, alongside the generic focus
-            # so the plane still reads as the beat's subject while each
-            # discrete step lands. `_require_owned_rotation_beat`
-            # (compiler.py) already guarantees exactly one focus/derive beat
-            # for the whole plan and that it carries no `custom_actions`, so
-            # nothing here can double-stage the sequence or collide with a
-            # plan-authored action.
+            # One `RotateAction` per iteration, plus a `focus` role change on
+            # the polygon itself rather than the whole plane.
+            # `compiler._answer_anchor` names `plane.polygon[0]` as the
+            # answer for a `rotation` plan (the rotated image IS the answer),
+            # and `check_state_order` requires that exact target -- not the
+            # plane it lives on -- to receive its own `focus` state event. A
+            # whole-plane `_generic_role_change` would focus `plane`, which
+            # never matches the anchor and always fails that gate. Any OTHER
+            # target the beat names (a supporting visual, say) still gets the
+            # ordinary generic treatment, so this only special-cases the
+            # primary visual's own whole-visual target.
+            # `_require_owned_rotation_beat` (compiler.py) already guarantees
+            # exactly one focus/derive beat for the whole plan and that it
+            # carries no `custom_actions`, so nothing here can double-stage
+            # the sequence or collide with a plan-authored action.
             rotations = self._rotation_actions(plan)
             if rotations:
-                return self._generic_role_change(beat, "focus", current_roles) + rotations
+                primary_ref = plan.primary_visual.ref
+                polygon_target = TargetRef(visual_ref=primary_ref, part="polygon", index=0)
+                actions = list(self._role_change(polygon_target, "focus", current_roles))
+                for target in beat.targets:
+                    if target.visual_ref == primary_ref and target.part is None:
+                        continue
+                    actions.extend(self._role_change(target, "focus", current_roles))
+                return actions + rotations
 
         if (
             plan.strategy == "unit_rate"
