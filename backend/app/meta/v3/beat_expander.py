@@ -6,7 +6,7 @@ from app.meta.dsl.scene_program import (
     DistanceAnnotationAction, DrawAction,
     GridProgramVisual, LabelProgramVisual, MoveAction, NumberLineProgramVisual,
     ObjectSetProgramVisual, OrderedValuesProgramVisual, PartitionProgramVisual,
-    ProgramAction, RectangleProgramVisual, RevealAction, SetRoleAction,
+    ProgramAction, RectangleProgramVisual, RevealAction, RotateAction, SetRoleAction,
     ShowAnswerStageAction, ShowRelationAction, SignedHopArrowAction,
     TraceAction, TransformAction, UnitTapeProgramVisual,
 )
@@ -89,6 +89,17 @@ _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 _EQUIVALENCE_ALIGN_STRATEGY = "equivalence_align"
 _BRIDGE_STRATEGY = "common_denominator_bridge"
 
+# `rotation` (M22) stages one `RotateAction` per iteration on the plan's single
+# focus-or-derive beat. Unlike every strategy above -- which owns the FIRST
+# focus/derive beat naming its primary visual, tolerating later focus/derive
+# beats as ordinary role changes -- `rotation` requires there be exactly one
+# focus-or-derive beat in the whole plan (`rotation_beat_id` below, gated at
+# compile time by `compiler._require_owned_rotation_beat`): the iterated image
+# is one indivisible sequence, and a second focus/derive beat would either
+# duplicate the sequence or silently do nothing.
+ROTATION_STEP_SECONDS = 0.8
+ROTATION_SETTLE_SECONDS = 0.3
+
 
 class BeatExpander:
     def __init__(self, *, answer_expression):
@@ -109,6 +120,7 @@ class BeatExpander:
         self._bridge_beat_id = common_denominator_bridge_beat_id(plan)
         self._percent_sweep_beat_id = percent_sweep_beat_id(plan)
         self._percent_change_sweep_target = _percent_change_sweep_target(plan)
+        self._rotation_beat_id = rotation_beat_id(plan)
         visuals = [
             self._program_visual(spec, plan.strategy, primary=spec is plan.primary_visual)
             for spec in self._visual_specs(plan)
@@ -219,6 +231,13 @@ class BeatExpander:
         if plan.strategy == "pair_elimination" and beat.kind == "organize":
             pair_count = (len(plan.primary_visual.values) - 1) // 2
             minimum_seconds = min(_SECONDS_PER_PAIR * pair_count, _MAX_ELIMINATION_SECONDS)
+        if plan.strategy == "rotation" and beat.id == rotation_beat_id(plan):
+            # Floor the beat at one step-plus-settle per iteration so
+            # `timeline.schedule_beats`'s generic proportional split cannot
+            # compress the sequence faster than a learner can track each
+            # discrete rotation.
+            iterations = plan.primary_visual.rotation_iterations
+            minimum_seconds = iterations * (ROTATION_STEP_SECONDS + ROTATION_SETTLE_SECONDS)
         return minimum_seconds, weight
 
     def _slot_count(self, plan, beat, actions):
@@ -285,6 +304,14 @@ class BeatExpander:
             # Same reasoning as magnitude_comparison: one slot per focus so
             # `check_salience` sees exactly one focus role change at each
             # at_seconds.
+            return len(actions)
+        if (
+            plan.strategy == "rotation"
+            and beat.id == getattr(self, "_rotation_beat_id", None)
+        ):
+            # One slot per action -- the beat's own focus role change plus
+            # one `RotateAction` per iteration -- so each rotation step gets
+            # its own `at_seconds` instead of landing all at once.
             return len(actions)
         return None
 
@@ -494,6 +521,21 @@ class BeatExpander:
                     if ribbon is not None:
                         actions = [ribbon, *actions]
                 return actions
+
+        if (
+            plan.strategy == "rotation"
+            and beat.id == getattr(self, "_rotation_beat_id", None)
+        ):
+            # One `RotateAction` per iteration, alongside the generic focus
+            # so the plane still reads as the beat's subject while each
+            # discrete step lands. `_require_owned_rotation_beat`
+            # (compiler.py) already guarantees exactly one focus/derive beat
+            # for the whole plan and that it carries no `custom_actions`, so
+            # nothing here can double-stage the sequence or collide with a
+            # plan-authored action.
+            rotations = self._rotation_actions(plan)
+            if rotations:
+                return self._generic_role_change(beat, "focus", current_roles) + rotations
 
         if (
             plan.strategy == "unit_rate"
@@ -730,6 +772,23 @@ class BeatExpander:
                 label=_format_magnitude(abs(value)),
             ))
         return actions
+
+    def _rotation_actions(self, plan):
+        """One `RotateAction` per iteration, in order 1..N (M22).
+
+        `rotation_iterations` is read off the PLAN's `CoordinatePlaneVisual` --
+        the one the plan author declared and `_validate_rotation_compatibility`
+        already checked before `expand_beats` ever runs -- not off the program
+        visual `compiler._apply_rotation_frames` stitches `rotation_frames`
+        onto afterwards; that program visual does not exist yet at this point
+        in the pipeline.
+        """
+        ref = plan.primary_visual.ref
+        iterations = plan.primary_visual.rotation_iterations
+        return [
+            RotateAction(target=TargetRef(visual_ref=ref), iteration=iteration)
+            for iteration in range(1, iterations + 1)
+        ]
 
     def _equivalence_align_actions(self, plan, current_roles):
         specs = [plan.primary_visual, *[
@@ -1369,6 +1428,37 @@ def percent_sweep_beat_id(plan):
         if any(target.visual_ref == sweep_ref for target in beat.targets):
             return beat.id
     return None
+
+
+def rotation_focus_or_derive_beats(plan):
+    """Every focus/derive beat in a `rotation` plan, in plan order.
+
+    Unlike every other single-owned-beat strategy above -- which each pick
+    the FIRST focus/derive beat naming their primary visual and let later
+    focus/derive beats behave normally -- `rotation` requires there be
+    exactly one focus-or-derive beat in the WHOLE plan: the iterated image is
+    one indivisible sequence, and a plan that scattered it across a second
+    focus/derive beat would either duplicate the sequence or leave that beat
+    silently doing nothing. Returning every match (not just the first) lets
+    `compiler._require_owned_rotation_beat` report the actual count on a
+    violation. `[]` for a non-rotation plan.
+    """
+    if plan.strategy != "rotation":
+        return []
+    return [beat for beat in plan.beats if beat.kind in {"focus", "derive"}]
+
+
+def rotation_beat_id(plan):
+    """The single beat `rotation` stages its `RotateAction` sequence on, or
+    `None` when the plan does not have exactly one focus-or-derive beat.
+
+    `compiler._require_owned_rotation_beat` refuses a plan with zero or two
+    or more such beats at compile time, before `expand_beats` ever runs, so
+    this returning `None` here only matters for a hand-built plan that
+    reaches the expander without going through that gate.
+    """
+    matches = rotation_focus_or_derive_beats(plan)
+    return matches[0].id if len(matches) == 1 else None
 
 
 def _percent_change_sweep_target(plan):

@@ -66,11 +66,9 @@ def test_removed_strategy_is_rejected_at_schema_validation():
 # See the design's "Schema-complete, behavior-thin" tier:
 # docs/superpowers/specs/2026-08-03-v3-capability-consistency-design.md
 #
-# `rotation` (M22): declared on `coordinate_plane` by Task 3 of the M22 plan
-# so the measurer can validate polygon/pivot geometry ahead of the beat
-# expander gaining `RotateAction` staging in Task 5. Remove this entry when
-# `expand_beats` branches on `rotation`.
-_STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR = {"rotation"}
+# `rotation` (M22) gained its own `RotateAction` staging in beat_expander.py
+# (Task 5 of the M22 plan), so it no longer belongs in this tracked gap.
+_STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR = set()
 
 
 def test_every_supported_strategy_has_expander_behavior():

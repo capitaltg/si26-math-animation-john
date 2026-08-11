@@ -6,10 +6,10 @@ import pytest
 
 from app.meta.dsl.expression import FieldRefNode, LiteralNode
 from app.meta.dsl.teaching_plan import (
-    CoordinatePlaneVisual, CoordinatePointNode, PolygonSpec, TeachingBeat,
-    TeachingPlanDocument,
+    CoordinatePlaneVisual, CoordinatePointNode, EmphasizeRequest, PolygonSpec,
+    TeachingBeat, TeachingPlanDocument,
 )
-from app.meta.dsl.v3_common import CompileContext
+from app.meta.dsl.v3_common import CompileContext, TargetRef
 from app.meta.v3.compiler import compile_teaching_plan
 from app.meta.v3.errors import V3ValidationError
 
@@ -173,3 +173,60 @@ def test_group_reveal_still_accepts_polygon_free_plane(compile_context):
     )
     program = _compile(plan, compile_context=compile_context)
     assert program is not None
+
+
+def test_rotation_stages_one_rotate_action_per_iteration_on_derive(compile_context):
+    program = _compile(_rotation_plan(), compile_context=compile_context)
+    rotate_actions = [
+        entry for entry in program.timeline
+        if entry.action.kind == "rotate"
+    ]
+    assert len(rotate_actions) == 3
+    assert [entry.action.iteration for entry in rotate_actions] == [1, 2, 3]
+    # All rotate actions belong to a single focus-or-derive beat.
+    beat_ids = {entry.beat_id for entry in rotate_actions}
+    assert beat_ids == {"derive"}
+
+
+def test_rotation_program_names_the_polygon_as_its_answer_anchor(compile_context):
+    program = _compile(_rotation_plan(), compile_context=compile_context)
+    assert program.answer_anchor.model_dump() == {
+        "visual_ref": "plane", "part": "polygon", "index": 0,
+    }
+
+
+def test_rotation_rejects_zero_focus_or_derive_beats(compile_context):
+    plan = _rotation_plan()
+    # Replace the derive beat with an organize beat: leaves zero focus/derive.
+    plan = plan.model_copy(update={"beats": [
+        plan.beats[0],
+        plan.beats[1].model_copy(update={"kind": "organize"}),
+        plan.beats[2],
+    ]})
+    with pytest.raises(V3ValidationError, match="rotation_requires_one_focus_or_derive_beat"):
+        _compile(plan, compile_context=compile_context)
+
+
+def test_rotation_rejects_two_focus_or_derive_beats(compile_context):
+    plan = _rotation_plan()
+    plan = plan.model_copy(update={"beats": [
+        plan.beats[0],
+        plan.beats[1],  # derive
+        plan.beats[1].model_copy(update={"id": "focus_two", "kind": "focus"}),
+        plan.beats[2],
+    ]})
+    with pytest.raises(V3ValidationError, match="rotation_requires_one_focus_or_derive_beat"):
+        _compile(plan, compile_context=compile_context)
+
+
+def test_rotation_rejects_custom_actions_on_the_derive_beat(compile_context):
+    plan = _rotation_plan()
+    beats = list(plan.beats)
+    beats[1] = beats[1].model_copy(update={
+        "custom_actions": [
+            EmphasizeRequest(target=TargetRef(visual_ref="plane"), role="focus"),
+        ],
+    })
+    plan = plan.model_copy(update={"beats": beats})
+    with pytest.raises(V3ValidationError, match="rotation_custom_actions_forbidden"):
+        _compile(plan, compile_context=compile_context)

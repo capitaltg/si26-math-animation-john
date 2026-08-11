@@ -241,8 +241,9 @@ class SceneProgramDocument(BaseModel):
     style_recipe: StyleRecipeDocument
     #: The target that carries the lesson's answer when no `evaluated_answer`
     #: card is drawn. `None` means the answer is the card, as it is for every
-    #: strategy but `pair_elimination`. Optional with a default so stored
-    #: `scene_version` 3 programs deserialise unchanged.
+    #: strategy but `pair_elimination` and `rotation` (M22; the final rotated
+    #: image is the answer). Optional with a default so stored `scene_version`
+    #: 3 programs deserialise unchanged.
     answer_anchor: TargetRef | None = None
 
     @model_validator(mode="after")

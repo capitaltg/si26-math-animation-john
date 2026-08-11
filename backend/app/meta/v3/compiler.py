@@ -9,6 +9,7 @@ from app.meta.v3.beat_expander import (
     STRUCTURE_VISUAL_KINDS,
     common_denominator_bridge_beat_id, equivalence_align_beat_id,
     expand_beats, magnitude_sweep_beat_id, percent_sweep_beat_id, regroup_beat_id,
+    rotation_focus_or_derive_beats,
 )
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
@@ -1341,6 +1342,7 @@ def _validate_rotation_compatibility(plan):
             f"iterations={spec.rotation_iterations}",
             "set all three fields on the coordinate_plane",
         )
+    _require_owned_rotation_beat(plan)
 
     iterations = spec.rotation_iterations
     angle_deg = spec.rotation_angle_deg
@@ -1357,6 +1359,46 @@ def _validate_rotation_compatibility(plan):
     # at validation time, rather than later when `_apply_rotation_frames`
     # recomputes it to populate the program visual.
     _compute_rotation_frames(spec)
+
+
+def _require_owned_rotation_beat(plan):
+    """`rotation` needs exactly one focus-or-derive beat in the whole plan,
+    and that beat must carry no plan-authored `custom_actions`.
+
+    Every other single-owned-beat strategy (`magnitude_comparison`,
+    `signed_hop`, `equivalence_align`, ...) picks the FIRST focus/derive beat
+    naming its primary visual and lets a later focus/derive beat behave
+    normally. `rotation` cannot: the iterated image is one indivisible
+    sequence, so a SECOND focus/derive beat has nothing left to mean --
+    it would either duplicate the sequence (if it also named the plane) or
+    silently do nothing (if it named something else), neither of which is a
+    lesson shape worth allowing. Refusing any count other than exactly one,
+    rather than "first one wins", surfaces that ambiguity at compile time.
+
+    A plan-authored `custom_actions` on the staging beat competes with the
+    compiler's own `RotateAction` sequence for the same beat's timeline slots
+    -- there is no way to interleave an author's emphasize/dim/reveal with a
+    strictly ordered rotation sequence and have both read as intended, so
+    the beat is compiler-owned outright, the same discipline `regroup` and
+    `pair_elimination` already apply to their own staged beats.
+    """
+    matches = rotation_focus_or_derive_beats(plan)
+    if len(matches) != 1:
+        _fail(
+            "rotation_requires_one_focus_or_derive_beat", "beats",
+            "exactly one focus-or-derive beat, which the compiler stages "
+            "the rotation sequence on",
+            f"count={len(matches)}",
+            "consolidate the rotation onto a single focus or derive beat",
+        )
+    beat = matches[0]
+    if beat.custom_actions:
+        _fail(
+            "rotation_custom_actions_forbidden", f"beats[{beat.id!r}].custom_actions",
+            "no plan-authored actions on the rotation staging beat",
+            f"count={len(beat.custom_actions)}",
+            "let the compiler stage the rotation; remove custom_actions from this beat",
+        )
 
 
 def _compute_rotation_frames(spec):
@@ -1494,15 +1536,20 @@ def _answer_anchor(plan):
 
     `pair_elimination` leaves the answer standing as the one unpaired item, so
     the lesson draws no separate answer card and the rendered-quality probe has
-    to be told which target to hold to the final frame instead.
+    to be told which target to hold to the final frame instead. `rotation`
+    (M22) is the same shape: the final rotated image IS the answer -- there is
+    no separate numeric result -- so the probe is pointed at the polygon
+    rather than at a card.
     """
-    if plan.strategy != "pair_elimination":
-        return None
-    return TargetRef(
-        visual_ref=plan.primary_visual.ref,
-        part="item",
-        index=len(plan.primary_visual.values) // 2,
-    )
+    if plan.strategy == "pair_elimination":
+        return TargetRef(
+            visual_ref=plan.primary_visual.ref,
+            part="item",
+            index=len(plan.primary_visual.values) // 2,
+        )
+    if plan.strategy == "rotation":
+        return TargetRef(visual_ref=plan.primary_visual.ref, part="polygon", index=0)
+    return None
 
 
 def _visual_specs(plan):
