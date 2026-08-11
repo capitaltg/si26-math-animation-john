@@ -1,12 +1,13 @@
 import { vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { DemoContext } from './DemoShell'
 import Queue from './Queue'
 
 function renderWithContext(overrides) {
   const value = {
-    candidates: null, selected: {}, options: null, picks: {}, results: null,
+    candidates: null, selected: {}, options: null, picks: {},
     storyboard: null, drafts: {}, fieldErrors: {}, fileName: null, loading: false,
     error: null, pendingRenders: new Set(), toasts: [],
     handleUpload: vi.fn(), toggle: vi.fn(), handleGetOptions: vi.fn(),
@@ -82,7 +83,7 @@ test('renders "Approve all & render remaining" button when ready scenes exist', 
   rerender(
     <MemoryRouter>
       <DemoContext.Provider value={{
-        candidates: [], selected: {}, options: [], picks: {}, results: null,
+        candidates: [], selected: {}, options: [], picks: {},
         storyboard: [
           { scene_id: 's1', detected_summary: 'Add fractions', template: 'number_line', slide_index: 1, status: 'rendered' },
         ],
@@ -97,4 +98,25 @@ test('renders "Approve all & render remaining" button when ready scenes exist', 
     </MemoryRouter>
   )
   expect(screen.queryByRole('button', { name: /approve all.*render remaining/i })).not.toBeInTheDocument()
+})
+
+test('renderAllReady omits scenes whose approveScene rejects from pendingRenders', async () => {
+  const storyboard = [
+    { scene_id: 's1', detected_summary: 'Add fractions', template: 'number_line', slide_index: 1, status: 'pending_review' },
+    { scene_id: 's2', detected_summary: 'Solve for x', template: 'balance_scale', slide_index: 2, status: 'pending_review' },
+  ]
+  const approveScene = vi.fn((id) => (id === 's2' ? Promise.reject(new Error('nope')) : Promise.resolve()))
+  const setPendingRenders = vi.fn()
+  renderWithContext({ candidates: [], options: [], storyboard, approveScene, setPendingRenders })
+
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: /approve all.*render remaining/i }))
+
+  expect(approveScene).toHaveBeenCalledWith('s1')
+  expect(approveScene).toHaveBeenCalledWith('s2')
+  expect(setPendingRenders).toHaveBeenCalledTimes(1)
+  const updater = setPendingRenders.mock.calls[0][0]
+  const next = updater(new Set())
+  expect(next.has('s1')).toBe(true)
+  expect(next.has('s2')).toBe(false)
 })

@@ -24,7 +24,6 @@ function renderFocus(overrides = {}) {
     drafts: {},
     fieldErrors: {},
     pendingRenders: new Set(),
-    results: null,
     loading: false,
     error: null,
     saveEdits: vi.fn(),
@@ -81,6 +80,23 @@ test('Approve & render calls approveScene and navigates to /demo', async () => {
 test('unknown id redirects to /demo', () => {
   renderFocus({ storyboard: [] })
   expect(screen.getByTestId('queue')).toBeInTheDocument()
+})
+
+test('Approve & render does not navigate or enqueue rendering when approveScene rejects', async () => {
+  const approveScene = vi.fn().mockRejectedValue(new Error('nope'))
+  const setPendingRenders = vi.fn()
+  renderFocus({ approveScene, setPendingRenders })
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: /approve.*render/i }))
+  expect(approveScene).toHaveBeenCalledWith('S1')
+  expect(setPendingRenders).not.toHaveBeenCalled()
+  expect(screen.queryByTestId('queue')).not.toBeInTheDocument()
+})
+
+test('renders the rendered clip video when scene.clip_url is set', () => {
+  renderFocus({ storyboard: [{ ...baseScene, clip_url: '/clips/s1.mp4' }] })
+  const region = screen.getByRole('region', { name: /scene preview/i })
+  expect(region.querySelector('video')).toBeInTheDocument()
 })
 
 // Regression coverage for the debounced-autosave stale-closure bug: saveEdits

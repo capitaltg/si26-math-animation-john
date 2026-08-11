@@ -17,8 +17,8 @@ function responseError(data, fallbackMessage) {
   return typeof data?.detail === 'string' ? data.detail : fallbackMessage
 }
 
-function deriveStage(candidates, options, storyboard, results) {
-  if (results && Object.keys(results).length) return 'clips'
+function deriveStage(candidates, options, storyboard) {
+  if (storyboard?.some((s) => s.status === 'rendered')) return 'clips'
   if (storyboard) return 'storyboard'
   if (options) return 'visuals'
   if (candidates) return 'problems'
@@ -32,7 +32,6 @@ export default function DemoShell() {
   const [selected, setSelected] = useState({})
   const [options, setOptions] = useState(null)
   const [picks, setPicks] = useState({})
-  const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [storyboard, setStoryboard] = useState(null)
@@ -60,6 +59,8 @@ export default function DemoShell() {
   // do (see backend/app/routes.py _clip_result call sites), so clip_url
   // truthiness — not a literal status string — is the success signal.
   const renderInFlight = useRef(false)
+  const storyboardRef = useRef(storyboard)
+  useEffect(() => { storyboardRef.current = storyboard }, [storyboard])
   useEffect(() => {
     if (renderInFlight.current) return
     if (!pendingRenders || pendingRenders.size === 0) return
@@ -75,8 +76,9 @@ export default function DemoShell() {
         if (!resp.ok) throw new Error(`Render request failed (HTTP ${resp.status})`)
         const data = await resp.json()
         const clips = Array.isArray(data.clips) ? data.clips : []
+        const currentStoryboard = storyboardRef.current
         for (const clip of clips) {
-          const scene = storyboard?.find(s => s.scene_id === clip.scene_id)
+          const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
           const title = scene?.detected_summary || 'Scene'
           if (clip.clip_url) {
             pushToast({ sceneId: clip.scene_id, title, clipUrl: clip.clip_url, kind: 'ok' })
@@ -100,7 +102,7 @@ export default function DemoShell() {
       }
     })()
     return () => controller.abort()
-  }, [pendingRenders, storyboard, pushToast, setPendingRenders, setStoryboard])
+  }, [pendingRenders])
 
   async function handleUpload(event) {
     event.preventDefault()
@@ -110,7 +112,6 @@ export default function DemoShell() {
     setLoading(true)
     setOptions(null)
     setPicks({})
-    setResults(null)
     setStoryboard(null)
     setDrafts({})
     setFieldErrors({})
@@ -267,6 +268,7 @@ export default function DemoShell() {
       replaceScene(data, { resetDraft })
     } catch (err) {
       setError(err.message)
+      throw err
     } finally {
       setLoading(false)
     }
@@ -293,7 +295,7 @@ export default function DemoShell() {
   const approveScene = (id) => sceneAction(id, '/approve', { method: 'POST' })
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
 
-  const stage = deriveStage(candidates, options, storyboard, results)
+  const stage = deriveStage(candidates, options, storyboard)
 
   const value = {
     candidates,
@@ -304,8 +306,6 @@ export default function DemoShell() {
     setOptions,
     picks,
     setPicks,
-    results,
-    setResults,
     loading,
     error,
     setError,

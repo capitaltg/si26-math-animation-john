@@ -139,10 +139,12 @@ export default function Queue() {
   const readyCount = readyScenes.length
 
   async function renderAllReady() {
-    await Promise.all(readyScenes.map((scene) => approveScene(scene.scene_id)))
+    const results = await Promise.allSettled(readyScenes.map((scene) => approveScene(scene.scene_id)))
+    const approved = readyScenes.filter((_, i) => results[i].status === 'fulfilled')
+    if (approved.length === 0) return
     setPendingRenders((prev) => {
       const next = new Set(prev)
-      for (const scene of readyScenes) next.add(scene.scene_id)
+      for (const scene of approved) next.add(scene.scene_id)
       return next
     })
   }

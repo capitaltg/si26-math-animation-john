@@ -40,7 +40,7 @@ export default function Focus() {
   const handleParamsChange = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => saveEdits(scene.scene_id, nextParams), 250)
+    timerRef.current = setTimeout(() => { saveEdits(scene.scene_id, nextParams)?.catch?.(() => {}) }, 250)
   }
   const handleParamsRevert = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
@@ -50,10 +50,14 @@ export default function Focus() {
 
   const rejected = [] // no scene-level rejected list yet
 
-  const clipUrl = null // Task 12 will feed rendered clip URLs
+  const clipUrl = scene.clip_url ?? null
 
   const handleApprove = async () => {
-    await approveScene(scene.scene_id)
+    try {
+      await approveScene(scene.scene_id)
+    } catch {
+      return // stay on Focus so user sees `error` and can retry
+    }
     setPendingRenders(prev => {
       const next = new Set(prev)
       next.add(scene.scene_id)
