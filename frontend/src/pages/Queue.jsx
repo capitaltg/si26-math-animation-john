@@ -138,10 +138,12 @@ export default function Queue() {
   const readyScenes = storyboard.filter((scene) => scene.status === 'pending_review')
   const readyCount = readyScenes.length
 
-  function renderAllReady() {
-    readyScenes.forEach((scene) => {
-      approveScene(scene.scene_id)
-      setPendingRenders((prev) => new Set(prev).add(scene.scene_id))
+  async function renderAllReady() {
+    await Promise.all(readyScenes.map((scene) => approveScene(scene.scene_id)))
+    setPendingRenders((prev) => {
+      const next = new Set(prev)
+      for (const scene of readyScenes) next.add(scene.scene_id)
+      return next
     })
   }
 

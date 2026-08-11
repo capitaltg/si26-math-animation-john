@@ -1,4 +1,4 @@
-import { createContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useEffect, useRef, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import StageRail from '../components/StageRail'
 import Queue from './Queue'
@@ -42,15 +42,15 @@ export default function DemoShell() {
   const [pendingRenders, setPendingRenders] = useState(new Set())
   const [toasts, setToasts] = useState([])
 
-  function pushToast(toast) {
+  const pushToast = useCallback((toast) => {
     const id = crypto.randomUUID()
     setToasts((previous) => [...previous, { id, ...toast }])
     return id
-  }
+  }, [])
 
-  function dismissToast(id) {
+  const dismissToast = useCallback((id) => {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
-  }
+  }, [])
 
   // Fire-once render dispatch, not polling: /render is a synchronous batch
   // endpoint (POST only — there is no GET /storyboard/{id} to poll), so a
@@ -72,6 +72,7 @@ export default function DemoShell() {
           credentials: 'include',
           signal: controller.signal,
         })
+        if (!resp.ok) throw new Error(`Render request failed (HTTP ${resp.status})`)
         const data = await resp.json()
         const clips = Array.isArray(data.clips) ? data.clips : []
         for (const clip of clips) {
@@ -271,14 +272,14 @@ export default function DemoShell() {
     }
   }
 
-  const saveEdits = (id) =>
+  const saveEdits = (id, params = undefined) =>
     sceneAction(
       id,
       '',
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ params: drafts[id] }),
+        body: JSON.stringify({ params: params ?? drafts[id] }),
       },
       { resetDraft: true },
     )

@@ -40,12 +40,12 @@ export default function Focus() {
   const handleParamsChange = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => saveEdits(scene.scene_id), 250)
+    timerRef.current = setTimeout(() => saveEdits(scene.scene_id, nextParams), 250)
   }
   const handleParamsRevert = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
-    saveEdits(scene.scene_id) // revert immediately
+    saveEdits(scene.scene_id, nextParams) // revert immediately
   }
 
   const rejected = [] // no scene-level rejected list yet

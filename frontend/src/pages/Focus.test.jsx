@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { DemoContext } from './DemoShell'
@@ -81,4 +81,43 @@ test('Approve & render calls approveScene and navigates to /demo', async () => {
 test('unknown id redirects to /demo', () => {
   renderFocus({ storyboard: [] })
   expect(screen.getByTestId('queue')).toBeInTheDocument()
+})
+
+// Regression coverage for the debounced-autosave stale-closure bug: saveEdits
+// must receive the just-typed params directly, not whatever `drafts` looked
+// like when the 250ms timer was scheduled.
+const scalarScene = {
+  scene_id: 'S1', template: 'array_grid', status: 'pending_review',
+  params: { w: 4 }, params_schema: { properties: { w: { type: 'integer' } } },
+  thumbnail_url: '/t.png', detected_summary: 'width four',
+  computed_answer: { value: '= 4', expression: 'w = 4' },
+  gates: [],
+}
+
+test('debounced autosave persists the latest typed value, not a stale draft', () => {
+  vi.useFakeTimers()
+  try {
+    const saveEdits = vi.fn()
+    renderFocus({ storyboard: [scalarScene], saveEdits })
+
+    fireEvent.change(screen.getByLabelText('w'), { target: { value: '6' } })
+    fireEvent.blur(screen.getByLabelText('w'))
+
+    vi.advanceTimersByTime(300)
+
+    expect(saveEdits).toHaveBeenCalledWith('S1', { w: 6 })
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('revert saves the restored original value immediately', () => {
+  const saveEdits = vi.fn()
+  // drafts already holds an edited value (w: 6) that differs from the
+  // scene's original params (w: 4), which is what enables the Revert button.
+  renderFocus({ storyboard: [scalarScene], drafts: { S1: { w: 6 } }, saveEdits })
+
+  fireEvent.click(screen.getByRole('button', { name: /revert/i }))
+
+  expect(saveEdits).toHaveBeenCalledWith('S1', { w: 4 })
 })
