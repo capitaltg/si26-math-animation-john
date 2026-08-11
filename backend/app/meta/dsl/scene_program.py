@@ -8,7 +8,8 @@ from app.meta.dsl.teaching_plan import (
     NumberLineVisual, ObjectSetVisual, PartitionVisual, UnitTapeVisual,
 )
 from app.meta.dsl.v3_common import (
-    MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MIN_ACTION_SECONDS, MIN_SCENE_SECONDS,
+    LEGACY_MIN_ACTION_SECONDS, LEGACY_MIN_SCENE_SECONDS,
+    MAX_ACTION_SECONDS, MAX_SCENE_SECONDS,
     AnchorRef, CalloutText, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 
@@ -198,7 +199,7 @@ ProgramAction = Annotated[
 class TimedAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     at_seconds: float = Field(ge=0, le=MAX_SCENE_SECONDS)
-    duration_seconds: float = Field(ge=MIN_ACTION_SECONDS, le=MAX_ACTION_SECONDS)
+    duration_seconds: float = Field(ge=LEGACY_MIN_ACTION_SECONDS, le=MAX_ACTION_SECONDS)
     beat_id: GeneratedText = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     action: ProgramAction
 
@@ -216,7 +217,7 @@ class SceneProgramDocument(BaseModel):
     visuals: list[ProgramVisual] = Field(min_length=1, max_length=16)
     relations: list[Relation] = Field(default_factory=list, max_length=16)
     timeline: list[TimedAction] = Field(min_length=1, max_length=40)
-    total_duration_seconds: float = Field(ge=MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS)
+    total_duration_seconds: float = Field(ge=LEGACY_MIN_SCENE_SECONDS, le=MAX_SCENE_SECONDS)
     variation_seed: GeneratedText = Field(min_length=1, max_length=64)
     style_recipe: StyleRecipeDocument
     #: The target that carries the lesson's answer when no `evaluated_answer`

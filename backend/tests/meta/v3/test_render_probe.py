@@ -22,14 +22,14 @@ def _failure_codes(manifest) -> set[str]:
 def valid_manifest():
     return {
         "frame_size": [900, 500],
-        "total_duration_seconds": 7.5,
-        "conclusion_hold_seconds": 1.5,
+        "total_duration_seconds": 15.0,
+        "conclusion_hold_seconds": 3.0,
         "final_beat_observed": True,
         "simple_reveal_mode": "together",
         "frames": [
-            {"beat_id": "reveal_values", "seconds": 1.5, "path": "probe-0.png", "non_background_pixels": 150},
-            {"beat_id": "focus_middle", "seconds": 4.5, "path": "probe-1.png", "non_background_pixels": 150},
-            {"beat_id": "show_answer", "seconds": 7.5, "path": "probe-2.png", "non_background_pixels": 200},
+            {"beat_id": "reveal_values", "seconds": 3.0, "path": "probe-0.png", "non_background_pixels": 150},
+            {"beat_id": "focus_middle", "seconds": 9.0, "path": "probe-1.png", "non_background_pixels": 150},
+            {"beat_id": "show_answer", "seconds": 15.0, "path": "probe-2.png", "non_background_pixels": 200},
         ],
         # `SAFE_FRAME` at this frame size: manim's default frame is 14.222 x 8
         # units, so the +/-6.6 x +/-3.6 safe box insets by 16 px horizontally
@@ -154,11 +154,11 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         # otherwise pass by vacuous truth.
         manifest["visual_bounds"] = {}
     elif mutation == "short_conclusion_hold":
-        manifest["conclusion_hold_seconds"] = 1.0
+        manifest["conclusion_hold_seconds"] = 2.0
     elif mutation == "under_duration":
-        manifest["total_duration_seconds"] = 5.5
+        manifest["total_duration_seconds"] = 11.5
     elif mutation == "over_duration":
-        manifest["total_duration_seconds"] = 12.5
+        manifest["total_duration_seconds"] = 24.5
     elif mutation == "zero_frame_width":
         # A zero-width frame is numerically valid but explodes `_normalized_distance`
         # and `_pixel_x` on first use; the contract must reject it before then.

@@ -349,12 +349,12 @@ def check_rendered_duration(manifest: dict) -> QualityCheck:
     if duration > MAX_SCENE_SECONDS + 1e-9:
         return _failed(
             "timeline_over_budget", "total_duration_seconds",
-            "rendered scene exceeded the 12-second budget",
+            "rendered scene exceeded the 24-second budget",
         )
     if duration + 1e-9 < MIN_SCENE_SECONDS:
         return _failed(
             "timeline_duration_out_of_bounds", "total_duration_seconds",
-            "rendered scene was shorter than the 6-second minimum",
+            "rendered scene was shorter than the 12-second minimum",
         )
     return _passed("timeline_duration", "total_duration_seconds")
 
@@ -379,7 +379,7 @@ def check_rendered_conclusion_hold(manifest: dict) -> QualityCheck:
     if hold + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS:
         return _failed(
             "conclusion_hold_too_short", "conclusion_hold_seconds",
-            "rendered conclusion holds for less than 1.5 seconds",
+            "rendered conclusion holds for less than 3 seconds",
         )
     return _passed("conclusion_hold_too_short", "conclusion_hold_seconds")
 

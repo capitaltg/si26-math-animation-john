@@ -40,7 +40,7 @@ def test_rendered_median_meets_v3_contract(rendered_median):
     report = rendered_median.quality_report
 
     # Redundant: static `check_duration` already bounds this at 6/12 pre-persist.
-    assert 6 <= report["total_duration_seconds"] <= 12
+    assert 12 <= report["total_duration_seconds"] <= 24
     # Load-bearing: the collection reveals as one group rather than trickling in
     # item by item.
     assert report["simple_reveal_mode"] == "together"
@@ -72,7 +72,7 @@ def test_rendered_perimeter_meets_v3_contract(rendered_perimeter):
     lesson = rendered_perimeter.lesson
 
     # Redundant: static `check_duration` already bounds this at 6/12 pre-persist.
-    assert 6 <= report["total_duration_seconds"] <= 12
+    assert 12 <= report["total_duration_seconds"] <= 24
 
     # Load-bearing: the boundary is actually traced, so the perimeter is shown as
     # a process rather than asserted.

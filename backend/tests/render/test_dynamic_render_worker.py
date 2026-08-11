@@ -140,7 +140,7 @@ def test_declared_and_observed_reveal_roles_agree_for_a_visual_with_no_declared_
             "at_seconds": 0.0, "duration_seconds": 1.0, "beat_id": "reveal_widgets",
             "action": {"kind": "reveal", "targets": [{"visual_ref": "widgets"}]},
         }],
-        "total_duration_seconds": 6.0,
+        "total_duration_seconds": 12.0,
         "variation_seed": "state-event-agreement",
         "style_recipe": {"palette": "ocean", "composition": "vertical_lesson", "motion_variant": "smooth"},
     })

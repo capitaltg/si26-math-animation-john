@@ -82,9 +82,9 @@ def validate_static_quality(plan, program) -> QualityReport:
 def check_duration(program) -> QualityCheck:
     duration = program.total_duration_seconds
     if duration > MAX_SCENE_SECONDS:
-        return _failed("timeline_over_budget", "total_duration_seconds", "scene duration exceeds the 12-second budget")
+        return _failed("timeline_over_budget", "total_duration_seconds", "scene duration exceeds the 24-second budget")
     if duration < MIN_SCENE_SECONDS:
-        return _failed("timeline_duration_out_of_bounds", "total_duration_seconds", "scene duration is below the 6-second minimum")
+        return _failed("timeline_duration_out_of_bounds", "total_duration_seconds", "scene duration is below the 12-second minimum")
     return _passed("timeline_duration", "total_duration_seconds")
 
 
@@ -201,7 +201,7 @@ def check_conclusion_hold(program) -> QualityCheck:
         shortest_conclusion_action + 1e-9 < MIN_CONCLUSION_HOLD_SECONDS
         or conclusion_end > program.total_duration_seconds + 1e-9
     ):
-        return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 1.5 seconds")
+        return _failed("conclusion_hold_too_short", "timeline", "the conclusion must remain visible for at least 3 seconds")
     return _passed("conclusion_hold_too_short", "timeline")
 
 

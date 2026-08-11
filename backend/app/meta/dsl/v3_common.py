@@ -8,12 +8,20 @@ AnchorName = Literal["center", "top", "bottom", "left", "right"]
 
 MIN_PLAN_BEATS = 3
 MAX_PLAN_BEATS = 5
-MIN_SCENE_SECONDS = 6.0
-MAX_SCENE_SECONDS = 12.0
-MIN_ACTION_SECONDS = 0.15
-MAX_ACTION_SECONDS = 2.0
-MAX_SIMPLE_STAGGER_SECONDS = 0.15
-MIN_CONCLUSION_HOLD_SECONDS = 1.5
+MIN_SCENE_SECONDS = 12.0
+MAX_SCENE_SECONDS = 24.0
+MIN_ACTION_SECONDS = 0.3
+MAX_ACTION_SECONDS = 4.0
+MAX_SIMPLE_STAGGER_SECONDS = 0.3
+MIN_CONCLUSION_HOLD_SECONDS = 3.0
+
+# Legacy floors preserved so `SceneProgramDocument.model_validate_json` still
+# accepts scene programs published under the pre-2x pace (6-12s scenes, actions
+# down to 0.15s). New drafts are held to the current `MIN_*` values by
+# `schedule_beats`/`check_conclusion_hold`/`check_rendered_duration`, but stored
+# programs deserialized in `dynamic_templates.load` must not be rejected here.
+LEGACY_MIN_SCENE_SECONDS = 6.0
+LEGACY_MIN_ACTION_SECONDS = 0.15
 
 # Rules that hold for every generated string, whether it names a reference or is
 # shown to a learner. Nothing here can appear in legitimate K-8 math wording.
