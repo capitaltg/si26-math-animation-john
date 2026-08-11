@@ -1,6 +1,6 @@
 from dataclasses import asdict
 from fractions import Fraction
-from math import ceil, gcd
+from math import ceil, cos, gcd, radians, sin
 
 from app.meta.dsl.expression import FieldContract, compile_expression
 from app.meta.dsl.scene_program import SceneProgramDocument, StyleRecipeDocument
@@ -13,7 +13,7 @@ from app.meta.v3.beat_expander import (
 from app.meta.v3.errors import V3Failure, V3ValidationError
 from app.meta.v3.style_recipe import resolve_style_recipe
 from app.meta.v3.timeline import schedule_beats
-from app.meta.v3.visual_registry import _SUPPORTED_STRATEGIES
+from app.meta.v3.visual_registry import _SUPPORTED_STRATEGIES, _polygon_self_intersects
 
 
 _EXPRESSION_FIELDS = {
@@ -141,6 +141,15 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
     validate_unit_rate_value_range(plan, known_fields)
     validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
+    if plan.strategy == "rotation":
+        # `expand_beats` builds every `ProgramVisual` through the generic,
+        # strategy-blind `_program_visual` mapping (`beat_expander.py`) --
+        # branching on `rotation` there is Task 5's `RotateAction` staging
+        # work, and doing it early here would falsely retire
+        # `test_every_supported_strategy_has_expander_behavior`'s tracked gap.
+        # So the frozen frames are stitched onto the already-built
+        # `CoordinatePlaneProgramVisual` as a post-processing step instead.
+        visuals = _apply_rotation_frames(plan, visuals)
     recipe = resolve_style_recipe(
         seed=plan.variation_seed,
         visual_kind=plan.primary_visual.kind,
@@ -165,6 +174,25 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
         style_recipe=StyleRecipeDocument(**asdict(recipe)),
         answer_anchor=_answer_anchor(plan),
     )
+
+
+def _apply_rotation_frames(plan, visuals):
+    """Stitch `_compute_rotation_frames`'s output onto the primary visual's
+    already-built `CoordinatePlaneProgramVisual` (M22).
+
+    `_validate_rotation_compatibility` already ran `_compute_rotation_frames`
+    once during `validate_strategy_compatibility` -- any raise happens there,
+    long before `expand_beats` runs. Re-running it here is cheap (at most
+    4 iterations over a handful of vertices) and it's the only way to hand the
+    frozen frames to a `ProgramVisual` that `expand_beats` built generically.
+    """
+    frames = _compute_rotation_frames(plan.primary_visual)
+    primary_ref = plan.primary_visual.ref
+    return [
+        visual.model_copy(update={"rotation_frames": frames})
+        if visual.ref == primary_ref else visual
+        for visual in visuals
+    ]
 
 
 def expressions_from_plan(plan):
@@ -319,6 +347,8 @@ def validate_strategy_compatibility(plan, answer_expression=None):
         _validate_percent_of_whole_compatibility(plan)
     if plan.strategy == "percent_change":
         _validate_percent_change_compatibility(plan)
+    if plan.strategy == "rotation":
+        _validate_rotation_compatibility(plan)
 
 
 def _validate_inverse_operation_compatibility(plan):
@@ -1281,6 +1311,118 @@ def _validate_percent_change_compatibility(plan):
             f"pick before/after values whose difference is {_MAX_PERCENT_SWEEP_SEGMENTS} or less",
         )
     _require_percent_change_sweep_beat(plan, after.ref)
+
+
+def _validate_rotation_compatibility(plan):
+    """Refuse a `rotation` plan whose polygon, pivot, or iterated images
+    would fall off the plane, degenerate into a bowtie, or return to start
+    mid-sequence.
+
+    Every check here is compile-time: the schema already caps `polygons` at
+    one entry and `rotation_iterations` at 1..4 (`teaching_plan.py`), so this
+    only has to confirm the three rotation fields are all *present* together,
+    reject an iteration count that lands the polygon back on its start pose,
+    and (via `_compute_rotation_frames`) confirm every rotated vertex stays on
+    the plane and every rotated image stays simple.
+    """
+    spec = plan.primary_visual
+    if len(spec.polygons) != 1:
+        _fail(
+            "rotation_requires_one_polygon", "primary_visual.polygons",
+            "exactly one polygon on the plane",
+            f"len(polygons)={len(spec.polygons)}",
+            "declare a single polygon on the coordinate_plane",
+        )
+    if spec.pivot is None or spec.rotation_angle_deg is None or spec.rotation_iterations is None:
+        _fail(
+            "rotation_requires_pivot_and_angle_and_iterations", "primary_visual",
+            "pivot, rotation_angle_deg, and rotation_iterations all set",
+            f"pivot={spec.pivot is not None}, angle={spec.rotation_angle_deg}, "
+            f"iterations={spec.rotation_iterations}",
+            "set all three fields on the coordinate_plane",
+        )
+
+    iterations = spec.rotation_iterations
+    angle_deg = spec.rotation_angle_deg
+    if iterations > 1 and (iterations * angle_deg) % 360 == 0:
+        _fail(
+            "rotation_returns_to_start", "primary_visual",
+            "iterations * angle_deg NOT a multiple of 360 degrees",
+            f"iterations={iterations}, angle_deg={angle_deg}",
+            "reduce iterations or pick a smaller angle so the polygon does "
+            "not return to its start pose",
+        )
+    # Runs (and discards) the frame computation purely to surface an
+    # off-plane or self-intersecting image as a compile-time failure here,
+    # at validation time, rather than later when `_apply_rotation_frames`
+    # recomputes it to populate the program visual.
+    _compute_rotation_frames(spec)
+
+
+def _compute_rotation_frames(spec):
+    """Rotate `spec.polygons[0].vertices` about `spec.pivot` for each
+    iteration and return the list of per-iteration vertex lists.
+
+    Entry `k` is the polygon's vertex list after iteration `k + 1` (so index
+    0 is the first application of the rotation, and the last entry is the
+    final image). Every produced vertex is checked against the plane extent
+    and every produced image against self-intersection; either violation
+    raises immediately rather than returning a partial/invalid result.
+    """
+    pivot_x = _literal_number(spec.pivot.x)
+    pivot_y = _literal_number(spec.pivot.y)
+    x_min = _literal_number(spec.x_min)
+    x_max = _literal_number(spec.x_max)
+    y_min = _literal_number(spec.y_min)
+    y_max = _literal_number(spec.y_max)
+    assert None not in (pivot_x, pivot_y, x_min, x_max, y_min, y_max), (
+        "rotation requires a literal pivot and literal plane extent; "
+        "field-ref-driven rotation geometry is not supported"
+    )
+
+    angle_rad = radians(spec.rotation_angle_deg)
+    cos_a, sin_a = cos(angle_rad), sin(angle_rad)
+
+    current = [
+        (_literal_number(vertex.x), _literal_number(vertex.y))
+        for vertex in spec.polygons[0].vertices
+    ]
+    assert all(x is not None and y is not None for x, y in current), (
+        "rotation requires literal polygon vertices; field-ref-driven "
+        "vertices are not supported"
+    )
+
+    frames = []
+    for iteration_index in range(spec.rotation_iterations):
+        rotated = []
+        for vx, vy in current:
+            dx, dy = vx - pivot_x, vy - pivot_y
+            nx = round(pivot_x + cos_a * dx - sin_a * dy, 12)
+            ny = round(pivot_y + sin_a * dx + cos_a * dy, 12)
+            if not (x_min <= nx <= x_max and y_min <= ny <= y_max):
+                _fail(
+                    "rotation_image_off_plane", "primary_visual",
+                    "every rotated vertex inside the plane extent",
+                    f"iteration={iteration_index + 1}, vertex=({nx}, {ny}), "
+                    f"span=x[{x_min}, {x_max}] y[{y_min}, {y_max}]",
+                    "shrink the polygon, widen the plane, or reduce iterations",
+                )
+            rotated.append((nx, ny))
+        # Defence in depth, not a duplicate of the measurer's original-order
+        # check: a rotation preserves simplicity mathematically, but rounding
+        # every vertex to 12 decimals could in principle flip a degenerate,
+        # near-collinear edge pair. Cheap to check; free of false positives on
+        # every fixture exercised so far.
+        if _polygon_self_intersects(rotated):
+            _fail(
+                "rotation_image_self_intersects", "primary_visual",
+                "a rotated polygon that is still simple",
+                f"iteration={iteration_index + 1}, vertices={rotated}",
+                "adjust the vertex order or the rotation angle",
+            )
+        frames.append(rotated)
+        current = rotated
+    return frames
 
 
 def _require_percent_change_sweep_beat(plan, after_ref):
