@@ -21,16 +21,6 @@ function Svg({ size = 20, children, className }) {
   )
 }
 
-export function IconTray({ size = 40 }) {
-  return (
-    <Svg size={size}>
-      <path d="M12 16V4" />
-      <path d="M7 9l5-5 5 5" />
-      <path d="M4 15v4h16v-4" />
-    </Svg>
-  )
-}
-
 export function IconCheck({ size }) {
   return (
     <Svg size={size}>
@@ -103,17 +93,6 @@ export function IconAlert({ size }) {
   )
 }
 
-// Stacked rod blocks: a hand-authored template.
-export function IconBlocks({ size }) {
-  return (
-    <Svg size={size}>
-      <rect x="3" y="14" width="8" height="6" />
-      <rect x="13" y="14" width="8" height="6" />
-      <rect x="8" y="4" width="8" height="6" />
-    </Svg>
-  )
-}
-
 // Checked arithmetic: a tally column with a rule under it.
 export function IconChecked({ size }) {
   return (
@@ -121,17 +100,6 @@ export function IconChecked({ size }) {
       <path d="M5 4v9M9 4v9M13 4v9" />
       <path d="M3 16h18" />
       <path d="M14 20l3 2 4-6" />
-    </Svg>
-  )
-}
-
-// One clip out: a film frame with sprocket holes.
-export function IconFilm({ size }) {
-  return (
-    <Svg size={size}>
-      <rect x="3" y="5" width="18" height="14" rx="1" />
-      <path d="M7 5v14M17 5v14" />
-      <path d="M10 9h4v6h-4z" />
     </Svg>
   )
 }
