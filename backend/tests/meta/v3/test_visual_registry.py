@@ -1126,6 +1126,34 @@ def test_coordinate_plane_rejects_self_intersecting_polygon():
     assert "polygon_self_intersects" in str(exc_info.value)
 
 
+def test_coordinate_plane_rejects_collinear_polygon():
+    """A triangle with collinear vertices has zero area -- reject."""
+    from fractions import Fraction
+    from types import SimpleNamespace
+    import pytest
+    from app.meta.v3.visual_registry import default_visual_registry
+    from tests.meta.v3.test_visual_registry import LiteralTextMeasurer
+
+    with pytest.raises(ValueError) as exc_info:
+        default_visual_registry().measure(
+            SimpleNamespace(kind="coordinate_plane", ref="plane"),
+            {
+                "x_min": Fraction(-5), "x_max": Fraction(5),
+                "y_min": Fraction(-5), "y_max": Fraction(5),
+                "polygons": [{
+                    "ref": "tri",
+                    "vertices": [
+                        {"x": Fraction(0), "y": Fraction(0)},
+                        {"x": Fraction(2), "y": Fraction(0)},
+                        {"x": Fraction(4), "y": Fraction(0)},
+                    ],
+                }],
+            },
+            LiteralTextMeasurer(),
+        )
+    assert "polygon_zero_area" in str(exc_info.value)
+
+
 def test_coordinate_plane_rejects_duplicate_polygon_vertices():
     from fractions import Fraction
     from types import SimpleNamespace

@@ -81,6 +81,22 @@ def _segments_properly_intersect(a1, a2, b1, b2):
     return False
 
 
+def _polygon_signed_area_doubled(vertices):
+    """Return twice the signed (shoelace) area of `vertices`, exactly.
+
+    Callers divide by 2 (and take `abs()`) only when they need the actual
+    area; kept doubled here so integer/`Fraction` inputs never need a
+    half-unit division until a caller asks for it, and zero-area polygons
+    (collinear vertices) can be detected with a plain `== 0` check.
+    """
+    n = len(vertices)
+    return sum(
+        vertices[i][0] * vertices[(i + 1) % n][1]
+        - vertices[(i + 1) % n][0] * vertices[i][1]
+        for i in range(n)
+    )
+
+
 def _polygon_self_intersects(vertices):
     """Return True iff `vertices` (in edge order) produces crossing edges.
 
@@ -1217,6 +1233,17 @@ def _measure_coordinate_plane(*, spec, values, measurer):
                     "crossing edges"
                 ),
                 hint="reorder the vertices so consecutive edges do not cross",
+            ))
+        if _polygon_signed_area_doubled(vertex_tuples) == 0:
+            raise V3ValidationError(V3Failure(
+                code="polygon_zero_area",
+                path=f"visuals.{spec.ref}.polygons[{polygon_ref}]",
+                expected="a polygon with nonzero (non-collinear) area",
+                observed=(
+                    f"{spec.ref} polygon {polygon_ref!r} vertices are collinear "
+                    "and enclose zero area"
+                ),
+                hint="move a vertex off the shared line so the polygon has area",
             ))
         projected_vertices = [project(vx, vy) for vx, vy in vertex_tuples]
         for index, (u, v) in enumerate(projected_vertices):
