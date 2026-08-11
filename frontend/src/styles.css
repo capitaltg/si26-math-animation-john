@@ -131,3 +131,19 @@ body { margin:0; background:var(--bg); color:var(--ink);
 @media (max-width: 900px) { .focus__split { grid-template-columns: 1fr; } }
 .focus__left, .focus__right { display: flex; flex-direction: column; gap: var(--sp-3); }
 .focus__actions { display: flex; gap: var(--sp-3); justify-content: flex-end; padding-top: var(--sp-3); border-top: 1px solid var(--line); }
+
+.toasts { position: fixed; bottom: var(--sp-4); right: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); z-index: 100; max-width: 360px; }
+.toast { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--sp-3);
+  box-shadow: var(--shadow); display: flex; gap: var(--sp-3); align-items: center; }
+.toast--warn { border-color: color-mix(in oklab, var(--warn), transparent 60%); }
+.toast__body { flex: 1; min-width: 0; }
+.toast__title { font-weight: 600; color: var(--ink); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast__meta { color: var(--ink-3); font-size: 12px; margin-top: var(--sp-1); }
+.toast__actions { display: flex; align-items: center; gap: var(--sp-2); }
+
+.modal { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; }
+.modal__scrim { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
+.modal__body { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--sp-3); max-width: 720px; width: 90%; display: flex; flex-direction: column; gap: var(--sp-3); box-shadow: var(--shadow); }
+.modal__video { width: 100%; aspect-ratio: 16 / 9; background: black; border-radius: var(--radius); }
+.modal__close { align-self: flex-end; }

@@ -1,4 +1,4 @@
-import { createContext, useState } from 'react'
+import { createContext, useEffect, useRef, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import StageRail from '../components/StageRail'
 import Queue from './Queue'
@@ -51,6 +51,55 @@ export default function DemoShell() {
   function dismissToast(id) {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }
+
+  // Fire-once render dispatch, not polling: /render is a synchronous batch
+  // endpoint (POST only — there is no GET /storyboard/{id} to poll), so a
+  // pendingRenders change triggers exactly one POST /render whose response
+  // already carries the finished-or-failed status for every approved scene.
+  // A successful clip always carries a clip_url; error/timeout clips never
+  // do (see backend/app/routes.py _clip_result call sites), so clip_url
+  // truthiness — not a literal status string — is the success signal.
+  const renderInFlight = useRef(false)
+  useEffect(() => {
+    if (renderInFlight.current) return
+    if (!pendingRenders || pendingRenders.size === 0) return
+    const controller = new AbortController()
+    renderInFlight.current = true
+    ;(async () => {
+      try {
+        const resp = await fetch('/render', {
+          method: 'POST',
+          credentials: 'include',
+          signal: controller.signal,
+        })
+        const data = await resp.json()
+        const clips = Array.isArray(data.clips) ? data.clips : []
+        for (const clip of clips) {
+          const scene = storyboard?.find(s => s.scene_id === clip.scene_id)
+          const title = scene?.detected_summary || 'Scene'
+          if (clip.clip_url) {
+            pushToast({ sceneId: clip.scene_id, title, clipUrl: clip.clip_url, kind: 'ok' })
+          } else {
+            pushToast({ sceneId: clip.scene_id, title, kind: 'warn', message: 'Render failed — open the problem to retry.' })
+          }
+        }
+        setStoryboard(prev => prev?.map(s => {
+          const clip = clips.find(c => c.scene_id === s.scene_id)
+          if (!clip) return s
+          return { ...s, status: clip.clip_url ? 'rendered' : 'render_failed', clip_url: clip.clip_url }
+        }) ?? prev)
+        setPendingRenders(new Set())
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          pushToast({ title: 'Render error', kind: 'warn', message: err.message })
+          setPendingRenders(new Set())
+        }
+      } finally {
+        renderInFlight.current = false
+      }
+    })()
+    return () => controller.abort()
+  }, [pendingRenders, storyboard, pushToast, setPendingRenders, setStoryboard])
 
   async function handleUpload(event) {
     event.preventDefault()
