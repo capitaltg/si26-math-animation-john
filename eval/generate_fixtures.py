@@ -69,12 +69,27 @@ def build_chain_test_deck(path: Path) -> None:
     presentation.save(path)
 
 
+def build_rotation_test_deck(path: Path) -> None:
+    """M22 rotation fixture — upload to manually test the rotation template."""
+    presentation, layout = _new_presentation()
+
+    slide = presentation.slides.add_slide(layout)
+    slide.shapes.title.text = "Rotation"
+    slide.placeholders[1].text = (
+        "Rotate the triangle 90° about the point, three times. "
+        "Where does it land?"
+    )
+
+    presentation.save(path)
+
+
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     build_zero_candidate_deck(FIXTURES_DIR / "zero_candidate_deck.pptx")
     build_distractor_heavy_deck(FIXTURES_DIR / "distractor_heavy_deck.pptx")
     build_ambiguous_phrasing_deck(FIXTURES_DIR / "ambiguous_phrasing_deck.pptx")
     build_chain_test_deck(FIXTURES_DIR / "chain_test_deck.pptx")
+    build_rotation_test_deck(FIXTURES_DIR / "rotation_test_deck.pptx")
     print(f"Wrote fixtures to {FIXTURES_DIR}")
 
 
