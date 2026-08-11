@@ -253,3 +253,20 @@ def test_the_prompt_hands_answer_presentation_to_the_system():
     # first beat, and only its VALUE waits for conclude.
     assert "introduced only during\nconclude" not in _DRAFT_SYSTEM_PROMPT
     assert "the final evaluated answer is introduced only during" not in _DRAFT_SYSTEM_PROMPT
+
+
+def test_the_prompt_pins_rotation_geometry_to_literals_not_fields():
+    """A rotation excerpt ("Rotate the triangle 90° about the point, three
+    times. Where does it land?") states only the iteration count and angle in
+    words, so a `params_document` with polygon-vertex or pivot fields cannot
+    ground any of those values in the source. The demo rotation lesson in
+    `test_demo_end_to_end.py::ROTATION_LESSON` bakes those numbers as
+    `literal` nodes in the plan and exposes only `turns` as a field, which is
+    the shape the prompt has to pin so real Bedrock drafts do not invent
+    ungrounded fixture params (`fixture_validation_failed`, "not grounded in
+    source: 2, 1, 4, 1, 2, 4, 0, 0, -1, 2").
+    """
+    from app.meta.draft_generation import _DRAFT_SYSTEM_PROMPT
+
+    assert "For rotation, expose only the iteration count as a param" in _DRAFT_SYSTEM_PROMPT
+    assert "must be literal nodes in the teaching_plan_document, not fields" in _DRAFT_SYSTEM_PROMPT
