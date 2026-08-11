@@ -61,23 +61,35 @@ export default function DemoShell() {
   const renderInFlight = useRef(false)
   const storyboardRef = useRef(storyboard)
   useEffect(() => { storyboardRef.current = storyboard }, [storyboard])
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+  // Drain-on-completion, not abort-on-change: if pendingRenders grows while a
+  // /render POST is in flight, we let the in-flight call finish rather than
+  // aborting it. Aborting mid-flight left queued scenes stranded — the abort
+  // fired the cleanup, but the effect re-run that triggered it had already
+  // early-returned on renderInFlight.current reading true, so nothing kicked
+  // off a follow-up POST once the aborted call's `finally` cleared the flag.
+  // Instead, on completion we subtract only the scene_ids the response
+  // actually covered, so any ids added mid-flight survive and the next
+  // pendingRenders-change re-fires the effect for just those.
   useEffect(() => {
     if (renderInFlight.current) return
     if (!pendingRenders || pendingRenders.size === 0) return
-    const controller = new AbortController()
     renderInFlight.current = true
     ;(async () => {
+      const processed = new Set()
       try {
         const resp = await fetch('/render', {
           method: 'POST',
           credentials: 'include',
-          signal: controller.signal,
         })
         if (!resp.ok) throw new Error(`Render request failed (HTTP ${resp.status})`)
         const data = await resp.json()
         const clips = Array.isArray(data.clips) ? data.clips : []
+        if (!mountedRef.current) return
         const currentStoryboard = storyboardRef.current
         for (const clip of clips) {
+          processed.add(clip.scene_id)
           const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
           const title = scene?.detected_summary || 'Scene'
           if (clip.clip_url) {
@@ -91,17 +103,23 @@ export default function DemoShell() {
           if (!clip) return s
           return { ...s, status: clip.clip_url ? 'rendered' : 'render_failed', clip_url: clip.clip_url }
         }) ?? prev)
-        setPendingRenders(new Set())
+        setPendingRenders(prev => {
+          const next = new Set(prev)
+          for (const id of processed) next.delete(id)
+          return next
+        })
       } catch (err) {
-        if (err.name !== 'AbortError') {
-          pushToast({ title: 'Render error', kind: 'warn', message: err.message })
-          setPendingRenders(new Set())
-        }
+        if (!mountedRef.current) return
+        pushToast({ title: 'Render error', kind: 'warn', message: err.message })
+        // On failure, clear the whole pendingRenders — the batch failed as a
+        // unit and the user needs to reapprove/retry. Retaining ids would
+        // loop the failing call indefinitely.
+        setPendingRenders(new Set())
       } finally {
         renderInFlight.current = false
       }
     })()
-    return () => controller.abort()
+    // NO cleanup — do NOT abort in flight; see comment above.
   }, [pendingRenders])
 
   async function handleUpload(event) {

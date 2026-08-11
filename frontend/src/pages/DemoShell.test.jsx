@@ -33,3 +33,15 @@ test('renders stage rail and upload input on entry', () => {
 // task's 15-minute budget; the fix itself (storyboardRef + `[pendingRenders]`
 // deps) is exercised indirectly by Focus.test.jsx and Queue.test.jsx, which
 // cover the approve -> setPendingRenders call sites that feed this effect.
+//
+// PR-review fix Round 2 (Finding 1, 2026-08-11): switched the /render effect
+// from abort-on-change to drain-on-completion (subtract only the processed
+// scene_ids from pendingRenders instead of wiping the whole set on success,
+// and no AbortController/cleanup at all) so a mid-flight approve is picked
+// up by a follow-up POST instead of being stranded. Re-attempted the same
+// DemoShell-level seed-and-mock test for this; same jsdom form-seam blocker
+// as above applies (still no way to reach a non-empty `pendingRenders`
+// without the blocked upload -> approve path), so it's skipped again. The
+// drain semantics (subtract processed ids, not wipe-all) has no unit not
+// gated by that seam either, since `pendingRenders` is plain component
+// state with no exported reducer to test in isolation.

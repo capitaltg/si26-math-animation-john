@@ -45,7 +45,7 @@ export default function Focus() {
   const handleParamsRevert = (nextParams) => {
     setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
-    saveEdits(scene.scene_id, nextParams) // revert immediately
+    saveEdits(scene.scene_id, nextParams)?.catch?.(() => {}) // revert immediately
   }
 
   const rejected = [] // no scene-level rejected list yet
@@ -100,8 +100,8 @@ export default function Focus() {
       </div>
 
       <footer className="focus__actions">
-        <button className="btn btn--danger" onClick={() => rejectScene(scene.scene_id)} disabled={loading}>Reject</button>
-        <button className="btn btn--ghost" onClick={() => retryScene(scene.scene_id)} disabled={loading}>Retry</button>
+        <button className="btn btn--danger" onClick={() => rejectScene(scene.scene_id).catch(() => {})} disabled={loading}>Reject</button>
+        <button className="btn btn--ghost" onClick={() => retryScene(scene.scene_id).catch(() => {})} disabled={loading}>Retry</button>
         <button className="btn btn--primary" onClick={handleApprove} disabled={loading}>Approve &amp; render →</button>
       </footer>
     </article>

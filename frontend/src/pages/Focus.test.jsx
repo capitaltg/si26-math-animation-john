@@ -137,3 +137,42 @@ test('revert saves the restored original value immediately', () => {
 
   expect(saveEdits).toHaveBeenCalledWith('S1', { w: 4 })
 })
+
+// PR-review fix (Finding 2, 2026-08-11): sceneAction now rethrows on
+// failure, so revert/retry/reject must swallow rejections themselves or a
+// 4xx/5xx surfaces as an unhandled promise rejection. These tests fail the
+// whole run if an unhandled rejection is emitted (Vitest reports unhandled
+// rejections as a top-level test failure), so simply completing without
+// throwing — plus an explicit `await` to let the rejection's microtask
+// settle before the test ends — is a real guarantee, not a weak one.
+test('reject swallows a rejected rejectScene call (no unhandled rejection)', async () => {
+  const rejectScene = vi.fn().mockRejectedValue(new Error('boom'))
+  renderFocus({ rejectScene })
+  const user = userEvent.setup()
+
+  await user.click(screen.getByRole('button', { name: /reject/i }))
+  await Promise.resolve() // flush the .catch(() => {}) microtask
+
+  expect(rejectScene).toHaveBeenCalledWith('S1')
+})
+
+test('retry swallows a rejected retryScene call (no unhandled rejection)', async () => {
+  const retryScene = vi.fn().mockRejectedValue(new Error('boom'))
+  renderFocus({ retryScene })
+  const user = userEvent.setup()
+
+  await user.click(screen.getByRole('button', { name: /retry/i }))
+  await Promise.resolve()
+
+  expect(retryScene).toHaveBeenCalledWith('S1')
+})
+
+test('revert swallows a rejected saveEdits call (no unhandled rejection)', async () => {
+  const saveEdits = vi.fn().mockRejectedValue(new Error('boom'))
+  renderFocus({ storyboard: [scalarScene], drafts: { S1: { w: 6 } }, saveEdits })
+
+  fireEvent.click(screen.getByRole('button', { name: /revert/i }))
+  await Promise.resolve()
+
+  expect(saveEdits).toHaveBeenCalledWith('S1', { w: 4 })
+})
