@@ -62,7 +62,10 @@ export default function DemoShell() {
   const storyboardRef = useRef(storyboard)
   useEffect(() => { storyboardRef.current = storyboard }, [storyboard])
   const mountedRef = useRef(true)
-  useEffect(() => () => { mountedRef.current = false }, [])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
   // Drain-on-completion, not abort-on-change: if pendingRenders grows while a
   // /render POST is in flight, we let the in-flight call finish rather than
   // aborting it. Aborting mid-flight left queued scenes stranded — the abort
