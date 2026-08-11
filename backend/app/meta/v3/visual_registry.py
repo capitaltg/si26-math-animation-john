@@ -73,10 +73,17 @@ def _segments_properly_intersect(a1, a2, b1, b2):
     if ((o1 > 0) != (o2 > 0)) and ((o3 > 0) != (o4 > 0)) and o1 != 0 and o2 != 0:
         return True
 
-    # Collinear touch on an interior point counts as intersection.
+    # Collinear touch on an interior point counts as intersection. Check
+    # both directions: a B-endpoint on A (o1/o2 == 0) AND an A-endpoint on
+    # B (o3/o4 == 0). Without the o3/o4 pair, a T-junction where an edge
+    # terminates on another edge's interior slips through.
     if o1 == 0 and _on_segment(a1, b1, a2) and b1 != a1 and b1 != a2:
         return True
     if o2 == 0 and _on_segment(a1, b2, a2) and b2 != a1 and b2 != a2:
+        return True
+    if o3 == 0 and _on_segment(b1, a1, b2) and a1 != b1 and a1 != b2:
+        return True
+    if o4 == 0 and _on_segment(b1, a2, b2) and a2 != b1 and a2 != b2:
         return True
     return False
 
