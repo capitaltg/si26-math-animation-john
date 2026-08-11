@@ -5,7 +5,7 @@ import App from './App'
 describe('App routes', () => {
   it('renders Landing at /', () => {
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>)
-    expect(screen.getByRole('link', { name: /open demo/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: /open demo/i })[0]).toBeInTheDocument()
   })
 
   it('renders demo shell at /demo', () => {
