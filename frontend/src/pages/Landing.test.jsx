@@ -6,21 +6,31 @@ function mount() {
   return render(<MemoryRouter><Landing /></MemoryRouter>)
 }
 
-test('renders the six landing sections', () => {
+test('renders the primary landing sections', () => {
   mount()
-  ;[/Math Animation Generator/i, /The claim/i, /Sample/i, /How it works/i, /Honest limits/i, /Ready to try it/i].forEach(t =>
-    expect(screen.getByText(t)).toBeInTheDocument()
+  ;[
+    { level: 1, name: /Turn a math slide into a verified animation/i },
+    { level: 2, name: /Why DoodleSum/i },
+    { level: 2, name: /See a clip/i },
+    { level: 2, name: /How it works/i },
+    { level: 3, name: /Who it's for/i },
+    { level: 3, name: /Honest limits/i },
+    { level: 2, name: /Ready to try it/i },
+  ].forEach(({ level, name }) =>
+    expect(screen.getByRole('heading', { level, name })).toBeInTheDocument()
   )
 })
 
-test('lists PPTX-only, K-8, no-OCR under honest limits', () => {
+test('lists PPTX-only, no-OCR, and no-account under honest limits', () => {
   mount()
   expect(screen.getByText(/pptx in/i)).toBeInTheDocument()
-  expect(screen.getByText(/k.?8/i)).toBeInTheDocument()
   expect(screen.getByText(/no ocr/i)).toBeInTheDocument()
+  expect(screen.getByText(/no accounts/i)).toBeInTheDocument()
 })
 
-test('cta link points to /demo', () => {
+test('primary CTAs link to /demo', () => {
   mount()
-  expect(screen.getAllByRole('link', { name: /open demo/i })[0]).toHaveAttribute('href', '/demo')
+  const demoLinks = screen.getAllByRole('link', { name: /demo/i })
+    .filter((el) => el.getAttribute('href') === '/demo')
+  expect(demoLinks.length).toBeGreaterThanOrEqual(2)
 })

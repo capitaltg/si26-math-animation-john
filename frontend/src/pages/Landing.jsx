@@ -1,73 +1,147 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+const WHY_CARDS = [
+  {
+    title: 'Every value is verified',
+    body:
+      "The LLM only spots problems. Python does the math and validates every scene before it renders — so a '4 × 7' animation actually shows 28, not whatever the model felt like drawing.",
+  },
+  {
+    title: 'Made for teacher slides',
+    body:
+      'Upload a PPTX you already made. DoodleSum finds solvable problems, offers visual options, and hands back short clips you drop back into the same deck.',
+  },
+  {
+    title: 'Playful, not childish',
+    body:
+      'Number-line hops, array grids, fraction bars — the look kids remember, drawn with restraint you can put on the projector.',
+  },
+]
+
+const HOW_STEPS = [
+  {
+    title: 'Upload a deck',
+    body: 'Drop in a PPTX. We only read the text of slides that look like problems.',
+  },
+  {
+    title: 'Pick problems',
+    body: 'DoodleSum lists candidates. Tick the ones worth animating.',
+  },
+  {
+    title: 'Pick visuals + check values',
+    body: 'Choose the template per problem. Python computes the answer and shows it before render.',
+  },
+  {
+    title: 'Get clips',
+    body: 'Short verified MP4s, one per problem. Download and paste back into your deck.',
+  },
+]
+
 export default function Landing() {
   const videoRef = useRef(null)
   const [sampleFailed, setSampleFailed] = useState(false)
 
   return (
-    <main className="landing">
-      {/* Hero */}
+    <div className="landing">
       <section className="landing__hero">
-        <h1>Math Animation Generator</h1>
-        <p>Turn example problems from a teacher's slide deck into short, mathematically-correct animation clips.</p>
-        <Link to="/demo" className="btn btn--primary">Open demo</Link>
+        <div className="landing__hero-copy">
+          <span className="landing__eyebrow">For K–8 math teachers</span>
+          <h1>Turn a math slide into a verified animation.</h1>
+          <p className="landing__lede">
+            DoodleSum finds solvable problems in your PowerPoint deck and hands back
+            short, Python-verified animation clips you can drop straight back in.
+          </p>
+          <div className="landing__hero-actions">
+            <Link to="/demo" className="btn btn--primary btn--big">Try the demo</Link>
+            <a href="#how-it-works" className="btn btn--ghost">See how it works</a>
+          </div>
+          <span className="landing__hero-note">
+            No account. No upload storage. Nothing leaves the tab when you close it.
+          </span>
+        </div>
+        <div className="landing__hero-art" aria-hidden="true">
+          <img src="/brand/doodlesum-icon-light.png" alt="" />
+        </div>
       </section>
 
-      {/* The claim */}
-      <section className="landing__claim">
-        <h2>The claim</h2>
-        <p>The LLM finds problems and classifies them. Python computes the values and validates every scene. That split is the one thing a neighboring product cannot truthfully copy — everything the animation shows is Python-verified before it renders.</p>
+      <section id="why" className="landing__why">
+        <h2>Why DoodleSum</h2>
+        <div className="landing__why-grid">
+          {WHY_CARDS.map((card) => (
+            <article key={card.title} className="landing__why-card">
+              <h3>{card.title}</h3>
+              <p>{card.body}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
-      {/* Live sample */}
       <section className="landing__sample">
-        <h2>Sample</h2>
-        {sampleFailed
-          ? <div className="landing__sample-placeholder">Sample clip coming soon.</div>
-          : <video
-              ref={videoRef}
-              src="/media/perimeter.mp4"
-              controls
-              loop
-              muted
-              playsInline
-              preload="metadata"
-              onError={() => setSampleFailed(true)}
-              onMouseEnter={() => videoRef.current?.play().catch(() => {})}
-              onMouseLeave={() => videoRef.current?.pause()}
-              className="landing__sample-video"
-            />}
+        <h2>See a clip</h2>
+        {sampleFailed ? (
+          <div className="landing__sample-placeholder">Sample clip coming soon.</div>
+        ) : (
+          <video
+            ref={videoRef}
+            src="/media/perimeter.mp4"
+            controls
+            loop
+            muted
+            playsInline
+            preload="metadata"
+            onError={() => setSampleFailed(true)}
+            onMouseEnter={() => videoRef.current?.play().catch(() => {})}
+            onMouseLeave={() => videoRef.current?.pause()}
+            className="landing__sample-video"
+          />
+        )}
+        <p className="landing__sample-caption">
+          One clip, one problem, ~10 seconds. Every number on screen was computed in
+          Python before Manim drew it.
+        </p>
       </section>
 
-      {/* How it works */}
-      <section className="landing__how">
+      <section id="how-it-works" className="landing__how">
         <h2>How it works</h2>
-        <ol>
-          <li>Candidate — the LLM finds problem statements in the deck's text.</li>
-          <li>Visual — a template with a known compiler is picked per problem.</li>
-          <li>Storyboard — parameters are extracted and validated in Python.</li>
-          <li>Render — Manim + ffmpeg produce a short MP4 per scene.</li>
-          <li>Clip — you download each clip and drop it into your own deck.</li>
+        <ol className="landing__how-steps">
+          {HOW_STEPS.map((step) => (
+            <li key={step.title} className="landing__how-step">
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))}
         </ol>
       </section>
 
-      {/* Honest limits */}
-      <section className="landing__limits">
-        <h2>Honest limits</h2>
-        <ul>
-          <li>Math only (K–8 arithmetic, geometry, fractions).</li>
-          <li>2D visualizations.</li>
-          <li>PPTX in — nothing else, and no OCR of image-only slides.</li>
-          <li>No accounts, no persistence, no async — everything ends when you close the tab.</li>
-        </ul>
+      <section className="landing__audience">
+        <article className="landing__audience-card">
+          <h3>Who it's for</h3>
+          <ul>
+            <li>K–8 math teachers building lesson decks in PowerPoint.</li>
+            <li>Coaches and tutors making one-off explainer clips.</li>
+            <li>Anyone who wants a math visual they can trust on the projector.</li>
+          </ul>
+        </article>
+        <article className="landing__audience-card">
+          <h3>Honest limits</h3>
+          <ul>
+            <li>Math only — arithmetic, geometry, and fractions to start.</li>
+            <li>2D visualizations. No 3D and no free-form graphing.</li>
+            <li>PPTX in — no OCR of image-only slides.</li>
+            <li>No accounts, no persistence — everything ends when you close the tab.</li>
+          </ul>
+        </article>
       </section>
 
-      {/* CTA footer */}
       <section className="landing__cta">
-        <h3>Ready to try it?</h3>
-        <Link to="/demo" className="btn btn--primary">Open demo</Link>
+        <h2>Ready to try it?</h2>
+        <p>Bring a deck. Get clips. Same lesson plan, verified visuals.</p>
+        <div className="landing__cta-actions">
+          <Link to="/demo" className="btn btn--primary btn--big">Open the demo</Link>
+          <a href="#how-it-works" className="btn btn--ghost">Read the walkthrough</a>
+        </div>
       </section>
-    </main>
+    </div>
   )
 }

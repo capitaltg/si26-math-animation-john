@@ -3,9 +3,17 @@ import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 
 describe('App routes', () => {
+  it('renders SiteHeader wordmark on every route', () => {
+    render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>)
+    expect(screen.getByRole('banner')).toBeInTheDocument()
+    expect(screen.getByLabelText(/doodlesum home/i)).toBeInTheDocument()
+  })
+
   it('renders Landing at /', () => {
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>)
-    expect(screen.getAllByRole('link', { name: /open demo/i })[0]).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: /Turn a math slide into a verified animation/i })
+    ).toBeInTheDocument()
   })
 
   it('renders demo shell at /demo', () => {
