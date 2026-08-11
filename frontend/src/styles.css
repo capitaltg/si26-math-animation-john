@@ -22,6 +22,6 @@ body { margin:0; background:var(--bg); color:var(--ink);
 .rail__step { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--ink-3); font-size: 13px; }
 .rail__index { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .rail__step[data-state="active"] { color: var(--ink); font-weight: 600; }
-.rail__step[data-state="active"] .rail__index { background: var(--accent); color: #fff; border-color: var(--accent); }
+.rail__step[data-state="active"] .rail__index { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .rail__step[data-state="done"] { color: var(--ink-2); }
 .rail__step[data-state="done"] .rail__index { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent); }
