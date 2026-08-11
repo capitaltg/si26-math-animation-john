@@ -252,7 +252,14 @@ def approve_draft_service(
                     TemplateDraftFixture.structural_check_passed.is_(True),
                 )
             ).scalar_one()
-            if verified_fixtures < _required_fixture_count(session, draft, owner_session_id):
+            # The fixture bar tracks the row's effective visibility, not who
+            # is calling. A shared row is globally visible and must clear the
+            # full configured count -- the same invariant `promotion.py`
+            # enforces. Passing owner_session_id here would let a teacher
+            # slide a one-fixture draft under the soft cap into a shared
+            # publication.
+            effective_owner = None if publish_shared else owner_session_id
+            if verified_fixtures < _required_fixture_count(session, draft, effective_owner):
                 raise ApprovalPreconditionError(
                     "Draft has too few verified real fixtures to publish"
                 )
