@@ -120,7 +120,18 @@ export default function Queue() {
         <TemplateWorkshop
           candidates={candidates}
           unsupportedCandidateIds={unsupportedCandidateIds}
-          onApproved={(_templateName, candidateId) => refreshOptionsFor(candidateId)}
+          onApproved={async (_templateName, candidateId) => {
+            // Refresh the approved candidate first so its own band shows the
+            // new template, then re-classify every other still-unsupported
+            // candidate: a second problem of the same shape (two perimeters,
+            // two rate conversions) is now covered by the template we just
+            // approved, so its "no built-in visual fits" card must clear.
+            // We can't reason about "same shape" client-side — that's the
+            // classifier's call — so ask the classifier again for each.
+            await refreshOptionsFor(candidateId)
+            const others = unsupportedCandidateIds.filter((id) => id !== candidateId)
+            await Promise.all(others.map((id) => refreshOptionsFor(id).catch(() => {})))
+          }}
         />
         {options.map((item) => (
           <fieldset key={item.candidate_id} className="option-set" disabled={loading}>
