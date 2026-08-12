@@ -21,6 +21,13 @@ dev = ["pytest>=8.0", "httpx2>=2.7"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# `rc` gates the held-out release-candidate eval (tests/eval/*). Excluded
+# from the default run so a normal `pytest` stays fast; opt in with
+# `pytest -m rc` or `pytest -m "not rc"` to invert.
+markers = [
+    "rc: held-out release-candidate eval; opt in with `pytest -m rc`",
+]
+addopts = "-m 'not rc'"
 
 [build-system]
 requires = ["setuptools>=68"]
