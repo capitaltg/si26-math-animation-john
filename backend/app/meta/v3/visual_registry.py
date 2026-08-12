@@ -1094,7 +1094,13 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         u, v = projected_points[index]
         parts[("point", index)] = SemanticPart("point", index, Bounds(u, u, v, v))
         label_text = _coordinate_label(px, py)
-        label_w, label_h = measurer.measure(label_text, "label")
+        # Point labels render at the smaller `polygon_label` role (24pt) --
+        # see `_build_coordinate_plane` in `renderer.py`. Measuring them at
+        # the 36pt `label` role would leave the payload's label_width /
+        # label_height oversized, so the quadrant search, the tick-label
+        # collision suppression, and the bounds fed to layout would all
+        # describe a bigger glyph than the renderer actually draws.
+        label_w, label_h = measurer.measure(label_text, "polygon_label")
         other_dot_rects = [r for i, r in enumerate(dot_rects) if i != index]
         hard_obstacles = other_dot_rects + [x_axis_rect, y_axis_rect]
         chosen_dx, chosen_dy, chosen_rect = _pick_point_label_offset(
