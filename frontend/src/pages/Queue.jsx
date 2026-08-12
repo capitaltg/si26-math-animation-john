@@ -2,6 +2,7 @@ import { useContext } from 'react'
 import { Link } from 'react-router-dom'
 import { DemoContext } from './DemoShell'
 import { templateLabel } from '../lib/templates'
+import TemplateWorkshop from '../TemplateWorkshop'
 
 function pillFor(status) {
   switch (status) {
@@ -55,6 +56,7 @@ export default function Queue() {
     handleBuildStoryboard,
     approveScene,
     setPendingRenders,
+    refreshOptionsFor,
   } = useContext(DemoContext)
 
   if (!candidates) {
@@ -104,9 +106,33 @@ export default function Queue() {
   }
 
   if (!storyboard) {
+    // Text-card-only means the classifier found no structural template that
+    // fits — the exact set the meta-template loop can build something new for.
+    const unsupportedCandidateIds = options
+      .filter((item) =>
+        item.templates.length > 0
+        && item.templates.every((option) => option.template === 'text_card')
+      )
+      .map((item) => item.candidate_id)
     return (
       <section className="band">
         <h2>Choose visualizations</h2>
+        <TemplateWorkshop
+          candidates={candidates}
+          unsupportedCandidateIds={unsupportedCandidateIds}
+          onApproved={async (_templateName, candidateId) => {
+            // Refresh the approved candidate first so its own band shows the
+            // new template, then re-classify every other still-unsupported
+            // candidate: a second problem of the same shape (two perimeters,
+            // two rate conversions) is now covered by the template we just
+            // approved, so its "no built-in visual fits" card must clear.
+            // We can't reason about "same shape" client-side — that's the
+            // classifier's call — so ask the classifier again for each.
+            await refreshOptionsFor(candidateId)
+            const others = unsupportedCandidateIds.filter((id) => id !== candidateId)
+            await Promise.all(others.map((id) => refreshOptionsFor(id).catch(() => {})))
+          }}
+        />
         {options.map((item) => (
           <fieldset key={item.candidate_id} className="option-set" disabled={loading}>
             <legend>
