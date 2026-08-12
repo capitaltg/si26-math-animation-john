@@ -464,11 +464,74 @@ def test_plural_mismatch_does_not_silently_ground():
     assert check_params_grounded(params, "Sarah has apples.") == ["apple"]
 
 
-def test_multi_word_string_token_grounds_each_word_independently():
+def test_multi_word_string_requires_ordered_contiguous_phrase():
+    """A source-owned multi-word value must bind to the exact ordered
+    phrase in one contiguous run of source tokens — never as two
+    independent word matches. That was the P0: `red balloon` used to
+    ground against "The balloon is beside the red box." because both words
+    exist, even though the phrase does not.
+    """
     from app.pipeline.grounding import check_params_grounded
 
     params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
     assert check_params_grounded(params, "Sarah has a red balloon.") == []
+
+
+def test_multi_word_string_rejects_separated_words():
+    """The exact release-blocker repro: both words are in the source, but
+    not as one adjacent phrase in that order. Independent-word matching
+    would accept this; ordered-phrase matching must reject it.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
+    assert (
+        check_params_grounded(params, "The balloon is beside the red box.")
+        == ["red balloon"]
+    )
+
+
+def test_multi_word_string_rejects_reverse_order():
+    """Adjacency alone is not enough — the tokens must appear in the
+    phrase's declared order. "balloon red" is not "red balloon".
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
+    assert check_params_grounded(params, "A blue balloon and red kite.") == ["red balloon"]
+
+
+def test_multi_word_string_duplicate_value_needs_two_source_spans():
+    """A duplicated source-owned phrase (declared twice) must find two
+    non-overlapping source spans. One source occurrence cannot cover both.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red balloon", "red balloon"]
+    )
+    # Only one source occurrence of the phrase — second declaration ungrounded.
+    assert (
+        check_params_grounded(params, "Sarah has a red balloon.") == ["red balloon"]
+    )
+    # Two source occurrences — both bind, each to its own span.
+    assert (
+        check_params_grounded(
+            params, "One red balloon floated up while another red balloon popped."
+        )
+        == []
+    )
+
+
+def test_string_token_respects_source_token_boundaries():
+    """The phrase tokenizer emits whole words, so a short phrase cannot
+    bind inside a longer source word. `cat` must not ground against
+    `concatenate` — the source token there is `concatenate`, not `cat`.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["cat"])
+    assert check_params_grounded(params, "concatenate the string.") == ["cat"]
 
 
 def test_derived_total_allowance_does_not_launder_a_coincidentally_numeric_string_token():

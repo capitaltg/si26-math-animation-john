@@ -138,6 +138,47 @@ def _build_source_occurrences(source_text: str) -> dict[str, list[Span]]:
     return occurrences
 
 
+def _build_source_token_sequence(source_text: str) -> list[tuple[str, Span]]:
+    """In-order (canonical_key, Span) pairs for every source token.
+
+    Phrase grounding needs the ordered sequence — not just a multiset — so a
+    source-owned string value binds to one contiguous run of source tokens
+    rather than one token per value word chosen independently.
+    """
+    normalized = _normalize_for_grounding(source_text)
+    return [
+        (_canonical_key(match.group()), Span(match.start(), match.end()))
+        for match in _GROUNDING_TOKEN_RE.finditer(normalized)
+    ]
+
+
+def _phrase_span(
+    phrase_keys: list[str],
+    source_tokens: list[tuple[str, Span]],
+    consumed: list[Span],
+) -> Span | None:
+    """First source span whose consecutive tokens match `phrase_keys` and
+    do not overlap any previously consumed span.
+
+    Matching is against normalized token boundaries the shared tokenizer
+    produces, so "cat" cannot bind inside "concatenate" (one source token),
+    and a two-word phrase like "red balloon" must appear as those two
+    tokens in that order with no intervening tokens.
+    """
+    if not phrase_keys:
+        return None
+    n = len(phrase_keys)
+    for start in range(len(source_tokens) - n + 1):
+        window = source_tokens[start:start + n]
+        if [key for key, _ in window] != phrase_keys:
+            continue
+        span = Span(window[0][1].start, window[-1][1].end)
+        if any(span.start < taken.end and taken.start < span.end for taken in consumed):
+            continue
+        return span
+    return None
+
+
 def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> bool:
     """Pop one span per component from ``occurrences``; return False on shortfall."""
     for component in components:
@@ -163,15 +204,6 @@ def check_params_grounded(params, source_text: str) -> list[str]:
     original_occurrences = _build_source_occurrences(source_text)
     consuming = copy.deepcopy(original_occurrences)
 
-    # A source-owned string value is tokenized the same way the source text
-    # is, so a multi-word value (e.g. "red balloon") grounds one source
-    # occurrence per word rather than requiring the exact phrase verbatim.
-    string_tokens = [
-        word
-        for value in params_string_tokens(params)
-        for word in tokenize_for_grounding(value)
-    ]
-
     def consume(tokens: list[str]) -> list[str]:
         pending: list[str] = []
         for token in tokens:
@@ -182,15 +214,31 @@ def check_params_grounded(params, source_text: str) -> list[str]:
                 pending.append(token)
         return pending
 
-    # Numeric and string tokens draw from the same shared source multiset
-    # (numbers first, matching prior behavior), but are tracked separately:
-    # derived-total allowance below is a numeric-only concept (a declared
-    # sum/product of numeric components) and must never exempt a
-    # source-owned string/enum value merely because it shares a canonical
-    # key with an allowed numeric total (e.g. a string field whose value is
-    # literally "7" is not vouched for by an unrelated 3 + 4 = 7 total).
+    # Numeric tokens still bind through a shared source multiset so
+    # derived-total allowance below can exempt them; string values now bind
+    # to ordered contiguous source spans so a multi-word value like "red
+    # balloon" requires the exact phrase, not two independent word matches.
+    # Derived-total allowance must never exempt a source-owned string/enum
+    # value merely because it shares a canonical key with an allowed numeric
+    # total (e.g. a string field whose value is literally "7" is not vouched
+    # for by an unrelated 3 + 4 = 7 total).
     ungrounded_numbers = consume(params_number_tokens(params))
-    ungrounded_strings = consume(string_tokens)
+
+    source_tokens = _build_source_token_sequence(source_text)
+    consumed_phrase_spans: list[Span] = []
+    ungrounded_strings: list[str] = []
+    for value in params_string_tokens(params):
+        phrase_keys = [_canonical_key(token) for token in tokenize_for_grounding(value)]
+        if not phrase_keys:
+            # An empty-after-normalization value (whitespace or punctuation
+            # only) has nothing to bind against and is silently accepted, the
+            # same way the prior word-multiset code accepted it.
+            continue
+        span = _phrase_span(phrase_keys, source_tokens, consumed_phrase_spans)
+        if span is None:
+            ungrounded_strings.append(value)
+        else:
+            consumed_phrase_spans.append(span)
 
     allowed_totals: set[str] = set()
     for total_token, components, operation in params_derived_totals(params):
