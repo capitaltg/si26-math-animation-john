@@ -583,23 +583,24 @@ def test_phrase_assignment_finishes_fast_when_many_identical_phrases_share_few_s
     assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
 
 
-def test_phrase_assignment_over_slot_limit_still_grounds_overlapping_pair():
-    """Above the interval DP's distinct-slot ceiling, the fallback must
-    still handle the common overlapping-vocabulary case that a naive
-    length-descending greedy would strand: 13 distinct phrases including
-    ``a b`` and ``b c`` against ``a b c a b`` (plus filler tokens for the
-    other declarations). ``b c`` has only one viable span; the fallback
-    places it first, freeing ``a b`` to take the second occurrence.
+def test_phrase_assignment_grounds_over_thirteen_declarations_with_shared_tokens():
+    """The full reviewer counterexample: three phrases share the source
+    tokens (``a b``, ``b``, ``b a``) alongside ten single-word fillers. A
+    fewest-alternatives greedy without backtracking strands ``b a``
+    because giving ``a b`` its first source occurrence blocks both of
+    ``b a``'s spans; the correct assignment (``b a`` → tokens 0..1,
+    ``a b`` → tokens 3..4, ``b`` → token 2) needs the search to reconsider
+    ``a b``'s choice. The solver must find that assignment.
     """
     from app.pipeline.grounding import check_params_grounded
 
-    filler = [f"word{n:02d}" for n in range(11)]
+    filler = list("cdefghijkl")
     params = _StubParams(
         tokens=[],
         derived_totals=[],
-        string_tokens=["a b", "b c", *filler],
+        string_tokens=["a b", "b", "b a", *filler],
     )
-    source_text = "a b c a b " + " ".join(filler)
+    source_text = "b a b a b " + " ".join(filler)
 
     assert check_params_grounded(params, source_text) == []
 

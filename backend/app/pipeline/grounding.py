@@ -1,10 +1,7 @@
-import bisect
 import copy
 import math
 import re
-from collections import Counter
 from dataclasses import dataclass
-from functools import lru_cache
 
 _REL_TOL = 1e-9
 _ABS_TOL = 1e-12
@@ -177,97 +174,39 @@ def _phrase_candidate_spans(
     return spans
 
 
-# The interval DP's state is (span index, per-slot remaining capacities), so
-# its size scales with Product(cap_i + 1). When every phrase is a distinct
-# slot with cap 1, that product is 2^(distinct slots) and the solver stops
-# being polynomial. The DSL contract does not cap the total number of
-# source-owned string values a params object can emit (multiple arrays and
-# top-level fields compose), so an adversarial-but-schema-valid input could
-# push the solver past request-latency budgets. Above this threshold on
-# distinct slots, we fall back to a length-descending greedy first-fit — it
-# is not maximum-cardinality in every edge case, but it stays fast and still
-# enforces ordered contiguous-span matching (the release-blocker fix). The
-# threshold sits comfortably above real DSL usage; templates observed in
-# fixtures declare at most a handful of distinct source-owned string values.
-_PHRASE_SOLVER_MAX_DISTINCT_SLOTS = 12
-
-
-def _fewest_alternatives_phrase_assignment(
-    phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
-) -> list[Span | None]:
-    """Constraint-propagating greedy fallback for the >12-slot path.
-
-    Repeatedly picks the still-unassigned phrase with the fewest remaining
-    candidate spans and gives it one of those spans. Ties break on longer
-    phrase (fewer usable spots) then declaration order. Handles the common
-    overlapping-vocabulary case that a naive length-descending greedy
-    misses — e.g. ``["a b", "b c", ...]`` against ``"a b c a b"``, where a
-    length-desc pass gives ``a b`` the leading tokens and strands ``b c``
-    even though ``b c`` had only one viable span and should have been
-    placed first. Not proven optimal for every adversarial input, but the
-    exact interval DP still runs whenever distinct-slot count fits inside
-    ``_PHRASE_SOLVER_MAX_DISTINCT_SLOTS``.
-    """
-    n = len(phrases)
-    result: list[Span | None] = [None] * n
-    consumed: list[Span] = []
-    candidates_by_index: dict[int, list[Span]] = {
-        i: _phrase_candidate_spans(keys, source_tokens)
-        for i, keys in enumerate(phrases)
-        if keys
-    }
-    remaining = set(candidates_by_index)
-
-    def viable(i: int) -> list[Span]:
-        return [
-            span
-            for span in candidates_by_index[i]
-            if not any(span.start < t.end and t.start < span.end for t in consumed)
-        ]
-
-    while remaining:
-        viable_by_index = {i: viable(i) for i in remaining}
-        next_index = min(
-            remaining,
-            key=lambda i: (
-                len(viable_by_index[i]) if viable_by_index[i] else float("inf"),
-                -len(phrases[i]),
-                i,
-            ),
-        )
-        options = viable_by_index[next_index]
-        if not options:
-            # No remaining phrase has any viable span; the rest stay
-            # ungrounded and the loop can stop.
-            break
-        span = options[0]
-        result[next_index] = span
-        consumed.append(span)
-        remaining.discard(next_index)
-    return result
+# Backtracking bound on the phrase solver. Each step corresponds to one
+# node visited in the search tree; with fewest-alternatives ordering and
+# an upper-bound cut on unreachable improvements, small realistic inputs
+# finish in well under a thousand steps. The cap is a safety net for
+# adversarially-constructed schema-valid inputs (many distinct short
+# phrases against a dense repeating source) that would otherwise chew
+# request-latency budget. If the cap fires, the best assignment found so
+# far is returned — which still enforces ordered contiguous-span matching
+# (the release-blocker fix), just no longer proven maximum-cardinality.
+_PHRASE_SOLVER_MAX_STEPS = 200_000
 
 
 def _resolve_phrase_assignments(
     phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
 ) -> list[Span | None]:
-    """Assign each phrase to a non-overlapping source span if possible;
-    return one span per phrase (None where no assignment grounds it).
+    """Assign each phrase to a non-overlapping source span; return one span
+    per phrase (None where no assignment grounds it).
 
-    Greedy claim-first-match wrongly rejects fully-groundable inputs when
-    phrases share tokens: for ["red", "red balloon"] against
-    "red balloon red", giving "red" the first source "red" would strand
-    "red balloon" without adjacent tokens even though assigning "red
-    balloon" to the first two source tokens and "red" to the last one
-    grounds both.
+    Greedy first-fit rejects fully-groundable inputs when phrases share
+    tokens: for ``["red", "red balloon"]`` against ``"red balloon red"``,
+    giving "red" the first source "red" strands "red balloon" without
+    adjacent tokens even though assigning "red balloon" to the first two
+    source tokens and "red" to the last one grounds both.
 
-    Instead, collapse identical phrase-key sequences into slots with
-    per-slot capacities (so 12 identical values collapse to one slot cap
-    12 rather than blowing up the search) and run an interval-scheduling
-    DP over candidate spans sorted by end. State is (span index,
-    remaining-capacity tuple); transitions decide take/skip. Above
-    ``_PHRASE_SOLVER_MAX_DISTINCT_SLOTS`` distinct slots, fall back to a
-    length-descending greedy so an adversarially large params object
-    cannot drag the exponential worst case onto the request path.
+    Search structure: DFS over phrases ordered by fewest current
+    candidates (fewest-alternatives-first), taking each viable span in
+    turn or leaving the phrase ungrounded. An upper-bound cut (grounded +
+    remaining ≤ best) prunes branches that cannot improve on the current
+    best, and the search stops early when a full assignment is found.
+    ``_PHRASE_SOLVER_MAX_STEPS`` caps the total node count so an
+    adversarial input cannot drag exponential worst-case runtime onto the
+    request path; on cap-hit the best assignment found so far is
+    returned, which is guaranteed ordered-contiguous-span-correct.
     """
     n = len(phrases)
     result: list[Span | None] = [None] * n
@@ -278,83 +217,58 @@ def _resolve_phrase_assignments(
     if not active_indices:
         return result
 
-    active_keys = [tuple(phrases[i]) for i in active_indices]
-    counter = Counter(active_keys)
-    distinct_keys = list(counter.keys())
+    candidates_per_phrase: dict[int, list[Span]] = {
+        i: _phrase_candidate_spans(phrases[i], source_tokens)
+        for i in active_indices
+    }
+    n_active = len(active_indices)
 
-    if len(distinct_keys) > _PHRASE_SOLVER_MAX_DISTINCT_SLOTS:
-        return _fewest_alternatives_phrase_assignment(phrases, source_tokens)
+    order = sorted(
+        active_indices,
+        key=lambda i: (len(candidates_per_phrase[i]), -len(phrases[i]), i),
+    )
 
-    slot_of_key = {key: slot for slot, key in enumerate(distinct_keys)}
-    capacities = tuple(counter[key] for key in distinct_keys)
+    current: list[Span | None] = [None] * n
+    best: list[Span | None] = [None] * n
+    best_count = 0
+    steps = 0
 
-    entries: list[tuple[Span, int]] = []
-    for slot, keys in enumerate(distinct_keys):
-        for span in _phrase_candidate_spans(list(keys), source_tokens):
-            entries.append((span, slot))
-    if not entries:
-        return result
+    def overlaps(span: Span, exclude_index: int) -> bool:
+        for idx, other in enumerate(current):
+            if other is None or idx == exclude_index:
+                continue
+            if span.start < other.end and other.start < span.end:
+                return True
+        return False
 
-    entries.sort(key=lambda item: (item[0].end, item[0].start))
-    ends_only = [span.end for span, _ in entries]
+    def search(depth: int, grounded: int) -> bool:
+        """Returns True to signal early termination (either a full
+        assignment landed or the step cap fired)."""
+        nonlocal best_count, best, steps
+        steps += 1
+        if steps > _PHRASE_SOLVER_MAX_STEPS:
+            return True
+        if grounded + (n_active - depth) <= best_count:
+            return False
+        if depth == n_active:
+            if grounded > best_count:
+                best_count = grounded
+                best = list(current)
+            return best_count == n_active
+        phrase_index = order[depth]
+        for span in candidates_per_phrase[phrase_index]:
+            if overlaps(span, phrase_index):
+                continue
+            current[phrase_index] = span
+            if search(depth + 1, grounded + 1):
+                return True
+            current[phrase_index] = None
+        # Also try leaving this phrase ungrounded so a later phrase whose
+        # only viable span overlaps this one's choices can still land.
+        return search(depth + 1, grounded)
 
-    # p[i] = largest j < i with entries[j].span.end <= entries[i].span.start;
-    # -1 if none. Interval scheduling's "last compatible before i".
-    predecessors = [
-        bisect.bisect_right(ends_only, span.start) - 1
-        for span, _ in entries
-    ]
-
-    entry_count = len(entries)
-
-    @lru_cache(maxsize=None)
-    def dp(last: int, caps: tuple[int, ...]) -> int:
-        if last < 0:
-            return 0
-        _, slot = entries[last]
-        skip_value = dp(last - 1, caps)
-        take_value = -1
-        if caps[slot] > 0:
-            reduced = caps[:slot] + (caps[slot] - 1,) + caps[slot + 1:]
-            take_value = 1 + dp(predecessors[last], reduced)
-        return skip_value if skip_value > take_value else take_value
-
-    dp(entry_count - 1, capacities)
-
-    # Reconstruct the chosen (span, slot) pairs. On ties (take_value ==
-    # skip_value) prefer taking, so a phrase whose only valid span is here
-    # keeps that span instead of ceding it to a still-optional phrase later.
-    chosen: list[tuple[Span, int]] = []
-    caps_state = list(capacities)
-    i = entry_count - 1
-    while i >= 0:
-        span, slot = entries[i]
-        skip_value = dp(i - 1, tuple(caps_state))
-        take_value = -1
-        if caps_state[slot] > 0:
-            reduced = tuple(
-                caps_state[k] - (1 if k == slot else 0) for k in range(len(caps_state))
-            )
-            take_value = 1 + dp(predecessors[i], reduced)
-        if take_value >= skip_value and take_value >= 0:
-            chosen.append((span, slot))
-            caps_state[slot] -= 1
-            i = predecessors[i]
-        else:
-            i -= 1
-
-    dp.cache_clear()
-
-    spans_by_slot: dict[int, list[Span]] = {}
-    for span, slot in chosen:
-        spans_by_slot.setdefault(slot, []).append(span)
-
-    for phrase_pos, phrase_index in enumerate(active_indices):
-        slot = slot_of_key[active_keys[phrase_pos]]
-        available = spans_by_slot.get(slot)
-        if available:
-            result[phrase_index] = available.pop()
-    return result
+    search(0, 0)
+    return best
 
 
 def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> bool:
