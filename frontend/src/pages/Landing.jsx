@@ -46,8 +46,7 @@ export default function Landing() {
     <div className="landing">
       <section className="landing__hero">
         <div className="landing__hero-copy">
-          <span className="landing__eyebrow">For K–8 math teachers</span>
-          <h1>Turn a math slide into a verified animation.</h1>
+          <h1>A verified animation for every math slide you teach.</h1>
           <p className="landing__lede">
             DoodleSum finds solvable problems in your PowerPoint deck and hands back
             short, Python-verified animation clips you can drop straight back in.

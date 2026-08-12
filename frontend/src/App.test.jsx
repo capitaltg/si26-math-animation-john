@@ -12,7 +12,7 @@ describe('App routes', () => {
   it('renders Landing at /', () => {
     render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>)
     expect(
-      screen.getByRole('heading', { name: /Turn a math slide into a verified animation/i })
+      screen.getByRole('heading', { name: /verified animation for every math slide/i })
     ).toBeInTheDocument()
   })
 

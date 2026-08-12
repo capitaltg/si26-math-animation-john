@@ -9,7 +9,7 @@ function mount() {
 test('renders the primary landing sections', () => {
   mount()
   ;[
-    { level: 1, name: /Turn a math slide into a verified animation/i },
+    { level: 1, name: /verified animation for every math slide/i },
     { level: 2, name: /Why DoodleSum/i },
     { level: 2, name: /See a clip/i },
     { level: 2, name: /How it works/i },

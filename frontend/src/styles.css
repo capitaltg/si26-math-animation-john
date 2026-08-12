@@ -95,13 +95,14 @@
 
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 
-  --header-h: 68px;
+  --header-h: 84px;
   --content-max: 1180px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body { margin: 0; }
+html { min-height: 100%; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -111,6 +112,19 @@ body {
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
   background-image: var(--tooth);
+  display: flex;
+  flex-direction: column;
+}
+#root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 100vh;
+}
+#root > main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 h1, h2, h3, h4 {
@@ -214,7 +228,7 @@ a:hover { text-decoration: underline; }
 .site-header__inner {
   max-width: var(--content-max);
   margin: 0 auto;
-  padding: 0.85rem 1.5rem;
+  padding: 1rem 1.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -229,31 +243,33 @@ a:hover { text-decoration: underline; }
 }
 .site-header__brand:hover { text-decoration: none; }
 .site-header__wordmark {
-  height: 36px;
+  height: 52px;
   width: auto;
   display: block;
 }
 .site-header__nav {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.6rem;
 }
-.site-header__nav a {
-  padding: 0.5rem 0.9rem;
+.site-header__nav a:not(.btn) {
+  padding: 0.55rem 1rem;
   border-radius: var(--r-pill);
   color: var(--ink-soft);
   font-weight: 600;
   font-size: var(--t-sm);
 }
-.site-header__nav a:hover {
+.site-header__nav a:not(.btn):hover {
   color: var(--brand-ink);
   background: var(--board-quiet);
   text-decoration: none;
 }
-.site-header__cta {
-  padding: 0.55rem 1.1rem !important;
-  font-size: var(--t-sm) !important;
+.site-header__cta.btn.btn--primary {
+  padding: 0.6rem 1.2rem;
+  font-size: var(--t-sm);
+  color: var(--on-brand);
 }
+.site-header__cta.btn.btn--primary:hover { color: var(--on-brand); text-decoration: none; }
 
 /* ============================== SITE FOOTER ============================== */
 .site-footer {
@@ -325,20 +341,6 @@ a:hover { text-decoration: underline; }
   flex-direction: column;
   gap: 1.1rem;
   align-items: flex-start;
-}
-.landing__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.25rem 0.75rem;
-  border-radius: var(--r-pill);
-  background: var(--brand-tint);
-  color: var(--brand-deep);
-  font-family: var(--font-ui);
-  font-weight: 700;
-  font-size: var(--t-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 .landing__lede {
   color: var(--ink-soft);
@@ -534,8 +536,15 @@ a:hover { text-decoration: underline; }
 /* ============================== SHELL (demo) ============================= */
 .shell {
   max-width: var(--content-max);
+  width: 100%;
   margin: 0 auto;
   padding: clamp(1.25rem, 3vw, 2rem) 1.5rem 3rem;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+.landing {
+  flex: 1 1 auto;
 }
 
 /* ============================== STAGE RAIL =============================== */
@@ -556,7 +565,7 @@ a:hover { text-decoration: underline; }
   right: 8%;
   height: 3px;
   background: var(--line);
-  border-radius: 2px;
+  border-radius: var(--r-xs);
   z-index: 0;
 }
 .rail__step {
