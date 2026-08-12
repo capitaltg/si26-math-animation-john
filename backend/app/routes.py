@@ -1011,7 +1011,19 @@ def _write_scene_cas(
     and invalidate an approval that nothing actually changed.
     """
     with session.session_lock:
-        current = session.scenes[scene_id]
+        # A concurrent group removes the id from scene_order (leaving the
+        # scene dict entry orphaned), and a concurrent ungroup deletes the
+        # chain entry from scenes outright. Either way the caller's earlier
+        # `_lookup_active_scene` guarantee no longer holds, and indexing
+        # session.scenes here would KeyError into a 500. Treat both as a
+        # race and return 404 — the scene id the caller acted on is no
+        # longer an active scene.
+        current = session.scenes.get(scene_id)
+        if current is None or scene_id not in session.scene_order:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Scene {scene_id} was removed by another request; reload and try again",
+            )
         if current.revision != base_revision:
             raise HTTPException(
                 status_code=409,
