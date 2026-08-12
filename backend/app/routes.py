@@ -1011,7 +1011,19 @@ def _write_scene_cas(
     and invalidate an approval that nothing actually changed.
     """
     with session.session_lock:
-        current = session.scenes[scene_id]
+        # A concurrent group removes the id from scene_order (leaving the
+        # scene dict entry orphaned), and a concurrent ungroup deletes the
+        # chain entry from scenes outright. Either way the caller's earlier
+        # `_lookup_active_scene` guarantee no longer holds, and indexing
+        # session.scenes here would KeyError into a 500. Treat both as a
+        # race and return 404 — the scene id the caller acted on is no
+        # longer an active scene.
+        current = session.scenes.get(scene_id)
+        if current is None or scene_id not in session.scene_order:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Scene {scene_id} was removed by another request; reload and try again",
+            )
         if current.revision != base_revision:
             raise HTTPException(
                 status_code=409,
@@ -1140,7 +1152,13 @@ def approve_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
     scene = _lookup_active_scene(session, scene_id)
     _guard_approval_mismatch(scene)
-    return _set_scene_status(session_id, scene_id, "approved")
+    # Anchor CAS to the same revision the guard just inspected. If a concurrent
+    # edit changed params (and thus possibly the mismatch state) between the
+    # guard read and this write, revision bumped and CAS returns 409 rather
+    # than committing an unacknowledged mismatch as approved.
+    updates = {"status": "approved", "approved_revision": scene.revision + 1}
+    updated = _write_scene_cas(session, scene_id, scene.revision, updates)
+    return _scene_out(session, updated, _lookup_candidates(session, updated))
 
 
 @router.post("/storyboard/{scene_id}/acknowledge-mismatch", response_model=SceneOut)

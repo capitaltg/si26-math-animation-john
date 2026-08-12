@@ -1686,6 +1686,159 @@ def test_concurrent_edit_and_approve_conflicts(tmp_path, monkeypatch):
     assert results["approve"].status_code == 409
 
 
+def test_concurrent_edit_introducing_mismatch_blocks_approve(tmp_path, monkeypatch):
+    """An edit that introduces a mismatch between the guard check and the
+    approval write must not commit an unacknowledged mismatch as approved."""
+    import threading
+
+    from app import routes
+    from app.routes import store
+
+    client = _client()
+    _upload_candidate(client)
+    _seed_scene(client, _matching_scene(tmp_path))
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_cas = routes._write_scene_cas
+
+    def delayed_cas(session, scene_id, base_revision, updates):
+        started.set()
+        assert proceed.wait(timeout=5)
+        return original_cas(session, scene_id, base_revision, updates)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", delayed_cas)
+
+    results = {}
+
+    def do_approve():
+        results["approve"] = client.post("/storyboard/s1/approve")
+
+    thread = threading.Thread(target=do_approve)
+    thread.start()
+    assert started.wait(timeout=5)
+
+    # Restore CAS for the racing edit, then change params so the computed
+    # answer (now 12) diverges from the stated answer (7).
+    monkeypatch.setattr(routes, "_write_scene_cas", original_cas)
+    with patch("app.routes.render_scene_thumbnail"):
+        edit_resp = client.patch(
+            "/storyboard/s1",
+            json={"params": {"start": 4, "steps": [{"operation": "add", "amount": 8}]}},
+        )
+    assert edit_resp.status_code == 200
+
+    proceed.set()
+    thread.join(timeout=5)
+
+    # Only a conflict is acceptable — never an approved current with an
+    # unacknowledged mismatch.
+    assert results["approve"].status_code == 409
+    session = store.get(client.cookies["session_id"])
+    scene = session.scenes["s1"]
+    assert scene.status != "approved"
+    assert scene.mismatch_acknowledged is False
+
+
+def test_concurrent_ungroup_makes_approve_return_404_not_500(tmp_path, monkeypatch):
+    """A concurrent ungroup deletes the chain scene from session.scenes.
+    _write_scene_cas must handle the missing entry as a race (404), not
+    KeyError into a 500."""
+    import threading
+
+    from app import routes
+    from app.routes import store
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
+    assert chain_resp.status_code == 200
+    chain_id = chain_resp.json()["scene_id"]
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_cas = routes._write_scene_cas
+
+    def delayed_cas(session, scene_id, base_revision, updates):
+        started.set()
+        assert proceed.wait(timeout=5)
+        return original_cas(session, scene_id, base_revision, updates)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", delayed_cas)
+
+    results = {}
+
+    def do_approve():
+        results["approve"] = client.post(f"/storyboard/{chain_id}/approve")
+
+    thread = threading.Thread(target=do_approve)
+    thread.start()
+    assert started.wait(timeout=5)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", original_cas)
+    ungroup_resp = client.post(f"/storyboard/{chain_id}/ungroup")
+    assert ungroup_resp.status_code == 200
+
+    proceed.set()
+    thread.join(timeout=5)
+
+    assert results["approve"].status_code == 404
+    session = store.get(client.cookies["session_id"])
+    assert chain_id not in session.scenes
+
+
+def test_concurrent_group_makes_approve_return_404_not_stale(tmp_path, monkeypatch):
+    """A concurrent group removes member ids from scene_order (leaving the
+    Scene object orphaned in session.scenes). _write_scene_cas must reject
+    the write instead of silently committing on an absorbed scene."""
+    import threading
+
+    from app import routes
+
+    client = _client()
+    _upload_candidates(client, [_candidate("c1"), _candidate("c2")])
+    a = _number_line_scene(tmp_path).model_copy(update={"scene_id": "a", "candidate_id": "c1"})
+    b = _number_line_scene(tmp_path).model_copy(update={"scene_id": "b", "candidate_id": "c2"})
+    _seed_scene(client, a)
+    _seed_scene(client, b)
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_cas = routes._write_scene_cas
+
+    def delayed_cas(session, scene_id, base_revision, updates):
+        started.set()
+        assert proceed.wait(timeout=5)
+        return original_cas(session, scene_id, base_revision, updates)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", delayed_cas)
+
+    results = {}
+
+    def do_approve():
+        results["approve"] = client.post("/storyboard/a/approve")
+
+    thread = threading.Thread(target=do_approve)
+    thread.start()
+    assert started.wait(timeout=5)
+
+    monkeypatch.setattr(routes, "_write_scene_cas", original_cas)
+    with patch("app.routes.render_chained_scene_thumbnail"):
+        chain_resp = client.post("/storyboard/chain", json={"scene_ids": ["a", "b"]})
+    assert chain_resp.status_code == 200
+
+    proceed.set()
+    thread.join(timeout=5)
+
+    assert results["approve"].status_code == 404
+
+
 def test_chain_combines_two_scenes_into_one(tmp_path):
     from app.models.scene import Scene, TemplateName
     from app.templates.registry import static_ref
