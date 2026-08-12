@@ -20,6 +20,7 @@ mapped onto the fields those acceptance contracts read.
 """
 
 import json
+import os
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -67,7 +68,12 @@ def client(tmp_path, monkeypatch):
     # The render steps run in subprocesses that open their own meta_session from
     # settings, so they must be pointed at the same on-disk DB as this process.
     monkeypatch.setenv("META_DB_PATH", str(meta_db))
-    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    # A caller that pre-set META_ARTIFACT_ROOT (the clean-env rehearsal
+    # script does this so it can inspect preview artifacts after the run)
+    # keeps its value; unset callers get the per-test tmp default so
+    # nothing about the default suite changes.
+    if os.environ.get("META_ARTIFACT_ROOT") is None:
+        monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
@@ -831,3 +837,26 @@ def test_rotation_demo_slide_approves_end_to_end(rendered_rotation):
 
     # Reuse on slide 2: a real MP4 renders for a second parameter set.
     assert result.mp4_path.exists() and result.mp4_path.stat().st_size > 0
+
+
+def test_client_fixture_honors_preset_meta_artifact_root(tmp_path, monkeypatch):
+    """The clean-env rehearsal (`scripts/rehearse-clean.sh`) pre-sets
+    META_ARTIFACT_ROOT so it can scan the directory after the run and
+    prove preview artifacts landed on disk. The `client` fixture used to
+    overwrite that env unconditionally with its own tmp_path/artifacts,
+    which left the pre-set directory empty and the rehearsal's artifact
+    check always failing. Regression: with a pre-set root, monkeypatch
+    should leave it alone."""
+    preset = tmp_path / "preset-artifacts"
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(preset))
+
+    # Drive the fixture body directly; the fixture is a generator, so its
+    # setup runs up to the `yield` and we can read the env there without
+    # actually spinning a TestClient (which requires the surrounding
+    # imports/DB engine that the runbook tests already exercise).
+    fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+    next(fixture_gen)
+    try:
+        assert os.environ["META_ARTIFACT_ROOT"] == str(preset)
+    finally:
+        fixture_gen.close()
