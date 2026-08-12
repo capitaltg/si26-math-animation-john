@@ -109,4 +109,13 @@ DSL_COMPILER_VERSION = 15
 #    version-10 renderer cannot deserialize `RotateAction` or the
 #    `rotation_frames` payload, so an artifact stamped 10 that references
 #    either must not be replayed.
-DYNAMIC_RENDERER_VERSION = 11
+# 12: `coordinate_plane` axis tick numbers render at the smaller
+#    `polygon_label` role (24pt) instead of `label` (36pt), and the
+#    measurer sizes tick payloads at the same role. Tick label widths and
+#    heights therefore shrink, which shifts the collision-driven thinning
+#    stride and the point-label quadrant search, changing both the pixel
+#    geometry a version-11 renderer would have produced and the layout
+#    bounds a version-11 measurer would have reported. Approving a
+#    version-11 report against a version-12 render would let a draft ship
+#    with a preview and quality report that no longer describe the frame.
+DYNAMIC_RENDERER_VERSION = 12

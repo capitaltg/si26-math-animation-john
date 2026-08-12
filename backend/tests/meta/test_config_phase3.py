@@ -130,8 +130,16 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # DYNAMIC_RENDERER_VERSION 11 covers rendering declared polygons, a pivot
     # mark, and one-step-per-iteration rotations against a persistent ghost
     # trail -- primitives a version-10 renderer has no branch for.
+    #
+    # DYNAMIC_RENDERER_VERSION 12 shrinks coordinate_plane axis tick numbers
+    # from the 36pt `label` role to the 24pt `polygon_label` role in both the
+    # measurer and the renderer. Tick label widths and heights change, which
+    # shifts collision-driven thinning and the point-label quadrant search --
+    # both the pixel geometry and the layout bounds a version-11 renderer
+    # would have produced are no longer what a version-12 render emits, so a
+    # coordinate_plane report stamped 11 must not stay approvable.
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 11
+    assert DYNAMIC_RENDERER_VERSION == 12
 
 
 def test_version_constants_carry_m22_bumps():
@@ -139,4 +147,4 @@ def test_version_constants_carry_m22_bumps():
     from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 11
+    assert DYNAMIC_RENDERER_VERSION == 12
