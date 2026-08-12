@@ -556,6 +556,33 @@ def test_overlapping_phrase_values_report_only_the_unreachable_one():
     assert check_params_grounded(params, "sarah has a red balloon.") == ["red"]
 
 
+def test_phrase_assignment_finishes_fast_when_many_identical_phrases_share_few_spans():
+    """The DSL caps source-owned string arrays at 12 values, so a schema-
+    valid params object can declare the same phrase 12 times. The prior
+    per-phrase backtracking was O(candidates^phrases), which for
+    12 identical values against 6 matching source tokens took seconds and
+    ran on every extraction/validation call. Collapsing identical phrases
+    into one capacity-tracked slot keeps the DP polynomial; this test
+    guards against reintroducing the exponential shape.
+    """
+    import time
+
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red"] * 12
+    )
+    started = time.perf_counter()
+    result = check_params_grounded(params, "red red red red red red")
+    elapsed = time.perf_counter() - started
+
+    # Six source spans satisfy six of the twelve declarations; the other
+    # six report ungrounded and the value string appears once per unmet
+    # declaration.
+    assert result == ["red"] * 6
+    assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
+
+
 def test_string_token_respects_source_token_boundaries():
     """The phrase tokenizer emits whole words, so a short phrase cannot
     bind inside a longer source word. `cat` must not ground against

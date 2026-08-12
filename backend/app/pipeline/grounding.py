@@ -1,7 +1,10 @@
+import bisect
 import copy
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 
 _REL_TOL = 1e-9
 _ABS_TOL = 1e-12
@@ -177,60 +180,107 @@ def _phrase_candidate_spans(
 def _resolve_phrase_assignments(
     phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
 ) -> list[Span | None]:
-    """Find the maximum-cardinality assignment of phrases to non-overlapping
-    source spans; return one span per phrase (None where no assignment
-    grounds it).
+    """Assign each phrase to a non-overlapping source span if possible;
+    return one span per phrase (None where no assignment grounds it).
 
     Greedy claim-first-match wrongly rejects fully-groundable inputs when
     phrases share tokens: for ["red", "red balloon"] against
-    "red balloon red", giving "red" the first source "red" strands
+    "red balloon red", giving "red" the first source "red" would strand
     "red balloon" without adjacent tokens even though assigning "red
     balloon" to the first two source tokens and "red" to the last one
-    grounds both. Backtracking over ordered candidates finds an assignment
-    if any exists; when none exists, the search prefers assignments that
-    ground more phrases so the ungrounded report only names phrases that
-    are genuinely unreachable.
+    grounds both.
+
+    Instead, collapse identical phrase-key sequences into slots with
+    per-slot capacities (so 12 identical values collapse to one slot cap
+    12 rather than blowing up the search) and run an interval-scheduling
+    DP over candidate spans sorted by end. State is (span index,
+    remaining-capacity tuple); transitions decide take/skip. This is
+    polynomial in candidate-span count × Product(cap_i + 1), which is
+    bounded because each phrase declaration adds at most one to some cap
+    and the DSL contract caps arrays at 12 source-owned values.
     """
-    candidates = [_phrase_candidate_spans(keys, source_tokens) for keys in phrases]
     n = len(phrases)
-    current: list[Span | None] = [None] * n
-    best: list[Span | None] = [None] * n
-    best_count = 0
+    result: list[Span | None] = [None] * n
+    if n == 0:
+        return result
 
-    def overlaps(span: Span) -> bool:
-        return any(
-            other is not None and span.start < other.end and other.start < span.end
-            for other in current
-        )
+    active_indices = [i for i, keys in enumerate(phrases) if keys]
+    if not active_indices:
+        return result
 
-    def search(index: int, grounded: int) -> None:
-        nonlocal best_count, best
-        if index == n:
-            if grounded > best_count:
-                best_count = grounded
-                best = list(current)
-            return
-        # An empty phrase (whitespace/punctuation only) has no candidate spans
-        # and is treated as grounded; the parent already filters it out of
-        # ungrounded reports, so skip it here without consuming a slot.
-        if not candidates[index]:
-            search(index + 1, grounded + (1 if phrases[index] == [] else 0))
-            return
-        for span in candidates[index]:
-            if overlaps(span):
-                continue
-            current[index] = span
-            search(index + 1, grounded + 1)
-            current[index] = None
-            if best_count == n:
-                return
-        # Also consider leaving this phrase ungrounded so a later phrase with
-        # only overlapping candidates does not prevent the earlier one from
-        # taking its own valid span in another branch.
-        search(index + 1, grounded)
+    active_keys = [tuple(phrases[i]) for i in active_indices]
+    counter = Counter(active_keys)
+    distinct_keys = list(counter.keys())
+    slot_of_key = {key: slot for slot, key in enumerate(distinct_keys)}
+    capacities = tuple(counter[key] for key in distinct_keys)
 
-    search(0, 0)
-    return best
+    entries: list[tuple[Span, int]] = []
+    for slot, keys in enumerate(distinct_keys):
+        for span in _phrase_candidate_spans(list(keys), source_tokens):
+            entries.append((span, slot))
+    if not entries:
+        return result
+
+    entries.sort(key=lambda item: (item[0].end, item[0].start))
+    ends_only = [span.end for span, _ in entries]
+
+    # p[i] = largest j < i with entries[j].span.end <= entries[i].span.start;
+    # -1 if none. Interval scheduling's "last compatible before i".
+    predecessors = [
+        bisect.bisect_right(ends_only, span.start) - 1
+        for span, _ in entries
+    ]
+
+    entry_count = len(entries)
+
+    @lru_cache(maxsize=None)
+    def dp(last: int, caps: tuple[int, ...]) -> int:
+        if last < 0:
+            return 0
+        _, slot = entries[last]
+        skip_value = dp(last - 1, caps)
+        take_value = -1
+        if caps[slot] > 0:
+            reduced = caps[:slot] + (caps[slot] - 1,) + caps[slot + 1:]
+            take_value = 1 + dp(predecessors[last], reduced)
+        return skip_value if skip_value > take_value else take_value
+
+    dp(entry_count - 1, capacities)
+
+    # Reconstruct the chosen (span, slot) pairs. On ties (take_value ==
+    # skip_value) prefer taking, so a phrase whose only valid span is here
+    # keeps that span instead of ceding it to a still-optional phrase later.
+    chosen: list[tuple[Span, int]] = []
+    caps_state = list(capacities)
+    i = entry_count - 1
+    while i >= 0:
+        span, slot = entries[i]
+        skip_value = dp(i - 1, tuple(caps_state))
+        take_value = -1
+        if caps_state[slot] > 0:
+            reduced = tuple(
+                caps_state[k] - (1 if k == slot else 0) for k in range(len(caps_state))
+            )
+            take_value = 1 + dp(predecessors[i], reduced)
+        if take_value >= skip_value and take_value >= 0:
+            chosen.append((span, slot))
+            caps_state[slot] -= 1
+            i = predecessors[i]
+        else:
+            i -= 1
+
+    dp.cache_clear()
+
+    spans_by_slot: dict[int, list[Span]] = {}
+    for span, slot in chosen:
+        spans_by_slot.setdefault(slot, []).append(span)
+
+    for phrase_pos, phrase_index in enumerate(active_indices):
+        slot = slot_of_key[active_keys[phrase_pos]]
+        available = spans_by_slot.get(slot)
+        if available:
+            result[phrase_index] = available.pop()
+    return result
 
 
 def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> bool:
