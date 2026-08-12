@@ -38,25 +38,46 @@ class _DiscoveryEnvelope(BaseModel):
     candidates: list[Any]
 
 
-def _suffix_from_whole_cells(suffix: list[str], cell_token_lists: list[list[str]]) -> bool:
-    """True iff `suffix` equals the exact concatenation, in order, of some
-    subset of `cell_token_lists`'s own whole entries (a cell contributes all
-    of its tokens or none — never a partial slice), so a suffix can only be
-    built from that table's actual cell contents, not from arbitrary tokens
-    scattered across its cells."""
-    if not suffix:
+def _suffix_from_table_rectangle(
+    suffix: list[str],
+    cells_by_coord: dict[tuple[int, int], list[str]],
+) -> bool:
+    """True iff `suffix` equals the exact row-major concatenation of every
+    cell in some contiguous sub-rectangle of one table.
+
+    A sub-rectangle is a contiguous span of the table's row indices and a
+    contiguous span of its column indices; every cell inside it (origin
+    cells of merged regions included, spanned duplicates excluded upstream)
+    contributes its tokens in row-major order. Requiring a rectangle keeps
+    the label/value relationship intact: for a 2x2 table
+    `width | 4 // height | 6`, "width 6" cannot bind because no rectangle
+    contains cell (0,0) and cell (1,1) without also containing (0,1) and
+    (1,0), so the concatenation would include "4" and "height" too.
+    """
+    if not suffix or not cells_by_coord:
         return False
-    reachable = {0}
-    for cell_tokens in cell_token_lists:
-        if not cell_tokens:
-            continue
-        n = len(cell_tokens)
-        reachable |= {
-            position + n
-            for position in reachable
-            if suffix[position:position + n] == cell_tokens
-        }
-    return len(suffix) in reachable
+    rows = sorted({r for r, _ in cells_by_coord})
+    cols = sorted({c for _, c in cells_by_coord})
+    suffix_len = len(suffix)
+    for i, r1 in enumerate(rows):
+        for r2 in rows[i:]:
+            row_slice = [r for r in rows if r1 <= r <= r2]
+            for j, c1 in enumerate(cols):
+                for c2 in cols[j:]:
+                    col_slice = [c for c in cols if c1 <= c <= c2]
+                    concat: list[str] = []
+                    overflow = False
+                    for r in row_slice:
+                        if overflow:
+                            break
+                        for c in col_slice:
+                            concat.extend(cells_by_coord.get((r, c), ()))
+                            if len(concat) > suffix_len:
+                                overflow = True
+                                break
+                    if not overflow and concat == suffix:
+                        return True
+    return False
 
 
 def _contiguous_in_any_block(prefix: list[str], block_token_lists: list[list[str]]) -> bool:
@@ -75,17 +96,27 @@ def _is_excerpt_grounded(excerpt_tokens: list[str], blocks: list[Block]) -> bool
         return False
 
     text_token_lists: list[list[str]] = []
-    tables: dict[int, list[list[str]]] = {}
+    tables_blocks: dict[int, list[Block]] = {}
     for block in blocks:
-        tokens = tokenize_for_grounding(block.text)
         if block.kind == "text":
-            text_token_lists.append(tokens)
+            text_token_lists.append(tokenize_for_grounding(block.text))
         else:
-            tables.setdefault(block.table_ord, []).append(tokens)
+            tables_blocks.setdefault(block.table_ord, []).append(block)
 
-    all_cell_token_lists = [
-        cell_tokens for cell_token_lists in tables.values() for cell_tokens in cell_token_lists
-    ]
+    tables_by_coord: list[dict[tuple[int, int], list[str]]] = []
+    all_cell_token_lists: list[list[str]] = []
+    for cells in tables_blocks.values():
+        cell_tokens = [tokenize_for_grounding(cell.text) for cell in cells]
+        all_cell_token_lists.extend(cell_tokens)
+        # A table with fully populated row/col indices can splice cells that
+        # form a contiguous sub-rectangle. A legacy or hand-built table
+        # missing that geometry falls back to single-cell containment only —
+        # never cross-cell splicing — because relationship-preserving
+        # rectangle checks require the actual coordinates.
+        if all(cell.row is not None and cell.col is not None for cell in cells):
+            tables_by_coord.append(
+                {(cell.row, cell.col): tokens for cell, tokens in zip(cells, cell_tokens)}
+            )
 
     # An excerpt entirely contained in one cell (a self-contained problem
     # typed straight into a table, common in K-8 decks) grounds directly.
@@ -102,8 +133,8 @@ def _is_excerpt_grounded(excerpt_tokens: list[str], blocks: list[Block]) -> bool
         if not suffix:
             return True
         if any(
-            _suffix_from_whole_cells(suffix, cell_token_lists)
-            for cell_token_lists in tables.values()
+            _suffix_from_table_rectangle(suffix, cells_by_coord)
+            for cells_by_coord in tables_by_coord
         ):
             return True
     return False

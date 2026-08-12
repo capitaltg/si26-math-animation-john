@@ -464,11 +464,182 @@ def test_plural_mismatch_does_not_silently_ground():
     assert check_params_grounded(params, "Sarah has apples.") == ["apple"]
 
 
-def test_multi_word_string_token_grounds_each_word_independently():
+def test_multi_word_string_requires_ordered_contiguous_phrase():
+    """A source-owned multi-word value must bind to the exact ordered
+    phrase in one contiguous run of source tokens — never as two
+    independent word matches. That was the P0: `red balloon` used to
+    ground against "The balloon is beside the red box." because both words
+    exist, even though the phrase does not.
+    """
     from app.pipeline.grounding import check_params_grounded
 
     params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
     assert check_params_grounded(params, "Sarah has a red balloon.") == []
+
+
+def test_multi_word_string_rejects_separated_words():
+    """The exact release-blocker repro: both words are in the source, but
+    not as one adjacent phrase in that order. Independent-word matching
+    would accept this; ordered-phrase matching must reject it.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
+    assert (
+        check_params_grounded(params, "The balloon is beside the red box.")
+        == ["red balloon"]
+    )
+
+
+def test_multi_word_string_rejects_reverse_order():
+    """Adjacency alone is not enough — the tokens must appear in the
+    phrase's declared order. "balloon red" is not "red balloon".
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["red balloon"])
+    assert check_params_grounded(params, "A blue balloon and red kite.") == ["red balloon"]
+
+
+def test_multi_word_string_duplicate_value_needs_two_source_spans():
+    """A duplicated source-owned phrase (declared twice) must find two
+    non-overlapping source spans. One source occurrence cannot cover both.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red balloon", "red balloon"]
+    )
+    # Only one source occurrence of the phrase — second declaration ungrounded.
+    assert (
+        check_params_grounded(params, "Sarah has a red balloon.") == ["red balloon"]
+    )
+    # Two source occurrences — both bind, each to its own span.
+    assert (
+        check_params_grounded(
+            params, "One red balloon floated up while another red balloon popped."
+        )
+        == []
+    )
+
+
+def test_overlapping_phrase_values_share_source_tokens_via_reassignment():
+    """When two source-owned phrases can each match at more than one source
+    span, a greedy first-fit walker would strand the harder-to-place
+    phrase. `["red", "red balloon"]` against "red balloon red" is fully
+    groundable — "red balloon" takes the leading two tokens and "red"
+    takes the trailing one — so the solver must find that assignment
+    instead of giving "red" the first token and leaving "red balloon"
+    without adjacent tokens.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red", "red balloon"]
+    )
+    assert check_params_grounded(params, "red balloon red") == []
+
+
+def test_overlapping_phrase_values_report_only_the_unreachable_one():
+    """Two phrases, only one source occurrence they could share: the
+    solver assigns the span to whichever phrase has no other viable spot
+    and reports the other. `["red balloon", "red"]` against
+    "sarah has a red balloon" — "red balloon" is grounded (only one
+    valid span) and "red" is ungrounded because the only "red" token is
+    already consumed.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red balloon", "red"]
+    )
+    assert check_params_grounded(params, "sarah has a red balloon.") == ["red"]
+
+
+def test_phrase_assignment_finishes_fast_when_many_identical_phrases_share_few_spans():
+    """The DSL caps source-owned string arrays at 12 values, so a schema-
+    valid params object can declare the same phrase 12 times. The prior
+    per-phrase backtracking was O(candidates^phrases), which for
+    12 identical values against 6 matching source tokens took seconds and
+    ran on every extraction/validation call. Collapsing identical phrases
+    into one capacity-tracked slot keeps the DP polynomial; this test
+    guards against reintroducing the exponential shape.
+    """
+    import time
+
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red"] * 12
+    )
+    started = time.perf_counter()
+    result = check_params_grounded(params, "red red red red red red")
+    elapsed = time.perf_counter() - started
+
+    # Six source spans satisfy six of the twelve declarations; the other
+    # six report ungrounded and the value string appears once per unmet
+    # declaration.
+    assert result == ["red"] * 6
+    assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
+
+
+def test_phrase_assignment_grounds_over_thirteen_declarations_with_shared_tokens():
+    """The full reviewer counterexample: three phrases share the source
+    tokens (``a b``, ``b``, ``b a``) alongside ten single-word fillers. A
+    fewest-alternatives greedy without backtracking strands ``b a``
+    because giving ``a b`` its first source occurrence blocks both of
+    ``b a``'s spans; the correct assignment (``b a`` → tokens 0..1,
+    ``a b`` → tokens 3..4, ``b`` → token 2) needs the search to reconsider
+    ``a b``'s choice. The solver must find that assignment.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    filler = list("cdefghijkl")
+    params = _StubParams(
+        tokens=[],
+        derived_totals=[],
+        string_tokens=["a b", "b", "b a", *filler],
+    )
+    source_text = "b a b a b " + " ".join(filler)
+
+    assert check_params_grounded(params, source_text) == []
+
+
+def test_phrase_assignment_finishes_fast_when_many_distinct_phrases_declared():
+    """The interval DP's state grows as Product(cap_i + 1); with many
+    distinct single-cap slots the exponent hits the request path (22
+    distinct values took ~6s locally). The solver falls back to a
+    length-descending greedy above _PHRASE_SOLVER_MAX_DISTINCT_SLOTS so an
+    adversarial params object cannot drag the exponential shape onto every
+    extraction call. This test guards the fallback threshold.
+    """
+    import time
+
+    from app.pipeline.grounding import check_params_grounded
+
+    distinct_words = [f"word{n:02d}" for n in range(24)]
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=distinct_words
+    )
+    source_text = " ".join(distinct_words)
+
+    started = time.perf_counter()
+    result = check_params_grounded(params, source_text)
+    elapsed = time.perf_counter() - started
+
+    assert result == []
+    assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
+
+
+def test_string_token_respects_source_token_boundaries():
+    """The phrase tokenizer emits whole words, so a short phrase cannot
+    bind inside a longer source word. `cat` must not ground against
+    `concatenate` — the source token there is `concatenate`, not `cat`.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(tokens=[], derived_totals=[], string_tokens=["cat"])
+    assert check_params_grounded(params, "concatenate the string.") == ["cat"]
 
 
 def test_derived_total_allowance_does_not_launder_a_coincidentally_numeric_string_token():

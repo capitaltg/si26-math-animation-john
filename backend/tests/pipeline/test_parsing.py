@@ -69,6 +69,8 @@ def test_extract_slide_blocks_tags_text_and_cell_blocks(tmp_path):
     assert len(cell_blocks) == 1
     assert cell_blocks[0].text == "Table problem: 6 groups of 4"
     assert cell_blocks[0].table_ord == 0
+    assert cell_blocks[0].row == 0
+    assert cell_blocks[0].col == 0
 
     slide2_blocks = slide_blocks[1]
     assert any("3.OA.A.1" in b.text for b in slide2_blocks)
@@ -87,6 +89,14 @@ def test_extract_slide_blocks_assigns_distinct_table_ord_per_table(tmp_path):
     assert table_ords == {0, 1}
     assert {b.text for b in cell_blocks if b.table_ord == 0} == {"6", "3"}
     assert {b.text for b in cell_blocks if b.table_ord == 1} == {"10", "20"}
+
+    # Each 1x2 table's cells carry their (row, col) so downstream grounding
+    # can bind label/value by shared row or column.
+    def coords(table_ord):
+        return {(b.row, b.col): b.text for b in cell_blocks if b.table_ord == table_ord}
+
+    assert coords(0) == {(0, 0): "6", (0, 1): "3"}
+    assert coords(1) == {(0, 0): "10", (0, 1): "20"}
 
 
 def test_extract_slide_blocks_assigns_table_ord_to_table_nested_in_group(tmp_path):
@@ -118,6 +128,38 @@ def test_extract_slide_blocks_assigns_table_ord_to_table_nested_in_group(tmp_pat
     assert len(cell_blocks) == 2
     assert {b.table_ord for b in cell_blocks} == {0}
     assert {b.text for b in cell_blocks} == {"7", "8"}
+
+
+def test_extract_slide_blocks_records_merged_origin_only(tmp_path):
+    """When cells are merged, the origin owns the text and the spanned
+    duplicates are silently empty; only the origin should reach downstream
+    grounding, so the (row, col) map still reflects the table's geometry
+    without ghost blank cells at every spanned coordinate.
+    """
+    from app.pipeline.parsing import extract_slide_blocks
+
+    presentation = Presentation()
+    layout = presentation.slide_layouts[1]
+    slide = presentation.slides.add_slide(layout)
+    slide.shapes.title.text = "Merged header"
+
+    table_shape = slide.shapes.add_table(
+        2, 2, Inches(1), Inches(1), Inches(4), Inches(1)
+    )
+    table = table_shape.table
+    table.cell(0, 0).text = "totals"
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(1, 0).text = "7"
+    table.cell(1, 1).text = "8"
+
+    pptx_path = tmp_path / "merged.pptx"
+    presentation.save(pptx_path)
+
+    slide_blocks = extract_slide_blocks(pptx_path)
+    cells = [b for b in slide_blocks[0] if b.kind == "cell"]
+
+    coord_to_text = {(b.row, b.col): b.text for b in cells}
+    assert coord_to_text == {(0, 0): "totals", (1, 0): "7", (1, 1): "8"}
 
 
 def test_flatten_blocks_matches_legacy_join_order(tmp_path):

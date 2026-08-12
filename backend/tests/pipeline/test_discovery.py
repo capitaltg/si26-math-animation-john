@@ -166,16 +166,16 @@ def test_discover_candidates_accepts_table_completion_with_header_and_data_cells
             text="A recipe says that 6 spring rolls will serve 3 people. Complete the table.",
         ),
         Block(kind="text", table_ord=None, text="Source: page 2 of 5."),
-        Block(kind="cell", table_ord=0, text="number of spring rolls"),
-        Block(kind="cell", table_ord=0, text="number of people"),
-        Block(kind="cell", table_ord=0, text="6"),
-        Block(kind="cell", table_ord=0, text="3"),
-        Block(kind="cell", table_ord=0, text="30"),
-        Block(kind="cell", table_ord=0, text=""),
-        Block(kind="cell", table_ord=0, text=""),
-        Block(kind="cell", table_ord=0, text="40"),
-        Block(kind="cell", table_ord=0, text="28"),
-        Block(kind="cell", table_ord=0, text=""),
+        Block(kind="cell", table_ord=0, text="number of spring rolls", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="number of people", row=0, col=1),
+        Block(kind="cell", table_ord=0, text="6", row=1, col=0),
+        Block(kind="cell", table_ord=0, text="3", row=1, col=1),
+        Block(kind="cell", table_ord=0, text="30", row=2, col=0),
+        Block(kind="cell", table_ord=0, text="", row=2, col=1),
+        Block(kind="cell", table_ord=0, text="", row=3, col=0),
+        Block(kind="cell", table_ord=0, text="40", row=3, col=1),
+        Block(kind="cell", table_ord=0, text="28", row=4, col=0),
+        Block(kind="cell", table_ord=0, text="", row=4, col=1),
     ]]
 
     candidates = discover_candidates(slide_blocks)
@@ -239,10 +239,10 @@ def test_discover_candidates_rejects_cross_sentence_splice_with_unrelated_table_
             table_ord=None,
             text="Mia has 3 apples. The class takes a break. Noah has 5 oranges.",
         ),
-        Block(kind="cell", table_ord=0, text="width"),
-        Block(kind="cell", table_ord=0, text="4"),
-        Block(kind="cell", table_ord=0, text="height"),
-        Block(kind="cell", table_ord=0, text="6"),
+        Block(kind="cell", table_ord=0, text="width", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="4", row=0, col=1),
+        Block(kind="cell", table_ord=0, text="height", row=1, col=0),
+        Block(kind="cell", table_ord=0, text="6", row=1, col=1),
     ]]
 
     candidates = discover_candidates(slide_blocks)
@@ -263,10 +263,10 @@ def test_grounding_rejects_number_spliced_across_two_tables():
         one_line_summary="summary",
     )
     slide_blocks = [[
-        Block(kind="cell", table_ord=0, text="6"),
-        Block(kind="cell", table_ord=0, text="3"),
-        Block(kind="cell", table_ord=1, text="10"),
-        Block(kind="cell", table_ord=1, text="20"),
+        Block(kind="cell", table_ord=0, text="6", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="3", row=0, col=1),
+        Block(kind="cell", table_ord=1, text="10", row=0, col=0),
+        Block(kind="cell", table_ord=1, text="20", row=0, col=1),
     ]]
 
     assert not _is_grounded(item, slide_blocks, start_index=0)
@@ -295,8 +295,8 @@ def test_grounding_accepts_table_suffix_requiring_skip_not_greedy_match():
     )
     slide_blocks = [[
         Block(kind="text", table_ord=None, text="Find the"),
-        Block(kind="cell", table_ord=0, text="width"),
-        Block(kind="cell", table_ord=0, text="width value"),
+        Block(kind="cell", table_ord=0, text="width", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="width value", row=0, col=1),
     ]]
 
     assert _is_grounded(item, slide_blocks, start_index=0)
@@ -316,11 +316,139 @@ def test_grounding_rejects_splice_built_from_two_cells_in_same_table():
         one_line_summary="Mia's oranges",
     )
     slide_blocks = [[
-        Block(kind="cell", table_ord=0, text="Mia has 3 apples."),
-        Block(kind="cell", table_ord=0, text="Noah has 5 oranges."),
+        Block(kind="cell", table_ord=0, text="Mia has 3 apples.", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="Noah has 5 oranges.", row=0, col=1),
     ]]
 
     assert not _is_grounded(item, slide_blocks, start_index=0)
+
+
+def _label_value_table_blocks() -> list[Block]:
+    """The 2x2 label/value table from the release-blocker report.
+
+        width  | 4
+        height | 6
+
+    A binding of "width" to "6" (or "height" to "4") flips the relationship
+    the table declares; only cells that share a row (label/value on the same
+    line) or share a column (all labels together, all values together)
+    represent a legitimate reading.
+    """
+    return [
+        Block(kind="cell", table_ord=0, text="width", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="4", row=0, col=1),
+        Block(kind="cell", table_ord=0, text="height", row=1, col=0),
+        Block(kind="cell", table_ord=0, text="6", row=1, col=1),
+    ]
+
+
+def test_grounding_rejects_diagonal_cell_pick_across_label_value_table():
+    """The exact release-blocker case: the tokens "width" and "6" both
+    exist in the table, but binding them together crosses row 0 to row 1
+    and column 0 to column 1 without also including the intervening cells
+    "4" and "height". No sub-rectangle produces just "width 6", so the
+    excerpt must not ground.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="width 6",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert not _is_grounded(item, [_label_value_table_blocks()], start_index=0)
+
+
+def test_grounding_rejects_reverse_diagonal_cell_pick():
+    """Symmetric mispair to the release-blocker case (height with 4). Same
+    sub-rectangle argument applies in the other diagonal.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="height 4",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert not _is_grounded(item, [_label_value_table_blocks()], start_index=0)
+
+
+def test_grounding_accepts_label_value_pair_in_same_row():
+    """The legitimate row binding: label and value that actually share a
+    row. The 1x2 sub-rectangle spanning that single row's two cells
+    concatenates to exactly the excerpt.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="width 4",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert _is_grounded(item, [_label_value_table_blocks()], start_index=0)
+
+
+def test_grounding_accepts_column_run_over_label_value_table():
+    """The legitimate column binding: cells in one column (both value cells
+    here). The 2x1 sub-rectangle in column 1 concatenates row-major to
+    "4 6" — a valid grouping the reader can see in the source.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="4 6",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+
+    assert _is_grounded(item, [_label_value_table_blocks()], start_index=0)
+
+
+def test_grounding_rejects_skip_within_single_row():
+    """Skipping a non-empty cell inside a row breaks the "every cell in the
+    rectangle contributes" rule. A|B|C in one row cannot ground "A C"
+    because the middle cell B would have to be treated as absent.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="A C",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="A", row=0, col=0),
+        Block(kind="cell", table_ord=0, text="B", row=0, col=1),
+        Block(kind="cell", table_ord=0, text="C", row=0, col=2),
+    ]]
+
+    assert not _is_grounded(item, slide_blocks, start_index=0)
+
+
+def test_grounding_accepts_merged_origin_cell_binding():
+    """A merged header cell (origin only; spanned duplicates are dropped in
+    parsing) still binds through its origin coordinate. Here the header
+    "totals" lives once at (0,0); the value cells below it bind row-major
+    within the rectangle spanning header + first value row.
+    """
+    from app.pipeline.discovery import _DiscoveredItem, _is_grounded
+
+    item = _DiscoveredItem(
+        source_excerpt="totals 7 8",
+        slide_index=0,
+        one_line_summary="summary",
+    )
+    slide_blocks = [[
+        Block(kind="cell", table_ord=0, text="totals", row=0, col=0),
+        # (0,1) is the spanned duplicate — parsing skips it, so it is absent here.
+        Block(kind="cell", table_ord=0, text="7", row=1, col=0),
+        Block(kind="cell", table_ord=0, text="8", row=1, col=1),
+    ]]
+
+    assert _is_grounded(item, slide_blocks, start_index=0)
 
 
 @pytest.mark.parametrize(

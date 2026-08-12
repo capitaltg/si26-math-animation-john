@@ -17,6 +17,8 @@ class Block:
     kind: Literal["text", "cell"]
     table_ord: int | None
     text: str
+    row: int | None = None
+    col: int | None = None
 
 
 def _extract_shape_blocks(
@@ -32,11 +34,25 @@ def _extract_shape_blocks(
         ]
     if getattr(shape, "has_table", False):
         table_ord = next(table_ords)
-        return [
-            Block(kind="cell", table_ord=table_ord, text=cell.text)
-            for row in shape.table.rows
-            for cell in row.cells
-        ]
+        blocks: list[Block] = []
+        for row_index, row in enumerate(shape.table.rows):
+            for col_index, cell in enumerate(row.cells):
+                # `is_spanned` marks the non-origin cells of a merged region;
+                # their text is empty but they still appear in iteration.
+                # Skipping them keeps row/col indexing anchored to the origin
+                # so the grounding rectangle rule sees the real geometry.
+                if getattr(cell, "is_spanned", False):
+                    continue
+                blocks.append(
+                    Block(
+                        kind="cell",
+                        table_ord=table_ord,
+                        text=cell.text,
+                        row=row_index,
+                        col=col_index,
+                    )
+                )
+        return blocks
     if getattr(shape, "has_text_frame", False):
         return [Block(kind="text", table_ord=None, text=shape.text_frame.text)]
     return []

@@ -138,6 +138,139 @@ def _build_source_occurrences(source_text: str) -> dict[str, list[Span]]:
     return occurrences
 
 
+def _build_source_token_sequence(source_text: str) -> list[tuple[str, Span]]:
+    """In-order (canonical_key, Span) pairs for every source token.
+
+    Phrase grounding needs the ordered sequence — not just a multiset — so a
+    source-owned string value binds to one contiguous run of source tokens
+    rather than one token per value word chosen independently.
+    """
+    normalized = _normalize_for_grounding(source_text)
+    return [
+        (_canonical_key(match.group()), Span(match.start(), match.end()))
+        for match in _GROUNDING_TOKEN_RE.finditer(normalized)
+    ]
+
+
+def _phrase_candidate_spans(
+    phrase_keys: list[str], source_tokens: list[tuple[str, Span]]
+) -> list[Span]:
+    """Every source span whose consecutive tokens match `phrase_keys`, in
+    source order.
+
+    Matching is against normalized token boundaries the shared tokenizer
+    produces, so "cat" cannot bind inside "concatenate" (one source token),
+    and a two-word phrase like "red balloon" must appear as those two
+    tokens in that order with no intervening tokens.
+    """
+    if not phrase_keys:
+        return []
+    n = len(phrase_keys)
+    spans: list[Span] = []
+    for start in range(len(source_tokens) - n + 1):
+        window = source_tokens[start:start + n]
+        if [key for key, _ in window] == phrase_keys:
+            spans.append(Span(window[0][1].start, window[-1][1].end))
+    return spans
+
+
+# Backtracking bound on the phrase solver. Each step corresponds to one
+# node visited in the search tree; with fewest-alternatives ordering and
+# an upper-bound cut on unreachable improvements, small realistic inputs
+# finish in well under a thousand steps. The cap is a safety net for
+# adversarially-constructed schema-valid inputs (many distinct short
+# phrases against a dense repeating source) that would otherwise chew
+# request-latency budget. If the cap fires, the best assignment found so
+# far is returned — which still enforces ordered contiguous-span matching
+# (the release-blocker fix), just no longer proven maximum-cardinality.
+_PHRASE_SOLVER_MAX_STEPS = 200_000
+
+
+def _resolve_phrase_assignments(
+    phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
+) -> list[Span | None]:
+    """Assign each phrase to a non-overlapping source span; return one span
+    per phrase (None where no assignment grounds it).
+
+    Greedy first-fit rejects fully-groundable inputs when phrases share
+    tokens: for ``["red", "red balloon"]`` against ``"red balloon red"``,
+    giving "red" the first source "red" strands "red balloon" without
+    adjacent tokens even though assigning "red balloon" to the first two
+    source tokens and "red" to the last one grounds both.
+
+    Search structure: DFS over phrases ordered by fewest current
+    candidates (fewest-alternatives-first), taking each viable span in
+    turn or leaving the phrase ungrounded. An upper-bound cut (grounded +
+    remaining ≤ best) prunes branches that cannot improve on the current
+    best, and the search stops early when a full assignment is found.
+    ``_PHRASE_SOLVER_MAX_STEPS`` caps the total node count so an
+    adversarial input cannot drag exponential worst-case runtime onto the
+    request path; on cap-hit the best assignment found so far is
+    returned, which is guaranteed ordered-contiguous-span-correct.
+    """
+    n = len(phrases)
+    result: list[Span | None] = [None] * n
+    if n == 0:
+        return result
+
+    active_indices = [i for i, keys in enumerate(phrases) if keys]
+    if not active_indices:
+        return result
+
+    candidates_per_phrase: dict[int, list[Span]] = {
+        i: _phrase_candidate_spans(phrases[i], source_tokens)
+        for i in active_indices
+    }
+    n_active = len(active_indices)
+
+    order = sorted(
+        active_indices,
+        key=lambda i: (len(candidates_per_phrase[i]), -len(phrases[i]), i),
+    )
+
+    current: list[Span | None] = [None] * n
+    best: list[Span | None] = [None] * n
+    best_count = 0
+    steps = 0
+
+    def overlaps(span: Span, exclude_index: int) -> bool:
+        for idx, other in enumerate(current):
+            if other is None or idx == exclude_index:
+                continue
+            if span.start < other.end and other.start < span.end:
+                return True
+        return False
+
+    def search(depth: int, grounded: int) -> bool:
+        """Returns True to signal early termination (either a full
+        assignment landed or the step cap fired)."""
+        nonlocal best_count, best, steps
+        steps += 1
+        if steps > _PHRASE_SOLVER_MAX_STEPS:
+            return True
+        if grounded + (n_active - depth) <= best_count:
+            return False
+        if depth == n_active:
+            if grounded > best_count:
+                best_count = grounded
+                best = list(current)
+            return best_count == n_active
+        phrase_index = order[depth]
+        for span in candidates_per_phrase[phrase_index]:
+            if overlaps(span, phrase_index):
+                continue
+            current[phrase_index] = span
+            if search(depth + 1, grounded + 1):
+                return True
+            current[phrase_index] = None
+        # Also try leaving this phrase ungrounded so a later phrase whose
+        # only viable span overlaps this one's choices can still land.
+        return search(depth + 1, grounded)
+
+    search(0, 0)
+    return best
+
+
 def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> bool:
     """Pop one span per component from ``occurrences``; return False on shortfall."""
     for component in components:
@@ -163,15 +296,6 @@ def check_params_grounded(params, source_text: str) -> list[str]:
     original_occurrences = _build_source_occurrences(source_text)
     consuming = copy.deepcopy(original_occurrences)
 
-    # A source-owned string value is tokenized the same way the source text
-    # is, so a multi-word value (e.g. "red balloon") grounds one source
-    # occurrence per word rather than requiring the exact phrase verbatim.
-    string_tokens = [
-        word
-        for value in params_string_tokens(params)
-        for word in tokenize_for_grounding(value)
-    ]
-
     def consume(tokens: list[str]) -> list[str]:
         pending: list[str] = []
         for token in tokens:
@@ -182,15 +306,34 @@ def check_params_grounded(params, source_text: str) -> list[str]:
                 pending.append(token)
         return pending
 
-    # Numeric and string tokens draw from the same shared source multiset
-    # (numbers first, matching prior behavior), but are tracked separately:
-    # derived-total allowance below is a numeric-only concept (a declared
-    # sum/product of numeric components) and must never exempt a
-    # source-owned string/enum value merely because it shares a canonical
-    # key with an allowed numeric total (e.g. a string field whose value is
-    # literally "7" is not vouched for by an unrelated 3 + 4 = 7 total).
+    # Numeric tokens still bind through a shared source multiset so
+    # derived-total allowance below can exempt them; string values now bind
+    # to ordered contiguous source spans so a multi-word value like "red
+    # balloon" requires the exact phrase, not two independent word matches.
+    # Derived-total allowance must never exempt a source-owned string/enum
+    # value merely because it shares a canonical key with an allowed numeric
+    # total (e.g. a string field whose value is literally "7" is not vouched
+    # for by an unrelated 3 + 4 = 7 total).
     ungrounded_numbers = consume(params_number_tokens(params))
-    ungrounded_strings = consume(string_tokens)
+
+    source_tokens = _build_source_token_sequence(source_text)
+    string_values = list(params_string_tokens(params))
+    phrase_keys_per_value = [
+        [_canonical_key(token) for token in tokenize_for_grounding(value)]
+        for value in string_values
+    ]
+    # An empty-after-normalization value (whitespace or punctuation only)
+    # has nothing to bind against and is silently accepted, the same way the
+    # prior word-multiset code accepted it. Filter those out before the
+    # solver so the assignment is over real phrases only.
+    active_indices = [i for i, keys in enumerate(phrase_keys_per_value) if keys]
+    active_phrase_keys = [phrase_keys_per_value[i] for i in active_indices]
+    assignments = _resolve_phrase_assignments(active_phrase_keys, source_tokens)
+    ungrounded_strings: list[str] = [
+        string_values[active_indices[i]]
+        for i, span in enumerate(assignments)
+        if span is None
+    ]
 
     allowed_totals: set[str] = set()
     for total_token, components, operation in params_derived_totals(params):
