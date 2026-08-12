@@ -2,6 +2,7 @@ import { useContext } from 'react'
 import { Link } from 'react-router-dom'
 import { DemoContext } from './DemoShell'
 import { templateLabel } from '../lib/templates'
+import TemplateWorkshop from '../TemplateWorkshop'
 
 function pillFor(status) {
   switch (status) {
@@ -55,6 +56,7 @@ export default function Queue() {
     handleBuildStoryboard,
     approveScene,
     setPendingRenders,
+    refreshOptionsFor,
   } = useContext(DemoContext)
 
   if (!candidates) {
@@ -104,9 +106,22 @@ export default function Queue() {
   }
 
   if (!storyboard) {
+    // Text-card-only means the classifier found no structural template that
+    // fits — the exact set the meta-template loop can build something new for.
+    const unsupportedCandidateIds = options
+      .filter((item) =>
+        item.templates.length > 0
+        && item.templates.every((option) => option.template === 'text_card')
+      )
+      .map((item) => item.candidate_id)
     return (
       <section className="band">
         <h2>Choose visualizations</h2>
+        <TemplateWorkshop
+          candidates={candidates}
+          unsupportedCandidateIds={unsupportedCandidateIds}
+          onApproved={(_templateName, candidateId) => refreshOptionsFor(candidateId)}
+        />
         {options.map((item) => (
           <fieldset key={item.candidate_id} className="option-set" disabled={loading}>
             <legend>
