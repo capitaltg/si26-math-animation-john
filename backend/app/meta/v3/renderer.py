@@ -461,7 +461,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
         # would have drawn over it -- keep the tick mark, drop the glyph.
         if tick["label"]:
             label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
-            tick_labels.append(_text(tick["label"], "label", Point(u, label_y), scale))
+            tick_labels.append(_text(tick["label"], "polygon_label", Point(u, label_y), scale))
     for tick in payload["y_ticks"]:
         v = tick["v"] * scale + cy
         tick_mobjects.append(Line(
@@ -470,7 +470,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
         ))
         if tick["label"]:
             label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
-            tick_labels.append(_text(tick["label"], "label", Point(label_x, v), scale))
+            tick_labels.append(_text(tick["label"], "polygon_label", Point(label_x, v), scale))
     children = _parts_as_dots(measured, offset, "point")
     point_labels = []
     for point in payload["points"]:
