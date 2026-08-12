@@ -583,6 +583,32 @@ def test_phrase_assignment_finishes_fast_when_many_identical_phrases_share_few_s
     assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
 
 
+def test_phrase_assignment_finishes_fast_when_many_distinct_phrases_declared():
+    """The interval DP's state grows as Product(cap_i + 1); with many
+    distinct single-cap slots the exponent hits the request path (22
+    distinct values took ~6s locally). The solver falls back to a
+    length-descending greedy above _PHRASE_SOLVER_MAX_DISTINCT_SLOTS so an
+    adversarial params object cannot drag the exponential shape onto every
+    extraction call. This test guards the fallback threshold.
+    """
+    import time
+
+    from app.pipeline.grounding import check_params_grounded
+
+    distinct_words = [f"word{n:02d}" for n in range(24)]
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=distinct_words
+    )
+    source_text = " ".join(distinct_words)
+
+    started = time.perf_counter()
+    result = check_params_grounded(params, source_text)
+    elapsed = time.perf_counter() - started
+
+    assert result == []
+    assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
+
+
 def test_string_token_respects_source_token_boundaries():
     """The phrase tokenizer emits whole words, so a short phrase cannot
     bind inside a longer source word. `cat` must not ground against

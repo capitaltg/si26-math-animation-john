@@ -177,6 +177,47 @@ def _phrase_candidate_spans(
     return spans
 
 
+# The interval DP's state is (span index, per-slot remaining capacities), so
+# its size scales with Product(cap_i + 1). When every phrase is a distinct
+# slot with cap 1, that product is 2^(distinct slots) and the solver stops
+# being polynomial. The DSL contract does not cap the total number of
+# source-owned string values a params object can emit (multiple arrays and
+# top-level fields compose), so an adversarial-but-schema-valid input could
+# push the solver past request-latency budgets. Above this threshold on
+# distinct slots, we fall back to a length-descending greedy first-fit — it
+# is not maximum-cardinality in every edge case, but it stays fast and still
+# enforces ordered contiguous-span matching (the release-blocker fix). The
+# threshold sits comfortably above real DSL usage; templates observed in
+# fixtures declare at most a handful of distinct source-owned string values.
+_PHRASE_SOLVER_MAX_DISTINCT_SLOTS = 12
+
+
+def _greedy_phrase_assignment(
+    phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
+) -> list[Span | None]:
+    """Length-descending greedy first-fit fallback for the >12-slot path.
+
+    Longer phrases get first pick over their limited candidate spans, so a
+    two-word phrase whose only span coincides with a common single word
+    keeps that span. Not optimal in every case, but bounded runtime.
+    """
+    n = len(phrases)
+    result: list[Span | None] = [None] * n
+    order = sorted(
+        (i for i, keys in enumerate(phrases) if keys),
+        key=lambda i: (-len(phrases[i]), i),
+    )
+    consumed: list[Span] = []
+    for i in order:
+        for span in _phrase_candidate_spans(phrases[i], source_tokens):
+            if any(span.start < t.end and t.start < span.end for t in consumed):
+                continue
+            result[i] = span
+            consumed.append(span)
+            break
+    return result
+
+
 def _resolve_phrase_assignments(
     phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
 ) -> list[Span | None]:
@@ -194,10 +235,10 @@ def _resolve_phrase_assignments(
     per-slot capacities (so 12 identical values collapse to one slot cap
     12 rather than blowing up the search) and run an interval-scheduling
     DP over candidate spans sorted by end. State is (span index,
-    remaining-capacity tuple); transitions decide take/skip. This is
-    polynomial in candidate-span count × Product(cap_i + 1), which is
-    bounded because each phrase declaration adds at most one to some cap
-    and the DSL contract caps arrays at 12 source-owned values.
+    remaining-capacity tuple); transitions decide take/skip. Above
+    ``_PHRASE_SOLVER_MAX_DISTINCT_SLOTS`` distinct slots, fall back to a
+    length-descending greedy so an adversarially large params object
+    cannot drag the exponential worst case onto the request path.
     """
     n = len(phrases)
     result: list[Span | None] = [None] * n
@@ -211,6 +252,10 @@ def _resolve_phrase_assignments(
     active_keys = [tuple(phrases[i]) for i in active_indices]
     counter = Counter(active_keys)
     distinct_keys = list(counter.keys())
+
+    if len(distinct_keys) > _PHRASE_SOLVER_MAX_DISTINCT_SLOTS:
+        return _greedy_phrase_assignment(phrases, source_tokens)
+
     slot_of_key = {key: slot for slot, key in enumerate(distinct_keys)}
     capacities = tuple(counter[key] for key in distinct_keys)
 
