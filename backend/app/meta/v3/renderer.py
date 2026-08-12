@@ -496,7 +496,8 @@ def _build_coordinate_plane(measured, placed, palette: str):
         pivot_v = pivot_payload[1] * scale + cy
         children[("pivot", None)] = Dot(_array(Point(pivot_u, pivot_v)))
         pivot_labels.append(_text(
-            "pivot", "label", Point(pivot_u + 0.2 * scale, pivot_v + 0.2 * scale), scale,
+            "pivot", "polygon_label",
+            Point(pivot_u + 0.2 * scale, pivot_v + 0.2 * scale), scale,
         ))
 
     for polygon in payload.get("polygons", ()):
@@ -516,7 +517,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
         for index, vertex in enumerate(scene_vertices):
             letter = chr(ord("A") + index)
             label_point = _polygon_label_point(vertex, centroid)
-            children[("polygon_vertex_label", index)] = _text(letter, "label", label_point, scale)
+            children[("polygon_vertex_label", index)] = _text(letter, "polygon_label", label_point, scale)
 
         # Ghosts: one per pose the polygon vacates -- the initial pose plus
         # every intermediate frame (the LAST frame is never ghosted; it is
@@ -1248,7 +1249,7 @@ def _build_rotate_animation(action: ResolvedAction, rendered: RenderedScene, pal
     for vertex_index, label_point in enumerate(context.label_targets[iteration - 1]):
         label_key = (ref, "polygon_vertex_label", vertex_index)
         letter = chr(ord("A") + vertex_index)
-        new_label = _text(letter + "′" * iteration, "label", label_point, context.scale)
+        new_label = _text(letter + "′" * iteration, "polygon_label", label_point, context.scale)
         _apply_style(new_label, resolve_semantic_style(palette, rendered.roles[label_key]))
         animations.append(Transform(rendered.targets[label_key], new_label))
     return AnimationGroup(*animations)
