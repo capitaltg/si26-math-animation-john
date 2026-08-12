@@ -1140,7 +1140,13 @@ def approve_scene(scene_id: str, session_id: str | None = Cookie(default=None)):
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
     scene = _lookup_active_scene(session, scene_id)
     _guard_approval_mismatch(scene)
-    return _set_scene_status(session_id, scene_id, "approved")
+    # Anchor CAS to the same revision the guard just inspected. If a concurrent
+    # edit changed params (and thus possibly the mismatch state) between the
+    # guard read and this write, revision bumped and CAS returns 409 rather
+    # than committing an unacknowledged mismatch as approved.
+    updates = {"status": "approved", "approved_revision": scene.revision + 1}
+    updated = _write_scene_cas(session, scene_id, scene.revision, updates)
+    return _scene_out(session, updated, _lookup_candidates(session, updated))
 
 
 @router.post("/storyboard/{scene_id}/acknowledge-mismatch", response_model=SceneOut)
