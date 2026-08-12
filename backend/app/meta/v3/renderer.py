@@ -409,12 +409,14 @@ def _build_coordinate_plane(measured, placed, palette: str):
 
     M22 adds an optional pivot dot, an optional primary polygon with
     auto-lettered vertex labels, and a hidden ghost polygon per rotation
-    frame the polygon will visit. The primary polygon, its labels, and the
-    pivot are added to `root` (visible from the visual's own reveal, like
-    everything else here); ghosts are registered as children -- so
-    `RotateAction` dispatch can address them -- but deliberately held out of
-    `root`, mirroring how `_add_ray_shade_children` holds `DEFERRED_PARTS`
-    back until their own reveal plays.
+    frame the polygon will visit. The primary polygon, its vertex labels,
+    and the pivot dot are added to `root` (visible from the visual's own
+    reveal, like everything else here); ghosts are registered as children
+    -- so `RotateAction` dispatch can address them -- but deliberately held
+    out of `root`, mirroring how `_add_ray_shade_children` holds
+    `DEFERRED_PARTS` back until their own reveal plays. The pivot itself is
+    unlabeled; the origin dot and axis crossing convey it without a glyph
+    crowding the center of the plane.
     """
     payload = measured.payload
     scale, offset = placed.scale, placed.offset
@@ -487,18 +489,13 @@ def _build_coordinate_plane(measured, placed, palette: str):
             point_offset = payload["point_label_offset"]
             label_x = u
             label_y = v + (point_offset + point["label_height"] / 2) * scale
-        point_labels.append(_text(point["label"], "label", Point(label_x, label_y), scale))
+        point_labels.append(_text(point["label"], "polygon_label", Point(label_x, label_y), scale))
 
-    pivot_labels = []
     pivot_payload = payload.get("pivot")
     if pivot_payload is not None:
         pivot_u = pivot_payload[0] * scale + cx
         pivot_v = pivot_payload[1] * scale + cy
         children[("pivot", None)] = Dot(_array(Point(pivot_u, pivot_v)))
-        pivot_labels.append(_text(
-            "pivot", "polygon_label",
-            Point(pivot_u + 0.2 * scale, pivot_v + 0.2 * scale), scale,
-        ))
 
     for polygon in payload.get("polygons", ()):
         scene_vertices = [
@@ -542,7 +539,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
     ]
     root = VGroup(
         *grid_lines, x_axis, y_axis, *tick_mobjects, *tick_labels,
-        *visible_children, *point_labels, *pivot_labels,
+        *visible_children, *point_labels,
     )
     return root, children
 

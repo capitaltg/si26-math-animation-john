@@ -118,4 +118,13 @@ DSL_COMPILER_VERSION = 15
 #    bounds a version-11 measurer would have reported. Approving a
 #    version-11 report against a version-12 render would let a draft ship
 #    with a preview and quality report that no longer describe the frame.
-DYNAMIC_RENDERER_VERSION = 12
+# 13: `coordinate_plane` renders point labels at the smaller `polygon_label`
+#    role (24pt) instead of `label` (36pt), drops the "pivot" text glyph
+#    entirely (the dot at the pivot stays), and suppresses the "0" tick
+#    label on both axes when the pivot is at the world origin -- so a
+#    version-12 renderer would have painted a larger point-label glyph, an
+#    extra "pivot" text, and one or two "0" tick glyphs the version-13
+#    payload no longer carries. Point-label bounds and origin-tick bounds
+#    both shift as a result, so a version-12 measurer's report would no
+#    longer describe the version-13 frame.
+DYNAMIC_RENDERER_VERSION = 13

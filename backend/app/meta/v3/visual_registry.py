@@ -1177,6 +1177,19 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "pivot", None, Bounds(pivot_u, pivot_u, pivot_v, pivot_v),
         )
         pivot_payload = (pivot_u, pivot_v)
+        # A pivot dot at world (0, 0) sits exactly on both axis "0" tick
+        # labels -- three glyphs stacked at the crossing. The axis crossing
+        # already conveys the origin, so drop the redundant "0" labels on
+        # both axes when the pivot is at the origin. Bounds shrink slightly
+        # (via `_coordinate_plane_bounds` which reads these flags), matching
+        # the existing point-collision suppression.
+        if pivot_x == 0 and pivot_y == 0:
+            for i, row in enumerate(x_tick_payload):
+                if row[0] == 0:
+                    x_tick_suppressed[i] = True
+            for i, row in enumerate(y_tick_payload):
+                if row[0] == 0:
+                    y_tick_suppressed[i] = True
 
     polygons = values.get("polygons") or []
     # `parts[("polygon", 0)]` and `parts[("polygon_vertex", i)]` below are keyed
