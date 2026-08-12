@@ -20,27 +20,65 @@ function setAtPath(obj, path, value) {
   return clone
 }
 
-function* paramRows(params, schema, prefix = '') {
+function resolveRef(schema, root, seen = new Set()) {
+  // Pydantic emits sub-schemas as { "$ref": "#/$defs/Name" }. Follow those,
+  // guarding against cycles. Also inline direct { allOf: [{ $ref }] } wrappers
+  // that Pydantic uses when annotating a referenced field.
+  let cursor = schema
+  while (cursor && typeof cursor === 'object') {
+    if (cursor.$ref) {
+      if (seen.has(cursor.$ref)) return {}
+      seen.add(cursor.$ref)
+      const target = derefPointer(cursor.$ref, root)
+      if (!target) return {}
+      cursor = target
+      continue
+    }
+    if (Array.isArray(cursor.allOf) && cursor.allOf.length === 1 && cursor.allOf[0].$ref) {
+      const merged = { ...cursor }
+      delete merged.allOf
+      cursor = { ...resolveRef(cursor.allOf[0], root, seen), ...merged }
+      continue
+    }
+    return cursor
+  }
+  return schema
+}
+
+function derefPointer(ref, root) {
+  // Only handles same-document JSON Pointer refs (#/$defs/Foo, #/definitions/Bar)
+  if (typeof ref !== 'string' || !ref.startsWith('#/')) return null
+  const parts = ref.slice(2).split('/').map((p) => p.replace(/~1/g, '/').replace(/~0/g, '~'))
+  let cursor = root
+  for (const p of parts) {
+    if (!cursor || typeof cursor !== 'object') return null
+    cursor = cursor[p]
+  }
+  return cursor ?? null
+}
+
+function* paramRows(params, schema, root, prefix = '') {
   if (!schema) return
-  if (schema.type === 'object' || schema.properties) {
-    for (const key of Object.keys(schema.properties ?? {})) {
-      const childSchema = schema.properties[key]
+  const resolved = resolveRef(schema, root)
+  if (resolved.type === 'object' || resolved.properties) {
+    for (const key of Object.keys(resolved.properties ?? {})) {
+      const childSchema = resolved.properties[key]
       const childValue = params?.[key]
       const path = prefix ? `${prefix}.${key}` : key
-      yield* paramRows(childValue, childSchema, path)
+      yield* paramRows(childValue, childSchema, root, path)
     }
     return
   }
-  if (schema.type === 'array' || schema.items) {
+  if (resolved.type === 'array' || resolved.items) {
     const arr = Array.isArray(params) ? params : []
     for (let i = 0; i < arr.length; i++) {
       const path = `${prefix}[${i}]`
-      yield* paramRows(arr[i], schema.items, path)
+      yield* paramRows(arr[i], resolved.items, root, path)
     }
     return
   }
   // leaf: integer, number, boolean, string
-  yield { path: prefix, value: params, type: schema.type }
+  yield { path: prefix, value: params, type: resolved.type, enum: resolved.enum }
 }
 
 function errKey(loc) {
@@ -66,7 +104,7 @@ function coerce(type, raw) {
 }
 
 export default function ParamTable({ params, schema, errors, original, onChange, onRevert }) {
-  const rows = useMemo(() => Array.from(paramRows(params, schema)), [params, schema])
+  const rows = useMemo(() => Array.from(paramRows(params, schema, schema)), [params, schema])
   const errByPath = useMemo(() => {
     const map = new Map()
     for (const e of errors ?? []) map.set(errKey(e.loc), e.msg)
@@ -113,6 +151,19 @@ export default function ParamTable({ params, schema, errors, original, onChange,
           defaultChecked={!!row.value}
           onChange={handleCheckbox(row)}
         />
+      )
+    }
+    if (Array.isArray(row.enum) && row.enum.length > 0) {
+      return (
+        <select
+          aria-label={row.path}
+          defaultValue={row.value ?? ''}
+          onChange={(e) => onChange(setAtPath(params, row.path, e.target.value))}
+        >
+          {row.enum.map((opt) => (
+            <option key={String(opt)} value={opt}>{String(opt)}</option>
+          ))}
+        </select>
       )
     }
     const inputType = row.type === 'integer' || row.type === 'number' ? 'number' : 'text'

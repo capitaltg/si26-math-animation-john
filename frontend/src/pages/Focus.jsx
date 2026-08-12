@@ -15,6 +15,7 @@ export default function Focus() {
   const {
     storyboard, drafts, fieldErrors, loading,
     saveEdits, setDrafts, approveScene, rejectScene, retryScene, setPendingRenders,
+    acknowledgeMismatch,
   } = ctx
   const timerRef = useRef(null)
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
@@ -52,6 +53,16 @@ export default function Focus() {
 
   const clipUrl = scene.clip_url ?? null
 
+  // Backend rejects /approve with 409 when scene.mismatch is present and the
+  // teacher has not acknowledged it. Surface the delta and require an explicit
+  // acknowledge action before the primary CTA is enabled.
+  const mismatch = scene.mismatch
+  const needsMismatchAck = !!mismatch && !scene.mismatch_acknowledged
+
+  const handleAcknowledgeMismatch = async () => {
+    try { await acknowledgeMismatch(scene.scene_id) } catch { /* stay on Focus */ }
+  }
+
   const handleApprove = async () => {
     try {
       await approveScene(scene.scene_id)
@@ -80,6 +91,41 @@ export default function Focus() {
         onSwitch={() => { /* alternate-template switching is out of scope this task */ }}
       />
 
+      {mismatch && (
+        <div
+          className={`mismatch${scene.mismatch_acknowledged ? ' mismatch--acknowledged' : ''}`}
+          role="alert"
+          aria-live="polite"
+        >
+          <div className="mismatch__body">
+            <div className="mismatch__title">
+              {scene.mismatch_acknowledged
+                ? 'Mismatch acknowledged'
+                : "Slide answer doesn't match the math"}
+            </div>
+            <div className="mismatch__delta">
+              <span><span className="mismatch__k">Slide says</span> <strong>{String(mismatch.stated)}</strong></span>
+              <span><span className="mismatch__k">Python computes</span> <strong>{String(mismatch.computed)}</strong></span>
+            </div>
+            {!scene.mismatch_acknowledged && (
+              <p className="mismatch__hint">
+                Edit values on the right to match the slide, or acknowledge to render the Python-verified value.
+              </p>
+            )}
+          </div>
+          {!scene.mismatch_acknowledged && (
+            <button
+              type="button"
+              className="btn btn--ghost mismatch__ack"
+              onClick={handleAcknowledgeMismatch}
+              disabled={loading}
+            >
+              Acknowledge &amp; keep going
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="focus__split">
         <section className="focus__left">
           <PreviewStage scene={scene} clipUrl={clipUrl} />
@@ -102,7 +148,14 @@ export default function Focus() {
       <footer className="focus__actions">
         <button className="btn btn--danger" onClick={() => rejectScene(scene.scene_id).catch(() => {})} disabled={loading}>Reject</button>
         <button className="btn btn--ghost" onClick={() => retryScene(scene.scene_id).catch(() => {})} disabled={loading}>Retry</button>
-        <button className="btn btn--primary" onClick={handleApprove} disabled={loading}>Approve &amp; render →</button>
+        <button
+          className="btn btn--primary"
+          onClick={handleApprove}
+          disabled={loading || needsMismatchAck}
+          title={needsMismatchAck ? 'Acknowledge the mismatch first' : undefined}
+        >
+          Approve &amp; render →
+        </button>
       </footer>
     </article>
   )

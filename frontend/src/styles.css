@@ -1139,6 +1139,58 @@ a:hover { text-decoration: underline; }
   flex-wrap: wrap;
 }
 
+/* ============================== MISMATCH BANNER ========================== */
+.mismatch {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--brand-tint);
+  border: 2px solid var(--brand-soft);
+  border-radius: var(--r-md);
+  padding: 1rem 1.25rem;
+  color: var(--brand-ink);
+  flex-wrap: wrap;
+}
+.mismatch--acknowledged {
+  background: var(--ok-field);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+.mismatch__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+}
+.mismatch__title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-lg);
+  color: inherit;
+}
+.mismatch__delta {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: var(--t-sm);
+}
+.mismatch__k {
+  color: var(--ink-soft);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 0.35rem;
+  font-weight: 700;
+}
+.mismatch__hint {
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
+  margin: 0;
+}
+.mismatch__ack { white-space: nowrap; }
+
 /* ============================== TOASTS + MODAL =========================== */
 .toasts {
   position: fixed;

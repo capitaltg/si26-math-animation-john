@@ -92,3 +92,66 @@ test('disables revert when value already matches original', () => {
   )
   expect(screen.getByRole('button', { name: /revert/i })).toBeDisabled()
 })
+
+test('resolves $ref for object-array items (e.g. number_line steps)', () => {
+  // Pydantic emits sub-schemas as $ref/$defs — without resolution the walker
+  // treated the whole step object as a leaf and rendered [object Object].
+  const schema = {
+    $defs: {
+      Step: {
+        type: 'object',
+        properties: {
+          operation: { type: 'string', enum: ['add', 'sub'] },
+          amount: { type: 'integer' },
+        },
+      },
+    },
+    properties: {
+      steps: {
+        type: 'array',
+        items: { $ref: '#/$defs/Step' },
+      },
+    },
+  }
+  const params = { steps: [{ operation: 'add', amount: 3 }, { operation: 'sub', amount: 1 }] }
+  render(
+    <ParamTable
+      params={params}
+      schema={schema}
+      original={params}
+      onChange={() => {}}
+      onRevert={() => {}}
+    />
+  )
+  // Two rows per item, four rows total; each field addressable by input role
+  // (name is aria-label on the control, which the containing row also mirrors
+  // for a11y — target the control specifically).
+  expect(screen.getByRole('combobox', { name: 'steps[0].operation' })).toHaveValue('add')
+  expect(screen.getByRole('spinbutton', { name: 'steps[0].amount' })).toHaveValue(3)
+  expect(screen.getByRole('combobox', { name: 'steps[1].operation' })).toHaveValue('sub')
+  expect(screen.getByRole('spinbutton', { name: 'steps[1].amount' })).toHaveValue(1)
+  const opSelect = screen.getByRole('combobox', { name: 'steps[0].operation' })
+  expect(opSelect.tagName).toBe('SELECT')
+  expect(Array.from(opSelect.options).map((o) => o.value)).toEqual(['add', 'sub'])
+})
+
+test('follows allOf-wrapped $ref (Pydantic annotation pattern)', () => {
+  const schema = {
+    $defs: {
+      Coord: { type: 'object', properties: { x: { type: 'integer' } } },
+    },
+    properties: {
+      pos: { allOf: [{ $ref: '#/$defs/Coord' }] },
+    },
+  }
+  render(
+    <ParamTable
+      params={{ pos: { x: 7 } }}
+      schema={schema}
+      original={{ pos: { x: 7 } }}
+      onChange={() => {}}
+      onRevert={() => {}}
+    />
+  )
+  expect(screen.getByLabelText('pos.x')).toHaveValue(7)
+})

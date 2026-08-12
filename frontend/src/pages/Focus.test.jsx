@@ -77,6 +77,56 @@ test('Approve & render calls approveScene and navigates to /demo', async () => {
   expect(screen.getByTestId('queue')).toBeInTheDocument()
 })
 
+test('mismatch banner renders stated vs computed values', () => {
+  const mismatchScene = {
+    ...baseScene,
+    mismatch: { stated: '30', computed: '28' },
+    mismatch_acknowledged: false,
+  }
+  renderFocus({ storyboard: [mismatchScene] })
+  const banner = screen.getByRole('alert')
+  expect(banner).toHaveTextContent(/slide says/i)
+  expect(banner).toHaveTextContent('30')
+  expect(banner).toHaveTextContent(/python computes/i)
+  expect(banner).toHaveTextContent('28')
+})
+
+test('approve blocked until mismatch acknowledged', async () => {
+  const approveScene = vi.fn().mockResolvedValue(undefined)
+  const mismatchScene = {
+    ...baseScene,
+    mismatch: { stated: '30', computed: '28' },
+    mismatch_acknowledged: false,
+  }
+  renderFocus({ storyboard: [mismatchScene], approveScene })
+  const approve = screen.getByRole('button', { name: /approve.*render/i })
+  expect(approve).toBeDisabled()
+})
+
+test('acknowledge-mismatch action calls the shell handler', async () => {
+  const acknowledgeMismatch = vi.fn().mockResolvedValue(undefined)
+  const mismatchScene = {
+    ...baseScene,
+    mismatch: { stated: '30', computed: '28' },
+    mismatch_acknowledged: false,
+  }
+  renderFocus({ storyboard: [mismatchScene], acknowledgeMismatch })
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: /acknowledge/i }))
+  expect(acknowledgeMismatch).toHaveBeenCalledWith('S1')
+})
+
+test('approve re-enabled once mismatch is acknowledged', () => {
+  const mismatchScene = {
+    ...baseScene,
+    mismatch: { stated: '30', computed: '28' },
+    mismatch_acknowledged: true,
+  }
+  renderFocus({ storyboard: [mismatchScene] })
+  expect(screen.getByRole('button', { name: /approve.*render/i })).not.toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveTextContent(/mismatch acknowledged/i)
+})
+
 test('unknown id redirects to /demo', () => {
   renderFocus({ storyboard: [] })
   expect(screen.getByTestId('queue')).toBeInTheDocument()

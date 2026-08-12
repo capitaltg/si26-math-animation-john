@@ -315,6 +315,8 @@ export default function DemoShell() {
   const retryScene = (id) => sceneAction(id, '/retry', { method: 'POST' }, { resetDraft: true })
   const approveScene = (id) => sceneAction(id, '/approve', { method: 'POST' })
   const rejectScene = (id) => sceneAction(id, '/reject', { method: 'POST' })
+  const acknowledgeMismatch = (id) =>
+    sceneAction(id, '/acknowledge-mismatch', { method: 'POST' })
 
   const stage = deriveStage(candidates, options, storyboard)
 
@@ -355,6 +357,7 @@ export default function DemoShell() {
     retryScene,
     approveScene,
     rejectScene,
+    acknowledgeMismatch,
   }
 
   return (
