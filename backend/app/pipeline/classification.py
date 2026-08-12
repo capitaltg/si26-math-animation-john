@@ -50,10 +50,14 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
     "best-first, each with a one-phrase rationale. Never include a template the problem "
     "cannot structurally satisfy. Do not compute or state any answer. "
     "Set ambiguous=true only when the operands or operation cannot be confidently "
-    "determined. Set problem_kind='not_a_problem' when the text is not a concrete "
-    "solvable math problem (a heading, instruction, or prose). When the text IS a "
-    "solvable problem but no structural template above fits it, return an empty "
-    "options list with ambiguous=false and problem_kind='solvable'."
+    "determined. Set problem_kind='not_a_problem' only when the text has no "
+    "determinable answer at all — a heading, an activity direction with no "
+    "question, or free prose. A problem that asks 'where does it land', 'what "
+    "shape results', 'what is the perimeter/area/median/…' is a solvable "
+    "problem even when phrased with an imperative verb (Rotate…, Reflect…, "
+    "Find…, Convert…). When the text IS a solvable problem but no structural "
+    "template above fits it, return an empty options list with ambiguous=false "
+    "and problem_kind='solvable'."
 )
 
 
