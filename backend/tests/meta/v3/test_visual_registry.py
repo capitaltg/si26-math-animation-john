@@ -1220,3 +1220,63 @@ def test_coordinate_plane_rejects_duplicate_polygon_vertices():
 def test_coordinate_plane_supports_rotation_strategy():
     from app.meta.v3.visual_registry import _SUPPORTED_STRATEGIES
     assert "rotation" in _SUPPORTED_STRATEGIES["coordinate_plane"]
+
+
+class RoleTrackingTextMeasurer:
+    """LiteralTextMeasurer + a per-role width multiplier + a call log.
+
+    Renders `label` two units per character and `polygon_label` at
+    two-thirds that -- enough of a gap that a payload measured at the
+    wrong role reports the wrong number, and the log lets a test assert
+    which role a specific text was measured under.
+    """
+
+    ROLE_WIDTH = {"label": 0.6, "polygon_label": 0.4}
+    ROLE_HEIGHT = {"label": 0.8, "polygon_label": 0.5}
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+
+    def measure(self, text: str, font_role: str):
+        self.calls.append((text, font_role))
+        return (
+            len(text) * self.ROLE_WIDTH.get(font_role, 0.3),
+            self.ROLE_HEIGHT.get(font_role, 0.6),
+        )
+
+
+def test_coordinate_plane_point_labels_are_measured_at_polygon_label_role():
+    """Renderer draws point labels at `polygon_label` (24pt); the measurer
+    must size them at the same role or the payload's label_width /
+    label_height describe a bigger glyph than the frame contains -- the
+    quadrant search, the tick-suppression collision test, and the layout
+    bounds all read the payload dims, so an oversized measurement leaves
+    them describing a phantom label the renderer never paints."""
+    measurer = RoleTrackingTextMeasurer()
+    measured = default_visual_registry().measure(
+        SimpleNamespace(kind="coordinate_plane", ref="plane"),
+        {
+            "x_min": Fraction(-3), "x_max": Fraction(5),
+            "y_min": Fraction(-3), "y_max": Fraction(5),
+            "points": [{"x": Fraction(2), "y": Fraction(3)}],
+        },
+        measurer,
+    )
+
+    point_label_text = measured.payload["points"][0]["label"]
+    roles_for_point_label = [
+        role for text, role in measurer.calls if text == point_label_text
+    ]
+    assert roles_for_point_label, (
+        f"point label {point_label_text!r} was never measured"
+    )
+    assert set(roles_for_point_label) == {"polygon_label"}, (
+        f"point label {point_label_text!r} measured under wrong role(s): "
+        f"{roles_for_point_label}"
+    )
+    assert measured.payload["points"][0]["label_width"] == pytest.approx(
+        len(point_label_text) * RoleTrackingTextMeasurer.ROLE_WIDTH["polygon_label"]
+    )
+    assert measured.payload["points"][0]["label_height"] == pytest.approx(
+        RoleTrackingTextMeasurer.ROLE_HEIGHT["polygon_label"]
+    )

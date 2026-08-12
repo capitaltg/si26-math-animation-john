@@ -138,8 +138,15 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # both the pixel geometry and the layout bounds a version-11 renderer
     # would have produced are no longer what a version-12 render emits, so a
     # coordinate_plane report stamped 11 must not stay approvable.
+    #
+    # DYNAMIC_RENDERER_VERSION 13 additionally renders coordinate_plane point
+    # labels at the smaller `polygon_label` role, drops the "pivot" text
+    # glyph, and suppresses the axis "0" tick labels when the pivot is at
+    # the origin. Point-label pixel geometry, the pivot text presence, and
+    # the origin-tick bounds all change, so a report stamped 12 no longer
+    # describes the version-13 frame.
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 12
+    assert DYNAMIC_RENDERER_VERSION == 13
 
 
 def test_version_constants_carry_m22_bumps():
@@ -147,4 +154,4 @@ def test_version_constants_carry_m22_bumps():
     from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 12
+    assert DYNAMIC_RENDERER_VERSION == 13
