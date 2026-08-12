@@ -38,10 +38,13 @@ mkdir -p "$WORKSPACE" "$DB_DIR" "$ARTIFACT_ROOT"
 export PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH"
 
 # Isolate every path the app writes to under $WORKSPACE. get_settings()
-# reads META_DB_PATH and META_ARTIFACT_ROOT and pydantic-settings picks
-# them up out of env, so no code change is needed for isolation.
+# reads META_DB_PATH and META_ARTIFACT_ROOT out of env; we set the
+# artifact root through the rehearsal-specific `REHEARSAL_META_ARTIFACT_ROOT`
+# handshake so the `client` fixture in `test_demo_end_to_end.py` picks
+# it up without an ambient `META_ARTIFACT_ROOT` in a developer/CI shell
+# ever leaking into the normal test suite.
 export META_DB_PATH="$DB_DIR/meta.db"
-export META_ARTIFACT_ROOT="$ARTIFACT_ROOT"
+export REHEARSAL_META_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export META_TEMPLATES_ENABLED=1
 export META_APPROVAL_ENABLED=1
 

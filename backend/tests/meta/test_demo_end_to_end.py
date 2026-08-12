@@ -68,12 +68,16 @@ def client(tmp_path, monkeypatch):
     # The render steps run in subprocesses that open their own meta_session from
     # settings, so they must be pointed at the same on-disk DB as this process.
     monkeypatch.setenv("META_DB_PATH", str(meta_db))
-    # A caller that pre-set META_ARTIFACT_ROOT (the clean-env rehearsal
-    # script does this so it can inspect preview artifacts after the run)
-    # keeps its value; unset callers get the per-test tmp default so
-    # nothing about the default suite changes.
-    if os.environ.get("META_ARTIFACT_ROOT") is None:
-        monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    # The clean-env rehearsal (`scripts/rehearse-clean.sh`) pre-sets
+    # `REHEARSAL_META_ARTIFACT_ROOT` so it can inspect preview artifacts
+    # after the run. Reading `META_ARTIFACT_ROOT` directly here would let
+    # any ambient value in a developer shell or CI environment redirect
+    # test artifacts into a real store; the dedicated env is set only by
+    # the rehearsal script, so an unrelated caller's env cannot leak in.
+    artifact_root = os.environ.get("REHEARSAL_META_ARTIFACT_ROOT") or str(
+        tmp_path / "artifacts"
+    )
+    monkeypatch.setenv("META_ARTIFACT_ROOT", artifact_root)
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
@@ -839,24 +843,39 @@ def test_rotation_demo_slide_approves_end_to_end(rendered_rotation):
     assert result.mp4_path.exists() and result.mp4_path.stat().st_size > 0
 
 
-def test_client_fixture_honors_preset_meta_artifact_root(tmp_path, monkeypatch):
-    """The clean-env rehearsal (`scripts/rehearse-clean.sh`) pre-sets
-    META_ARTIFACT_ROOT so it can scan the directory after the run and
-    prove preview artifacts landed on disk. The `client` fixture used to
-    overwrite that env unconditionally with its own tmp_path/artifacts,
-    which left the pre-set directory empty and the rehearsal's artifact
-    check always failing. Regression: with a pre-set root, monkeypatch
-    should leave it alone."""
+def test_client_fixture_routes_artifacts_via_rehearsal_env(tmp_path, monkeypatch):
+    """The clean-env rehearsal (`scripts/rehearse-clean.sh`) exports
+    `REHEARSAL_META_ARTIFACT_ROOT` so it can scan the directory after
+    the run and prove preview artifacts landed on disk. Reading
+    `META_ARTIFACT_ROOT` directly would let an ambient value in a
+    developer shell or CI environment redirect test artifacts into a
+    real store, so the fixture goes through the dedicated var instead.
+    Regression: with the rehearsal env set, the fixture's inner
+    `META_ARTIFACT_ROOT` must match it; with only an ambient
+    `META_ARTIFACT_ROOT` set, the fixture must ignore it and fall back
+    to `tmp_path/artifacts`."""
     preset = tmp_path / "preset-artifacts"
-    monkeypatch.setenv("META_ARTIFACT_ROOT", str(preset))
+    monkeypatch.setenv("REHEARSAL_META_ARTIFACT_ROOT", str(preset))
 
-    # Drive the fixture body directly; the fixture is a generator, so its
-    # setup runs up to the `yield` and we can read the env there without
-    # actually spinning a TestClient (which requires the surrounding
-    # imports/DB engine that the runbook tests already exercise).
     fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
     next(fixture_gen)
     try:
         assert os.environ["META_ARTIFACT_ROOT"] == str(preset)
+    finally:
+        fixture_gen.close()
+
+
+def test_client_fixture_ignores_ambient_meta_artifact_root(tmp_path, monkeypatch):
+    """Ambient META_ARTIFACT_ROOT (e.g. a developer's shell exporting it
+    for the live app, or a CI variable) must not redirect test
+    artifacts. The fixture reads the rehearsal-specific env only."""
+    ambient = tmp_path / "ambient-artifacts"
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(ambient))
+    monkeypatch.delenv("REHEARSAL_META_ARTIFACT_ROOT", raising=False)
+
+    fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+    next(fixture_gen)
+    try:
+        assert os.environ["META_ARTIFACT_ROOT"] == str(tmp_path / "artifacts")
     finally:
         fixture_gen.close()
