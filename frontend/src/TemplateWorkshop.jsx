@@ -284,6 +284,11 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
   const [drafts, setDrafts] = useState({})
   const [approved, setApproved] = useState({})   // candidate_id -> template name
   const [refreshFailed, setRefreshFailed] = useState({})  // candidate_id -> bool
+  // Per-candidate in-flight state so starting a build for one problem does
+  // not gate every other "Build one for this problem" button — a teacher
+  // watching several unsupported problems must be able to kick each build
+  // off independently.
+  const [requestingIds, setRequestingIds] = useState(() => new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [requestError, setRequestError] = useState(null)
@@ -354,7 +359,11 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
 
   async function requestBuild(candidateId) {
     setRequestError(null)
-    setBusy(true)
+    setRequestingIds((current) => {
+      const next = new Set(current)
+      next.add(candidateId)
+      return next
+    })
     try {
       const resp = await fetch('/meta/my/builds', {
         method: 'POST',
@@ -368,7 +377,12 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     } catch (err) {
       setRequestError(err.message)
     } finally {
-      setBusy(false)
+      setRequestingIds((current) => {
+        if (!current.has(candidateId)) return current
+        const next = new Set(current)
+        next.delete(candidateId)
+        return next
+      })
     }
   }
 
@@ -475,8 +489,12 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
                 One can be built from this problem — you check it before anything uses it.
               </p>
               <div className="actions">
-                <button className="btn" disabled={busy} onClick={() => requestBuild(candidateId)}>
-                  Build one for this problem
+                <button
+                  className="btn"
+                  disabled={requestingIds.has(candidateId)}
+                  onClick={() => requestBuild(candidateId)}
+                >
+                  {requestingIds.has(candidateId) ? 'Starting…' : 'Build one for this problem'}
                 </button>
               </div>
             </div>
