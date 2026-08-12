@@ -15,9 +15,11 @@ const FIXTURE = path.join(
 
 test('landing routes to demo, upload surfaces candidates', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: /Math Animation Generator/i })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: /verified animation for every math slide/i }),
+  ).toBeVisible()
 
-  await page.getByRole('link', { name: /open demo/i }).first().click()
+  await page.getByRole('link', { name: /try the demo/i }).first().click()
   await expect(page).toHaveURL(/\/demo$/)
   await expect(page.getByLabel(/upload a pptx/i)).toBeVisible()
 
