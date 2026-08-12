@@ -523,6 +523,39 @@ def test_multi_word_string_duplicate_value_needs_two_source_spans():
     )
 
 
+def test_overlapping_phrase_values_share_source_tokens_via_reassignment():
+    """When two source-owned phrases can each match at more than one source
+    span, a greedy first-fit walker would strand the harder-to-place
+    phrase. `["red", "red balloon"]` against "red balloon red" is fully
+    groundable — "red balloon" takes the leading two tokens and "red"
+    takes the trailing one — so the solver must find that assignment
+    instead of giving "red" the first token and leaving "red balloon"
+    without adjacent tokens.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red", "red balloon"]
+    )
+    assert check_params_grounded(params, "red balloon red") == []
+
+
+def test_overlapping_phrase_values_report_only_the_unreachable_one():
+    """Two phrases, only one source occurrence they could share: the
+    solver assigns the span to whichever phrase has no other viable spot
+    and reports the other. `["red balloon", "red"]` against
+    "sarah has a red balloon" — "red balloon" is grounded (only one
+    valid span) and "red" is ungrounded because the only "red" token is
+    already consumed.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    params = _StubParams(
+        tokens=[], derived_totals=[], string_tokens=["red balloon", "red"]
+    )
+    assert check_params_grounded(params, "sarah has a red balloon.") == ["red"]
+
+
 def test_string_token_respects_source_token_boundaries():
     """The phrase tokenizer emits whole words, so a short phrase cannot
     bind inside a longer source word. `cat` must not ground against

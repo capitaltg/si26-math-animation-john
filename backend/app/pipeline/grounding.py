@@ -152,13 +152,11 @@ def _build_source_token_sequence(source_text: str) -> list[tuple[str, Span]]:
     ]
 
 
-def _phrase_span(
-    phrase_keys: list[str],
-    source_tokens: list[tuple[str, Span]],
-    consumed: list[Span],
-) -> Span | None:
-    """First source span whose consecutive tokens match `phrase_keys` and
-    do not overlap any previously consumed span.
+def _phrase_candidate_spans(
+    phrase_keys: list[str], source_tokens: list[tuple[str, Span]]
+) -> list[Span]:
+    """Every source span whose consecutive tokens match `phrase_keys`, in
+    source order.
 
     Matching is against normalized token boundaries the shared tokenizer
     produces, so "cat" cannot bind inside "concatenate" (one source token),
@@ -166,17 +164,73 @@ def _phrase_span(
     tokens in that order with no intervening tokens.
     """
     if not phrase_keys:
-        return None
+        return []
     n = len(phrase_keys)
+    spans: list[Span] = []
     for start in range(len(source_tokens) - n + 1):
         window = source_tokens[start:start + n]
-        if [key for key, _ in window] != phrase_keys:
-            continue
-        span = Span(window[0][1].start, window[-1][1].end)
-        if any(span.start < taken.end and taken.start < span.end for taken in consumed):
-            continue
-        return span
-    return None
+        if [key for key, _ in window] == phrase_keys:
+            spans.append(Span(window[0][1].start, window[-1][1].end))
+    return spans
+
+
+def _resolve_phrase_assignments(
+    phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
+) -> list[Span | None]:
+    """Find the maximum-cardinality assignment of phrases to non-overlapping
+    source spans; return one span per phrase (None where no assignment
+    grounds it).
+
+    Greedy claim-first-match wrongly rejects fully-groundable inputs when
+    phrases share tokens: for ["red", "red balloon"] against
+    "red balloon red", giving "red" the first source "red" strands
+    "red balloon" without adjacent tokens even though assigning "red
+    balloon" to the first two source tokens and "red" to the last one
+    grounds both. Backtracking over ordered candidates finds an assignment
+    if any exists; when none exists, the search prefers assignments that
+    ground more phrases so the ungrounded report only names phrases that
+    are genuinely unreachable.
+    """
+    candidates = [_phrase_candidate_spans(keys, source_tokens) for keys in phrases]
+    n = len(phrases)
+    current: list[Span | None] = [None] * n
+    best: list[Span | None] = [None] * n
+    best_count = 0
+
+    def overlaps(span: Span) -> bool:
+        return any(
+            other is not None and span.start < other.end and other.start < span.end
+            for other in current
+        )
+
+    def search(index: int, grounded: int) -> None:
+        nonlocal best_count, best
+        if index == n:
+            if grounded > best_count:
+                best_count = grounded
+                best = list(current)
+            return
+        # An empty phrase (whitespace/punctuation only) has no candidate spans
+        # and is treated as grounded; the parent already filters it out of
+        # ungrounded reports, so skip it here without consuming a slot.
+        if not candidates[index]:
+            search(index + 1, grounded + (1 if phrases[index] == [] else 0))
+            return
+        for span in candidates[index]:
+            if overlaps(span):
+                continue
+            current[index] = span
+            search(index + 1, grounded + 1)
+            current[index] = None
+            if best_count == n:
+                return
+        # Also consider leaving this phrase ungrounded so a later phrase with
+        # only overlapping candidates does not prevent the earlier one from
+        # taking its own valid span in another branch.
+        search(index + 1, grounded)
+
+    search(0, 0)
+    return best
 
 
 def _consume_all(components: list[str], occurrences: dict[str, list[Span]]) -> bool:
@@ -225,20 +279,23 @@ def check_params_grounded(params, source_text: str) -> list[str]:
     ungrounded_numbers = consume(params_number_tokens(params))
 
     source_tokens = _build_source_token_sequence(source_text)
-    consumed_phrase_spans: list[Span] = []
-    ungrounded_strings: list[str] = []
-    for value in params_string_tokens(params):
-        phrase_keys = [_canonical_key(token) for token in tokenize_for_grounding(value)]
-        if not phrase_keys:
-            # An empty-after-normalization value (whitespace or punctuation
-            # only) has nothing to bind against and is silently accepted, the
-            # same way the prior word-multiset code accepted it.
-            continue
-        span = _phrase_span(phrase_keys, source_tokens, consumed_phrase_spans)
-        if span is None:
-            ungrounded_strings.append(value)
-        else:
-            consumed_phrase_spans.append(span)
+    string_values = list(params_string_tokens(params))
+    phrase_keys_per_value = [
+        [_canonical_key(token) for token in tokenize_for_grounding(value)]
+        for value in string_values
+    ]
+    # An empty-after-normalization value (whitespace or punctuation only)
+    # has nothing to bind against and is silently accepted, the same way the
+    # prior word-multiset code accepted it. Filter those out before the
+    # solver so the assignment is over real phrases only.
+    active_indices = [i for i, keys in enumerate(phrase_keys_per_value) if keys]
+    active_phrase_keys = [phrase_keys_per_value[i] for i in active_indices]
+    assignments = _resolve_phrase_assignments(active_phrase_keys, source_tokens)
+    ungrounded_strings: list[str] = [
+        string_values[active_indices[i]]
+        for i, span in enumerate(assignments)
+        if span is None
+    ]
 
     allowed_totals: set[str] = set()
     for total_token, components, operation in params_derived_totals(params):
