@@ -583,6 +583,27 @@ def test_phrase_assignment_finishes_fast_when_many_identical_phrases_share_few_s
     assert elapsed < 0.5, f"phrase assignment took {elapsed:.3f}s"
 
 
+def test_phrase_assignment_over_slot_limit_still_grounds_overlapping_pair():
+    """Above the interval DP's distinct-slot ceiling, the fallback must
+    still handle the common overlapping-vocabulary case that a naive
+    length-descending greedy would strand: 13 distinct phrases including
+    ``a b`` and ``b c`` against ``a b c a b`` (plus filler tokens for the
+    other declarations). ``b c`` has only one viable span; the fallback
+    places it first, freeing ``a b`` to take the second occurrence.
+    """
+    from app.pipeline.grounding import check_params_grounded
+
+    filler = [f"word{n:02d}" for n in range(11)]
+    params = _StubParams(
+        tokens=[],
+        derived_totals=[],
+        string_tokens=["a b", "b c", *filler],
+    )
+    source_text = "a b c a b " + " ".join(filler)
+
+    assert check_params_grounded(params, source_text) == []
+
+
 def test_phrase_assignment_finishes_fast_when_many_distinct_phrases_declared():
     """The interval DP's state grows as Product(cap_i + 1); with many
     distinct single-cap slots the exponent hits the request path (22

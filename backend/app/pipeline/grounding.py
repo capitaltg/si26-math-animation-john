@@ -192,29 +192,58 @@ def _phrase_candidate_spans(
 _PHRASE_SOLVER_MAX_DISTINCT_SLOTS = 12
 
 
-def _greedy_phrase_assignment(
+def _fewest_alternatives_phrase_assignment(
     phrases: list[list[str]], source_tokens: list[tuple[str, Span]]
 ) -> list[Span | None]:
-    """Length-descending greedy first-fit fallback for the >12-slot path.
+    """Constraint-propagating greedy fallback for the >12-slot path.
 
-    Longer phrases get first pick over their limited candidate spans, so a
-    two-word phrase whose only span coincides with a common single word
-    keeps that span. Not optimal in every case, but bounded runtime.
+    Repeatedly picks the still-unassigned phrase with the fewest remaining
+    candidate spans and gives it one of those spans. Ties break on longer
+    phrase (fewer usable spots) then declaration order. Handles the common
+    overlapping-vocabulary case that a naive length-descending greedy
+    misses — e.g. ``["a b", "b c", ...]`` against ``"a b c a b"``, where a
+    length-desc pass gives ``a b`` the leading tokens and strands ``b c``
+    even though ``b c`` had only one viable span and should have been
+    placed first. Not proven optimal for every adversarial input, but the
+    exact interval DP still runs whenever distinct-slot count fits inside
+    ``_PHRASE_SOLVER_MAX_DISTINCT_SLOTS``.
     """
     n = len(phrases)
     result: list[Span | None] = [None] * n
-    order = sorted(
-        (i for i, keys in enumerate(phrases) if keys),
-        key=lambda i: (-len(phrases[i]), i),
-    )
     consumed: list[Span] = []
-    for i in order:
-        for span in _phrase_candidate_spans(phrases[i], source_tokens):
-            if any(span.start < t.end and t.start < span.end for t in consumed):
-                continue
-            result[i] = span
-            consumed.append(span)
+    candidates_by_index: dict[int, list[Span]] = {
+        i: _phrase_candidate_spans(keys, source_tokens)
+        for i, keys in enumerate(phrases)
+        if keys
+    }
+    remaining = set(candidates_by_index)
+
+    def viable(i: int) -> list[Span]:
+        return [
+            span
+            for span in candidates_by_index[i]
+            if not any(span.start < t.end and t.start < span.end for t in consumed)
+        ]
+
+    while remaining:
+        viable_by_index = {i: viable(i) for i in remaining}
+        next_index = min(
+            remaining,
+            key=lambda i: (
+                len(viable_by_index[i]) if viable_by_index[i] else float("inf"),
+                -len(phrases[i]),
+                i,
+            ),
+        )
+        options = viable_by_index[next_index]
+        if not options:
+            # No remaining phrase has any viable span; the rest stay
+            # ungrounded and the loop can stop.
             break
+        span = options[0]
+        result[next_index] = span
+        consumed.append(span)
+        remaining.discard(next_index)
     return result
 
 
@@ -254,7 +283,7 @@ def _resolve_phrase_assignments(
     distinct_keys = list(counter.keys())
 
     if len(distinct_keys) > _PHRASE_SOLVER_MAX_DISTINCT_SLOTS:
-        return _greedy_phrase_assignment(phrases, source_tokens)
+        return _fewest_alternatives_phrase_assignment(phrases, source_tokens)
 
     slot_of_key = {key: slot for slot, key in enumerate(distinct_keys)}
     capacities = tuple(counter[key] for key in distinct_keys)
