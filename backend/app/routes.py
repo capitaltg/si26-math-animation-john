@@ -471,161 +471,172 @@ def _clip_result(
     )
 
 
+def _require_valid_render_batch(session: Session, approved: list[Scene]) -> None:
+    if not approved:
+        raise HTTPException(status_code=400, detail="No approved scenes to render")
+    if len(approved) > MAX_RENDER_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Batch too large: {len(approved)} approved scenes exceeds "
+                f"the cap of {MAX_RENDER_BATCH}"
+            ),
+        )
+    collision = [
+        scene.scene_id
+        for scene in approved
+        if scene.scene_id in session.rendering_scene_ids
+    ]
+    if collision:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Render already in progress for scene(s) {collision}",
+        )
+
+
+def _claim_render_batch(session: Session) -> list[Scene]:
+    with session.session_lock:
+        approved = [
+            session.scenes[scene_id]
+            for scene_id in session.scene_order
+            if _is_render_ready(session.scenes[scene_id])
+        ]
+        _require_valid_render_batch(session, approved)
+        session.rendering_scene_ids.update(scene.scene_id for scene in approved)
+        return approved
+
+
+def _release_render_batch(session: Session, scenes: list[Scene]) -> None:
+    with session.session_lock:
+        for scene in scenes:
+            session.rendering_scene_ids.discard(scene.scene_id)
+
+
+def _render_scene(session: Session, scene: Scene, *, deadline: float) -> ClipResult:
+    chained = bool(scene.candidate_ids)
+    _, params_cls = (
+        get_chained_template(scene.template) if chained else get_template(scene.template)
+    )
+    try:
+        params = params_cls.model_validate(scene.params)
+    except ValidationError:
+        logger.exception("Stored params invalid for scene %s", scene.scene_id)
+        return _clip_result(
+            scene,
+            status="error",
+            clip_url=None,
+            render_gate_status="failed",
+            render_ms=None,
+        )
+
+    params_hash = _render_params_hash(
+        scene.template, params.model_dump(mode="json"), chained
+    )
+    cached = _resolve_cached_clip(session, scene, params_hash)
+    if cached is not None:
+        return _clip_result(
+            scene,
+            status="fallback" if scene.fallback_reason else "approved",
+            clip_url=cached,
+            render_gate_status="passed",
+            render_ms=None,
+        )
+
+    if time.monotonic() > deadline:
+        return _clip_result(
+            scene,
+            status="timeout",
+            clip_url=None,
+            render_gate_status="failed",
+            render_ms=None,
+        )
+
+    clip_url: str | None = None
+    render_ms: float | None = None
+    render_gate_status: Literal["passed", "failed"] = "failed"
+    # `reserve` marks the target path so the orphan sweep can't delete a file
+    # that is currently being written; `abort` releases it and removes any
+    # partial output on every failure path below.
+    output_path = store.reserve(session, suffix=".mp4")
+    still_current = False
+    try:
+        started = time.perf_counter()
+        if chained:
+            render_chained_scene_to_mp4(
+                scene.template, params, output_path, deadline=deadline
+            )
+        else:
+            render_scene_to_mp4(
+                scene.template, params, output_path, deadline=deadline
+            )
+        render_ms = (time.perf_counter() - started) * 1000.0
+        # Only publish the artifact when the scene is still approved at the
+        # exact revision we rendered. `_is_render_ready` covers approval and
+        # revision alignment; the explicit compare pins publication to this
+        # render's inputs after an edit and re-approval advances both fields.
+        with session.session_lock:
+            current = session.scenes.get(scene.scene_id)
+            still_current = (
+                current is not None
+                and _is_render_ready(current)
+                and current.revision == scene.revision
+            )
+            if still_current:
+                clip_id = store.register_clip(
+                    output_path, session_id=session.session_id
+                )
+                if clip_id is None:
+                    # Registration can lose a race with eviction. Abort the
+                    # reserved output and return an error so callers retry.
+                    still_current = False
+                else:
+                    clip_url = f"/clips/{clip_id}"
+                    status = "fallback" if scene.fallback_reason else "approved"
+                    render_gate_status = "passed"
+                    session.scenes[scene.scene_id] = current.model_copy(
+                        update={
+                            "render_path": output_path,
+                            "rendered_params_hash": params_hash,
+                        }
+                    )
+                    session.scene_clip_id[scene.scene_id] = clip_id
+        if not still_current:
+            logger.info(
+                "Discarding render for scene %s; superseded before publish",
+                scene.scene_id,
+            )
+            status = "error"
+            store.abort(output_path)
+    except RenderTimeout:
+        logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
+        status = "timeout"
+        store.abort(output_path)
+    except Exception:
+        logger.exception("Full render failed for scene %s", scene.scene_id)
+        status = "error"
+        store.abort(output_path)
+
+    return _clip_result(
+        scene,
+        status=status,
+        clip_url=clip_url,
+        render_gate_status=render_gate_status,
+        render_ms=render_ms,
+    )
+
+
 @router.post("/render", response_model=RenderResponse)
 def render(session_id: str | None = Cookie(default=None)):
     session = store.get(session_id) if session_id else None
     if session is None:
         raise HTTPException(status_code=400, detail="No active session; upload a document first")
 
-    with session.session_lock:
-        approved = [
-            session.scenes[sid]
-            for sid in session.scene_order
-            if _is_render_ready(session.scenes[sid])
-        ]
-        if not approved:
-            raise HTTPException(status_code=400, detail="No approved scenes to render")
-        if len(approved) > MAX_RENDER_BATCH:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Batch too large: {len(approved)} approved scenes exceeds "
-                    f"the cap of {MAX_RENDER_BATCH}"
-                ),
-            )
-        collision = [s.scene_id for s in approved if s.scene_id in session.rendering_scene_ids]
-        if collision:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Render already in progress for scene(s) {collision}",
-            )
-        for scene in approved:
-            session.rendering_scene_ids.add(scene.scene_id)
-
-    results: list[ClipResult] = []
+    approved = _claim_render_batch(session)
     deadline = time.monotonic() + RENDER_JOB_DEADLINE_SECONDS
     try:
-        for scene in approved:
-            chained = bool(scene.candidate_ids)
-            _, params_cls = (
-                get_chained_template(scene.template) if chained else get_template(scene.template)
-            )
-            try:
-                params = params_cls.model_validate(scene.params)
-            except ValidationError:
-                logger.exception("Stored params invalid for scene %s", scene.scene_id)
-                results.append(
-                    _clip_result(
-                        scene, status="error", clip_url=None,
-                        render_gate_status="failed", render_ms=None,
-                    )
-                )
-                continue
-
-            params_hash = _render_params_hash(
-                scene.template, params.model_dump(mode="json"), chained
-            )
-            cached = _resolve_cached_clip(session, scene, params_hash)
-            if cached is not None:
-                results.append(
-                    _clip_result(
-                        scene,
-                        status="fallback" if scene.fallback_reason else "approved",
-                        clip_url=cached,
-                        render_gate_status="passed",
-                        render_ms=None,
-                    )
-                )
-                continue
-
-            if time.monotonic() > deadline:
-                results.append(
-                    _clip_result(
-                        scene, status="timeout", clip_url=None,
-                        render_gate_status="failed", render_ms=None,
-                    )
-                )
-                continue
-
-            clip_url: str | None = None
-            render_ms: float | None = None
-            render_gate_status: Literal["passed", "failed"] = "failed"
-            # `reserve` marks the target path so the orphan sweep can't delete
-            # a file that is currently being written; `abort` releases it and
-            # removes any partial output on every failure path below.
-            output_path = store.reserve(session, suffix=".mp4")
-            still_current = False
-            try:
-                started = time.perf_counter()
-                if chained:
-                    render_chained_scene_to_mp4(
-                        scene.template, params, output_path, deadline=deadline
-                    )
-                else:
-                    render_scene_to_mp4(
-                        scene.template, params, output_path, deadline=deadline
-                    )
-                render_ms = (time.perf_counter() - started) * 1000.0
-                # Only publish the artifact when the scene is still approved
-                # at the exact revision we rendered — an edit or rejection that
-                # landed mid-render must not let us return a stale "approved"
-                # clip. `_is_render_ready` covers approval + revision alignment;
-                # the explicit `revision` compare pins us to this render's inputs
-                # even after an edit+re-approve cycle bumps both fields together.
-                with session.session_lock:
-                    current = session.scenes.get(scene.scene_id)
-                    still_current = (
-                        current is not None
-                        and _is_render_ready(current)
-                        and current.revision == scene.revision
-                    )
-                    if still_current:
-                        clip_id = store.register_clip(
-                            output_path, session_id=session.session_id
-                        )
-                        if clip_id is None:
-                            # Render file was evicted between write and
-                            # register — treat as if the render was superseded
-                            # so the fallback branch fires and status flips to
-                            # "error", which the caller retries.
-                            still_current = False
-                        else:
-                            clip_url = f"/clips/{clip_id}"
-                            status = "fallback" if scene.fallback_reason else "approved"
-                            render_gate_status = "passed"
-                            session.scenes[scene.scene_id] = current.model_copy(
-                                update={
-                                    "render_path": output_path,
-                                    "rendered_params_hash": params_hash,
-                                }
-                            )
-                            session.scene_clip_id[scene.scene_id] = clip_id
-                if not still_current:
-                    logger.info(
-                        "Discarding render for scene %s; superseded before publish",
-                        scene.scene_id,
-                    )
-                    status = "error"
-                    store.abort(output_path)
-            except RenderTimeout:
-                logger.warning("Render subprocess timed out for scene %s", scene.scene_id)
-                status = "timeout"
-                store.abort(output_path)
-            except Exception:
-                logger.exception("Full render failed for scene %s", scene.scene_id)
-                status = "error"
-                store.abort(output_path)
-
-            results.append(
-                _clip_result(
-                    scene, status=status, clip_url=clip_url,
-                    render_gate_status=render_gate_status, render_ms=render_ms,
-                )
-            )
+        results = [_render_scene(session, scene, deadline=deadline) for scene in approved]
     finally:
-        with session.session_lock:
-            for scene in approved:
-                session.rendering_scene_ids.discard(scene.scene_id)
+        _release_render_batch(session, approved)
 
     return RenderResponse(clips=results)
 
