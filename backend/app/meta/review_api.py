@@ -307,11 +307,9 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
             raise HTTPException(status_code=404, detail=f"Unknown fixture {fixture_id}")
         draft = session.get(TemplateDraft, draft_id)
         if draft is None or draft.status not in _FIXTURE_EDITABLE_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Draft {draft_id} fixtures are not editable in status "
-                f"{draft.status if draft else 'unknown'}",
-            )
+            # Uniform 404 -- do not leak draft.status to holders of a
+            # guessable fixture id (matches get_draft's privacy posture).
+            raise HTTPException(status_code=404, detail=f"Unknown fixture {fixture_id}")
         params_document = ParamsDocument.model_validate(json.loads(draft.params_document_json))
         guard_document = GuardDocument.model_validate(json.loads(draft.guard_document_json))
         answer_expression = TypeAdapter(ExpressionNode).validate_python(

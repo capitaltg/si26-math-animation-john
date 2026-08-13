@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 
 from app.meta.dsl.v3_common import (
     MAX_SCENE_SECONDS,
+    MAX_SIMPLE_STAGGER_SECONDS,
     MIN_CONCLUSION_HOLD_SECONDS,
     MIN_SCENE_SECONDS,
 )
@@ -89,18 +90,28 @@ def check_duration(program) -> QualityCheck:
 
 
 def check_grouped_simple_reveals(plan, program) -> QualityCheck:
-    ordered_refs = {
-        visual.ref for visual in [plan.primary_visual, *plan.supporting_visuals]
-        if visual.kind == "ordered_values"
-    }
-    serial = [
+    """Enforce the Global Constraint's per-item stagger ceiling.
+
+    A `mode="stagger"` reveal is legal on every visual kind whose strategy
+    admits it (see `visual_registry._SUPPORTED_STRATEGIES`); the Global
+    Constraint bounds only how far apart successive items may fade in.
+    `RevealRequest.stagger_seconds` is already schema-capped at
+    `MAX_SIMPLE_STAGGER_SECONDS`, so this check is defence in depth against a
+    program deserialized from elsewhere or an internal caller that skipped the
+    plan-level cap.
+    """
+    over = [
         index for index, entry in enumerate(program.timeline)
         if entry.action.kind == "reveal"
-        and entry.action.mode != "together"
-        and any(target.visual_ref in ordered_refs for target in entry.action.targets)
+        and entry.action.mode == "stagger"
+        and entry.action.stagger_seconds > MAX_SIMPLE_STAGGER_SECONDS
     ]
-    if serial:
-        return _failed("serial_simple_reveal", f"timeline[{serial[0]}].action.mode", "ordered values must reveal together")
+    if over:
+        return _failed(
+            "serial_simple_reveal",
+            f"timeline[{over[0]}].action.stagger_seconds",
+            f"stagger reveal exceeds the {MAX_SIMPLE_STAGGER_SECONDS:g}s per-item ceiling",
+        )
     return _passed("serial_simple_reveal", "timeline")
 
 
@@ -437,15 +448,36 @@ def check_dimension_anchor_specificity(plan, program) -> QualityCheck:
 
 
 def check_salience(program) -> QualityCheck:
+    # Group focus set_role actions by at_seconds AND beat_id. `timeline.py`'s
+    # slot packer may put two focus actions from ONE plan beat at the same
+    # instant (e.g. an 8-target focus beat with 7 custom `dim`s packed 16
+    # actions into 13 slots) -- that's a compiler decision, not a plan-author
+    # authoring two unrelated focuses in one moment, so it must not fail here.
+    # A whole-visual focus (part/index both None) also subsumes any part of
+    # the same visual: they're one instruction, not competing anchors.
     focus_by_start = {}
     for entry in program.timeline:
         if entry.action.kind != "set_role" or entry.action.role != "focus":
             continue
-        targets = tuple((target.visual_ref, target.part, target.index) for target in _targets(entry.action))
-        focus_by_start.setdefault(entry.at_seconds, set()).update(targets)
-    collision = next((second for second, targets in focus_by_start.items() if len(targets) > 1), None)
-    if collision is not None:
-        return _failed("callout_collision", "timeline", "multiple unrelated focus targets compete at one instant")
+        for target in _targets(entry.action):
+            key = (target.visual_ref, target.part, target.index)
+            focus_by_start.setdefault(entry.at_seconds, {}).setdefault(entry.beat_id, set()).add(key)
+    for per_beat in focus_by_start.values():
+        cross_beat_targets = []
+        for beat_id, targets in per_beat.items():
+            cross_beat_targets.append((beat_id, targets))
+        if len(cross_beat_targets) < 2:
+            continue
+        for i, (beat_a, targets_a) in enumerate(cross_beat_targets):
+            for beat_b, targets_b in cross_beat_targets[i + 1:]:
+                if any(
+                    not _focus_targets_related(a, b)
+                    for a in targets_a for b in targets_b
+                ):
+                    return _failed(
+                        "callout_collision", "timeline",
+                        "multiple unrelated focus targets compete at one instant",
+                    )
 
     anchors = {}
     for relation in program.relations:
@@ -634,6 +666,17 @@ def _targets(action):
     if hasattr(action, "target"):
         return [action.target]
     return []
+
+
+def _focus_targets_related(a, b):
+    """Two focus anchors that pick out overlapping mobjects, not competitors."""
+    ref_a, part_a, idx_a = a
+    ref_b, part_b, idx_b = b
+    if ref_a != ref_b:
+        return False
+    if (part_a, idx_a) == (None, None) or (part_b, idx_b) == (None, None):
+        return True
+    return (part_a, idx_a) == (part_b, idx_b)
 
 
 def _passed(code: str, path: str) -> QualityCheck:

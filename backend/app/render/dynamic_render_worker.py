@@ -95,6 +95,13 @@ def _render_probe(
     from manim import Scene, config, tempconfig
 
     final_beat_id = resolved.timeline[-1].beat_id
+    # `show_answer_stage(stage="work")` names the moment the answer statement
+    # is meant to read as its arithmetic ("8 x 3 = ?"). Recording the beat_id
+    # that emits it lets us observe the answer text at the END of that beat --
+    # by then the Transform has settled -- and hold the mid-lesson frame to
+    # the work stage the same way `_final_answer_text` holds the final frame
+    # to `show_answer_stage(value)`.
+    work_beat_id = _work_beat_id(resolved)
 
     class ProbeScene(Scene):
         def __init__(self):
@@ -117,6 +124,13 @@ def _render_probe(
             self.render_events = []
             self.final_answer_visible = False
             self.final_answer_text = None
+            # Recorded from the drawn geometry the instant the work beat's
+            # captured frame is taken, the same way `final_answer_text` is
+            # recorded at scene end. `None` until the work beat completes --
+            # or forever, if no beat carries `show_answer_stage(work)`, in
+            # which case the gate short-circuits on `declared_work_answer_text`
+            # rather than fail here.
+            self.work_beat_answer_text = None
             self.beat_end_times = {
                 beat_id: max(
                     action.at_seconds + action.duration_seconds
@@ -151,7 +165,7 @@ def _render_probe(
         def construct(self):
             self.rendered = render_resolved_scene(self, resolved)
             self.final_answer_visible = _answer_visible(self, self.rendered, resolved)
-            self.final_answer_text = _final_answer_text(self.rendered, resolved)
+            self.final_answer_text = _answer_statement_text(self.rendered, resolved)
             self._capture_completed_beats(force=True)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             self.camera.get_image().save(output_path)
@@ -182,6 +196,17 @@ def _render_probe(
                 self.camera.get_image().save(scratch_dir / path)
                 self.frames.append({"beat_id": beat_id, "seconds": end_seconds, "path": path})
                 self.captured_beats.add(beat_id)
+                # Snapshot what the answer statement READS as at the moment the
+                # work beat's captured frame is taken. `Transform` copies point
+                # sets rather than substitutes strings, so the mid-lesson beat
+                # ended on a smeared "8 x 3 = ?" for most of a second: nothing
+                # observed the smear had settled. Reading here holds the beat
+                # to what the timeline says it should say, the same way the
+                # final-frame check does.
+                if beat_id == work_beat_id and self.rendered is not None:
+                    self.work_beat_answer_text = _answer_statement_text(
+                        self.rendered, resolved,
+                    )
 
 
     overrides = {
@@ -278,6 +303,17 @@ def _probe_manifest(scene, resolved, program, width, height) -> dict:
         # recolour overwrote the value stage.
         "final_answer_text": scene.final_answer_text,
         "declared_answer_text": _declared_answer_text(resolved),
+        # What the answer statement READS as at the end of the work beat, beside
+        # what its "work" stage says it should. `final_answer_text` observes the
+        # transition into `value`; this observes the transition into `work`.
+        # `Transform` morphs point sets over ~1s, so most of that second the
+        # statement is a smear of interpolated glyphs; asserting the text at the
+        # captured frame turns "the smear settles before the beat ends" from an
+        # assumption into evidence, catching a future change that leaves the
+        # answer mid-morph when a beat closes.
+        "work_beat_id": _work_beat_id(resolved),
+        "work_beat_answer_text": scene.work_beat_answer_text,
+        "declared_work_answer_text": _declared_work_answer_text(resolved),
         "answer_anchor": _target_label(resolved.answer_anchor) if resolved.answer_anchor else None,
         "derivation_visible": bool(path_events) or any(event["role"] == "focus" for event in state_events),
     }
@@ -377,8 +413,8 @@ def _answer_visible(scene, rendered, resolved) -> bool:
 _ANSWER_REF = "evaluated_answer"
 
 
-def _final_answer_text(rendered, resolved) -> str | None:
-    """What the answer statement reads as in the final frame.
+def _answer_statement_text(rendered, resolved) -> str | None:
+    """What the answer statement reads as in the currently-drawn frame.
 
     Identified from the DRAWN GEOMETRY, deliberately, not from the mobject's
     `original_text`: `Transform` copies points, not python attributes, so the
@@ -386,7 +422,8 @@ def _final_answer_text(rendered, resolved) -> str | None:
     morphed into the resolved value. Reading the attribute would report success
     for precisely the bug this evidence exists to catch -- a stage transform
     silently overwritten by a co-slotted recolour, which leaves the `work` text on
-    screen while the timeline says `value`.
+    screen while the timeline says `value`, or a `Transform` whose glyph smear
+    has not settled when a captured beat ends.
 
     Each stage was built as its own mobject centred on the same point, so the
     drawn width identifies which one the frame shows; a width is the same kind of
@@ -394,6 +431,10 @@ def _final_answer_text(rendered, resolved) -> str | None:
     lesson that draws no answer statement (`answer_anchor` carries the answer
     instead), and `None` when no single stage matches, which fails the gate rather
     than guessing.
+
+    Called at scene end and at every captured beat's boundary. The identification
+    is a pure function of the drawn mobject's current width against each stage's
+    built width, so it works at any moment the scene has settled.
     """
     stages = rendered.answer_stages.get(_ANSWER_REF)
     if not stages:
@@ -440,6 +481,52 @@ def _declared_answer_text(resolved) -> str | None:
     if not staged:
         return stages["value"]
     return stages[max(staged, key=lambda action: action.at_seconds).action.stage]
+
+
+def _work_beat_id(resolved) -> str | None:
+    """The beat that carries `show_answer_stage(stage="work")`, if any.
+
+    `beat_expander._work_beat_id` picks the latest `focus`/`derive` beat before
+    conclude to host the work stage; a lesson whose answer expression has no
+    arithmetic (`has_operation` is False) never emits the action at all. Reading
+    this off the timeline rather than re-deriving from the plan keeps the probe
+    honest -- if the compiler ever emits multiple `show_answer_stage(work)`
+    actions we hold the LAST one's beat, since that is the beat whose captured
+    frame carries the final work-stage transition.
+    """
+    staged_work = [
+        action for action in resolved.timeline
+        if action.action.kind == "show_answer_stage" and action.action.stage == "work"
+    ]
+    if not staged_work:
+        return None
+    return max(staged_work, key=lambda action: action.at_seconds).beat_id
+
+
+def _declared_work_answer_text(resolved) -> str | None:
+    """The `work` stage text the timeline's `show_answer_stage(work)` targets.
+
+    Keyed on the presence of a `show_answer_stage(work)` action in the timeline,
+    not on the payload's `stages` dict alone: a resolver payload may carry a
+    `work` stage that no `show_answer_stage` action ever transitions to -- a
+    pre-staging legacy program still has `stages["work"]` on its answer visual,
+    but its stripped timeline never fires the transition, so there is nothing to
+    hold the work beat's captured frame to. Return `None` in that case and let
+    the check pass, matching how `_declared_answer_text` handles a program that
+    stages its answer nowhere.
+    """
+    if _work_beat_id(resolved) is None:
+        return None
+    answer = next(
+        (
+            item for item in resolved.visuals
+            if item.measured.ref == _ANSWER_REF and "stages" in item.measured.payload
+        ),
+        None,
+    )
+    if answer is None:
+        return None
+    return answer.measured.payload["stages"].get("work")
 
 
 def _mobject_has_color(mobject, expected) -> bool:

@@ -150,6 +150,101 @@ def test_set_role_transitions_every_resolved_target(resolved_median_scene):
     assert {rendered.roles[target] for target in expected_targets} == {"focus"}
 
 
+def test_short_stagger_reveal_builds_one_animation_per_item():
+    """`AnimationGroup.lag_ratio` staggers between its sub-animations, not
+    inside a single grouped one, so a `mode="stagger"` reveal that names the
+    whole-collection VGroup has to expand into per-item animations. Otherwise
+    the reveal degrades to one `FadeIn` on the group and every value pops in
+    together despite the positive `stagger_seconds`.
+    """
+    from app.meta.v3.renderer import _action_animation
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values",
+            "ref": "values",
+            "values": [{"node": "field_ref", "field": f"v{index}"} for index in range(1, 8)],
+        },
+        "strategy": "short_stagger",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "reveal the ordered values one after another"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "renderer-short-stagger",
+    })
+    program = compile_teaching_plan(
+        plan,
+        FieldRefNode(field="v4"),
+        frozenset({f"v{index}" for index in range(1, 8)}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(
+        program,
+        {f"v{index}": index for index in range(1, 8)},
+        LiteralTextMeasurer(),
+    )
+    rendered = _build_vertical_lesson(resolved, "ocean")
+    reveal = next(
+        action for action in resolved.timeline
+        if action.action.kind == "reveal" and action.action.mode == "stagger"
+    )
+
+    animation = _action_animation(reveal, rendered, _reveal, "ocean")
+
+    from app.meta.v3.renderer import _stagger_lag_ratio
+
+    expected_ratio = _stagger_lag_ratio(
+        reveal.action.stagger_seconds, reveal.duration_seconds, 7,
+    )
+    assert len(animation.animations) == 7
+    assert animation.lag_ratio == pytest.approx(expected_ratio)
+    assert animation.lag_ratio > 0
+    revealed_mobjects = [sub.mobject for sub in animation.animations]
+    assert revealed_mobjects == list(rendered.targets[("values", None, None)].submobjects)
+
+
+def test_stagger_lag_ratio_bounds_start_gap_by_stagger_seconds():
+    """`stagger_seconds` names a per-item delay in seconds, but Manim's
+    `lag_ratio` is dimensionless and `_play` rescales the `AnimationGroup` to
+    `action.duration_seconds`. The renderer must convert seconds to a ratio so
+    the actual adjacent-start gap under a multi-second action duration stays
+    at (or below) the requested `stagger_seconds`, instead of ballooning by
+    the rescale factor.
+    """
+    from app.meta.v3.renderer import _stagger_lag_ratio
+
+    stagger_seconds = 0.3
+    duration_seconds = 4.0
+    count = 2
+
+    lag_ratio = _stagger_lag_ratio(stagger_seconds, duration_seconds, count)
+
+    # Manim rescales the group of `count` equal-runtime animations so the
+    # adjacent-start gap after rescale is
+    # `lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)`.
+    actual_gap = lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)
+    assert actual_gap == pytest.approx(stagger_seconds)
+    # Sanity: with the raw seconds passed through as the ratio (the previous
+    # behaviour), the gap balloons well past the requested cap.
+    naive_gap = stagger_seconds * duration_seconds / (1 + (count - 1) * stagger_seconds)
+    assert naive_gap > stagger_seconds * 2
+
+    # Un-satisfiable request (gaps do not fit within the action duration)
+    # clamps to Manim's maximum spread rather than exploding past 1.0.
+    assert _stagger_lag_ratio(1.0, 1.0, 3) == 1.0
+    # Degenerate inputs yield a zero ratio (no stagger).
+    assert _stagger_lag_ratio(0.3, 4.0, 1) == 0.0
+    assert _stagger_lag_ratio(0.0, 4.0, 5) == 0.0
+
+
 def test_coincident_non_reveal_actions_share_timeline_duration(resolved_median_scene):
     focus = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.action.role == "focus")
     constraint = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.targets[0].ref.index == 0)

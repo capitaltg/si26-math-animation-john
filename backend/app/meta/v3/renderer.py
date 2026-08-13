@@ -1149,10 +1149,53 @@ def _play_action(scene, action: ResolvedAction, rendered: RenderedScene, motion,
         _play(scene, animation, action.duration_seconds, kind, target=_action_target(action), events=(_probe_event(action),))
 
 
+def _stagger_lag_ratio(stagger_seconds: float, duration_seconds: float, count: int) -> float:
+    """Convert a per-item delay in seconds to Manim's dimensionless `lag_ratio`.
+
+    For an `AnimationGroup` of `count` equal-runtime items with lag ratio `r`,
+    the un-scaled group duration is `R * (1 + (count - 1) * r)`, which Manim
+    then rescales to `duration_seconds` in `scene.play`. The adjacent-start gap
+    after rescale is `r * duration_seconds / (1 + (count - 1) * r)`; solving
+    that for `r` given a target gap of `stagger_seconds` yields the formula
+    below. When the target gaps do not fit within `duration_seconds`, clamp to
+    `1.0` so the animations spread as widely as Manim allows.
+    """
+    if count <= 1 or stagger_seconds <= 0.0 or duration_seconds <= 0.0:
+        return 0.0
+    denominator = duration_seconds - stagger_seconds * (count - 1)
+    if denominator <= 0.0:
+        return 1.0
+    return min(1.0, stagger_seconds / denominator)
+
+
 def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, palette: str):
     kind = action.action.kind
     if kind == "reveal":
-        return AnimationGroup(*(motion(_target_mobject(rendered, target.ref)) for target in action.targets))
+        # `mode="stagger"` fades items in with a per-item delay in seconds,
+        # bounded by `MAX_SIMPLE_STAGGER_SECONDS`. Manim's
+        # `AnimationGroup.lag_ratio` is dimensionless -- a fraction of the
+        # previous animation's runtime -- and `_play` then rescales the group
+        # to `action.duration_seconds`, so passing the seconds value directly
+        # as `lag_ratio` neither caps the gap nor spaces items by the requested
+        # delay. Convert to the ratio that yields the requested gap after
+        # rescale.
+        #
+        # A whole-collection reveal names one target -- the group's `VGroup` --
+        # so passing that single group to `AnimationGroup` leaves `lag_ratio`
+        # with nothing to stagger and every item fades in at once. Expand each
+        # group target into its submobjects so the stagger actually plays.
+        if action.action.mode == "stagger":
+            items = []
+            for target in action.targets:
+                mobject = _target_mobject(rendered, target.ref)
+                items.extend(mobject.submobjects if mobject.submobjects else [mobject])
+            anims = tuple(motion(item) for item in items)
+            lag_ratio = _stagger_lag_ratio(
+                action.action.stagger_seconds, action.duration_seconds, len(anims),
+            )
+            return AnimationGroup(*anims, lag_ratio=lag_ratio)
+        anims = tuple(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
+        return AnimationGroup(*anims, lag_ratio=0.0)
     if kind == "trace":
         path = _path_mobject(action.path)
         _apply_style(path, resolve_semantic_style(palette, "focus"))

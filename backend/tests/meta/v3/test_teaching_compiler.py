@@ -155,6 +155,7 @@ def test_median_compiles_group_reveal_then_focus_then_conclusion(
         "kind": "reveal",
         "targets": [{"visual_ref": "values", "part": None, "index": None}],
         "mode": "together",
+        "stagger_seconds": 0.0,
     }
     focus_index = next(
         index for index, action in enumerate(actions)

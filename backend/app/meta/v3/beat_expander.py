@@ -10,7 +10,7 @@ from app.meta.dsl.scene_program import (
     ShowAnswerStageAction, ShowRelationAction, SignedHopArrowAction,
     TraceAction, TransformAction, UnitTapeProgramVisual,
 )
-from app.meta.dsl.v3_common import TargetRef
+from app.meta.dsl.v3_common import MAX_SIMPLE_STAGGER_SECONDS, TargetRef
 from app.meta.v3.expression_display import has_operation
 from app.meta.v3.visual_registry import DEFERRED_PARTS
 
@@ -339,6 +339,7 @@ class BeatExpander:
             actions.append(RevealAction(
                 targets=[TargetRef(visual_ref=plan.primary_visual.ref, part="target_label")],
                 mode="stagger",
+                stagger_seconds=MAX_SIMPLE_STAGGER_SECONDS,
             ))
         if not actions and not beat.custom_actions:
             actions.extend(self._attention_fallback(beat, current_roles))
@@ -367,7 +368,7 @@ class BeatExpander:
             actions.extend(self._role_change(target, "focus", current_roles))
         return actions
 
-    def _reveal_unrevealed(self, plan, targets, revealed, mode=None):
+    def _reveal_unrevealed(self, plan, targets, revealed, mode=None, stagger_seconds=None):
         """Reveal only targets not already on screen.
 
         Nothing else adds a mobject to the manim scene, so an unrevealed target
@@ -382,7 +383,19 @@ class BeatExpander:
         revealed.update(self._target_key(target) for target in pending)
         if mode is None:
             mode = "stagger" if plan.strategy == "short_stagger" else "together"
-        return [RevealAction(targets=pending, mode=mode)]
+        # Strategy-driven callers (`beat.kind == "reveal"` on a `short_stagger`
+        # plan) pass no `stagger_seconds` and get the Global Constraint's
+        # ceiling, so the renderer has a positive `lag_ratio` to play. A custom
+        # `RevealRequest` supplies its own field value verbatim -- including
+        # `0.0`, which the schema explicitly allows -- so an author who asks
+        # for a synchronous reveal is not silently upgraded to a staggered one.
+        if mode == "stagger":
+            resolved_stagger = (
+                MAX_SIMPLE_STAGGER_SECONDS if stagger_seconds is None else stagger_seconds
+            )
+        else:
+            resolved_stagger = 0.0
+        return [RevealAction(targets=pending, mode=mode, stagger_seconds=resolved_stagger)]
 
     def _is_revealed(self, target, revealed):
         # Revealing a whole visual reveals its parts with it -- except the parts
@@ -1147,7 +1160,9 @@ class BeatExpander:
     ):
         kind = request.kind
         if kind == "reveal":
-            return self._reveal_unrevealed(plan, request.targets, revealed, request.mode)
+            return self._reveal_unrevealed(
+                plan, request.targets, revealed, request.mode, request.stagger_seconds,
+            )
         if kind == "emphasize":
             return [self._set_role(request.target, request.role, current_roles)]
         if kind == "dim":

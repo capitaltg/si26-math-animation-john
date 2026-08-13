@@ -138,6 +138,17 @@ Also remove any rehearsal-only generated artifacts from
 reset against a shared or production database. Restart `./scripts/run-dev.sh`
 after the reset and confirm all six dev-only values remain in `backend/.env`.
 
+**Do not run `alembic downgrade` on this database.** Migration
+`0006_meta_template_v3` deliberately raises to keep the v1/v2
+`animation_document_json` column from being restored (there is no data path
+back from a v3 teaching plan), which makes the whole chain non-downgradable
+against a demo DB that has reached head. The upgrade also stamps a
+`server_default="{}"` on `template_drafts.teaching_plan_json` for the ALTER
+step; the ORM declares no default on that column (`app/meta/models.py`), so
+the DB-side default persists as a benign drift. Both are acceptable for a
+disposable demo DB — replace `backend/var/meta.db` from scratch instead of
+downgrading.
+
 ## Live demo sequence
 
 ### 1. Introduce the fixture

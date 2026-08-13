@@ -194,4 +194,8 @@ def test_fixture_edits_remain_pending_review_only(client):
         json={"params": {"length": 6}, "expected_result": {"answer": "6"}},
     )
 
-    assert response.status_code == 409
+    # Uniform 404 for a non-editable draft: the response must not leak the
+    # internal status (e.g. failed_validation) to a caller holding only a
+    # guessable fixture id.
+    assert response.status_code == 404
+    assert "failed_validation" not in response.text.lower()
