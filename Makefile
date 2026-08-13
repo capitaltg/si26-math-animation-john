@@ -4,6 +4,13 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
+# Compose project name — normalized as Docker Compose itself does: lowercase,
+# keep [a-z0-9_-] only. Pinned + exported so every `docker compose` call in
+# this Makefile targets the same project, and so `docker ps` label filters
+# can be by-value (not just by-key, which would match every project's
+# containers).
+export COMPOSE_PROJECT_NAME := $(shell basename $(CURDIR) | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+
 COMPOSE_BASE := docker compose
 COMPOSE_DEV  := $(COMPOSE_BASE) -f docker-compose.yml -f docker-compose.dev.yml
 COMPOSE_TLS  := $(COMPOSE_BASE) -f docker-compose.yml -f docker-compose.tls.yml
@@ -64,11 +71,12 @@ ps:  ## show container status
 .PHONY: restart
 restart:  ## recreate services that consume .env (backend + meta-worker if running); works under base, dev, or tls overlay
 	@# Detect the active overlay via the compose service label on any
-	@# running container — `compose ps` from the wrong compose invocation
-	@# won't see services declared only in an overlay, but `docker ps` sees
-	@# every container regardless of how it was launched.
-	@project="$$(basename $(PWD) | tr -d ' _-' | tr '[:upper:]' '[:lower:]')"; \
-	proj_filter="label=com.docker.compose.project"; \
+	@# running container of THIS project — `compose ps` from the wrong
+	@# compose invocation won't see services declared only in an overlay,
+	@# but `docker ps` sees every container regardless of how it was
+	@# launched. Filter by project=$(COMPOSE_PROJECT_NAME) so an unrelated
+	@# repo's frontend-dev/caddy/meta-worker can't steer us.
+	@proj_filter="label=com.docker.compose.project=$(COMPOSE_PROJECT_NAME)"; \
 	if docker ps --filter "$$proj_filter" --filter "label=com.docker.compose.service=frontend-dev" --format '{{.ID}}' | grep -q .; then \
 	  compose="$(COMPOSE_DEV)"; echo "dev overlay detected — recreating via docker-compose.dev.yml"; \
 	elif docker ps --filter "$$proj_filter" --filter "label=com.docker.compose.service=caddy" --format '{{.ID}}' | grep -q .; then \
