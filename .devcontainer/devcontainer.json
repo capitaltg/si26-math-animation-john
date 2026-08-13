@@ -11,6 +11,15 @@
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
 
+  // Runs on the HOST before compose creates any container. On a fresh clone
+  // there's no .env, so `POSTGRES_PASSWORD` resolves to empty and the
+  // Postgres image refuses to boot ("must specify POSTGRES_PASSWORD"),
+  // which cascades — backend + devcontainer never come up. Seed the file
+  // from the shipped example so the devcontainer boots on first-open.
+  // The example's default password is dev-only; document rotation before
+  // going public in docs/DEPLOY.md.
+  "initializeCommand": "test -f .env || cp .env.docker.example .env",
+
   // Bring up the whole dev stack so postgres/redis are available inside the
   // devcontainer network. Frontend-dev is under the "dev" profile.
   "runServices": ["backend", "postgres", "redis", "frontend-dev"],
