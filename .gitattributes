@@ -1,0 +1,5 @@
+# Shell scripts run inside Linux containers (backend/docker-entrypoint.sh is
+# the image ENTRYPOINT). A CRLF checkout on Windows makes the kernel read the
+# shebang as `/usr/bin/env bash\r`, which does not exist — the backend then
+# crash-loops and nginx never starts. Force LF regardless of core.autocrlf.
+*.sh text eol=lf
