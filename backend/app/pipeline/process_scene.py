@@ -12,6 +12,7 @@ from app.pipeline.extraction import (
     extract_params,
     extract_stated_answer,
 )
+from app.quota import BedrockDisabled, BedrockGuardUnavailable, BedrockQuotaExceeded
 from app.render.full_render import render_scene_thumbnail, render_scene_to_mp4
 from app.templates.registry import get_template, is_static_template_name, static_ref
 from app.templates.text_card.params import TextCardParams
@@ -126,6 +127,10 @@ def assemble_scene(
         except TemplateMismatchError as exc:
             last_error = exc
             break
+        except (BedrockDisabled, BedrockQuotaExceeded, BedrockGuardUnavailable):
+            # Quota / kill-switch signals must bubble to the request handler so
+            # the client sees 429 / 503, not a masked fallback scene.
+            raise
         except Exception as exc:
             last_error = exc
             if attempt == 0:

@@ -160,17 +160,26 @@ class SessionStore:
         with self._lock:
             return set(self._reserved)
 
-    def register_clip(self, path: Path, *, session_id: str | None = None) -> str:
-        clip_id = str(uuid4())
+    def register_clip(self, path: Path, *, session_id: str | None = None) -> str | None:
+        """Register `path` and return an id. Returns None if the file no longer
+        exists — eviction may have removed it since the caller last saw the
+        path, and registering a dead path would hand back a guaranteed-404 URL.
+
+        The existence check runs INSIDE ``self._lock`` so an ``enforce_global_cap``
+        pass can't delete the file between check and insert.
+        """
         path = Path(path)
-        entry = _Entry(
-            path=path,
-            session_id=session_id,
-            size=_safe_size(path),
-            created_at=time.time(),
-        )
         evicted: list[_Entry] = []
         with self._lock:
+            if not path.exists():
+                return None
+            clip_id = str(uuid4())
+            entry = _Entry(
+                path=path,
+                session_id=session_id,
+                size=_safe_size(path),
+                created_at=time.time(),
+            )
             self._reserved.discard(path)
             self._clips[clip_id] = entry
             self._expire_ttl_locked(evicted)
@@ -190,17 +199,20 @@ class SessionStore:
             return None
         return entry.path
 
-    def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str:
-        thumb_id = str(uuid4())
+    def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str | None:
+        """See `register_clip` — same missing-file guard, same in-lock recheck."""
         path = Path(path)
-        entry = _Entry(
-            path=path,
-            session_id=session_id,
-            size=_safe_size(path),
-            created_at=time.time(),
-        )
         evicted: list[_Entry] = []
         with self._lock:
+            if not path.exists():
+                return None
+            thumb_id = str(uuid4())
+            entry = _Entry(
+                path=path,
+                session_id=session_id,
+                size=_safe_size(path),
+                created_at=time.time(),
+            )
             self._reserved.discard(path)
             self._thumbnails[thumb_id] = entry
             self._expire_ttl_locked(evicted)
@@ -247,6 +259,45 @@ class SessionStore:
                 except OSError:
                     pass
         return removed
+
+    def enforce_global_cap(self, max_bytes: int) -> int:
+        """Evict oldest clips/thumbs across all sessions until total ≤ max_bytes.
+
+        Complements `_enforce_session_bytes_locked` (per-session cap) with a
+        volume-wide ceiling: on a public demo the sum of per-session budgets
+        can still eat the whole disk. Returns the count of registrations
+        dropped (not bytes freed). A cap of 0 disables the check.
+        """
+        if max_bytes <= 0:
+            return 0
+        evicted: list[_Entry] = []
+        with self._lock:
+            total = sum(
+                e.size
+                for reg in (self._clips, self._thumbnails)
+                for e in reg.values()
+            )
+            while total > max_bytes:
+                # Pick the globally oldest entry across both registries. Both
+                # OrderedDicts are insertion-ordered → first item per reg is
+                # its oldest; compare the two heads by created_at.
+                candidates = []
+                for reg in (self._clips, self._thumbnails):
+                    if reg:
+                        oldest_id = next(iter(reg))
+                        candidates.append((reg[oldest_id].created_at, oldest_id, reg))
+                if not candidates:
+                    break
+                candidates.sort(key=lambda t: t[0])
+                _, oldest_id, oldest_reg = candidates[0]
+                evicted.append(oldest_reg.pop(oldest_id))
+                total = sum(
+                    e.size
+                    for reg in (self._clips, self._thumbnails)
+                    for e in reg.values()
+                )
+            self._delete_orphaned_files_locked(evicted)
+        return len(evicted)
 
     # --- internal ----------------------------------------------------------
 

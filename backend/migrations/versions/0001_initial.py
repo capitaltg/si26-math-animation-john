@@ -69,6 +69,7 @@ def upgrade() -> None:
         ["fingerprint_key"],
         unique=True,
         sqlite_where=sa.text("status IN ('queued', 'running')"),
+        postgresql_where=sa.text("status IN ('queued', 'running')"),
     )
 
 

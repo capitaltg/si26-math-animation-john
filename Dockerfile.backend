@@ -1,0 +1,45 @@
+    # syntax=docker/dockerfile:1.7
+# Backend + meta-worker image. Ships manim + LaTeX + ffmpeg from the official
+# manimcommunity base so render toolchain matches the maintained recipe.
+FROM manimcommunity/manim:v0.18.1 AS runtime
+
+USER root
+
+# psycopg[binary] carries its own libpq — no extra apt packages needed for it.
+# tini gives us a real init so uvicorn's signals reach child processes cleanly.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      tini \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install python deps first for build cache.
+COPY backend/pyproject.toml /app/backend/pyproject.toml
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e "/app/backend[dev]" \
+    && pip install --no-cache-dir "redis>=5.0" "psycopg[binary]>=3.1"
+
+# Application code.
+COPY backend /app/backend
+
+# Runtime dirs owned by the same UID manim base uses (manimuser=1000).
+RUN mkdir -p /app/backend/var /app/backend/media /app/media \
+    && chmod +x /app/backend/docker-entrypoint.sh \
+    && chown -R manimuser:manimuser /app
+
+USER manimuser
+WORKDIR /app/backend
+
+EXPOSE 8000
+
+# Docker HEALTHCHECK — nginx `depends_on: backend: service_healthy` will not
+# start proxying until this succeeds, so the SPA never sees a 502 window on
+# redeploy. `start_period` covers alembic + uvicorn boot.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=45s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/healthz >/dev/null || exit 1
+
+# tini reaps zombies + forwards signals; the entrypoint script runs alembic
+# upgrade head, then execs the CMD so tini stays PID 1's child.
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/backend/docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

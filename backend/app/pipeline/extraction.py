@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.pipeline.bedrock_client import call_with_tool
 from app.pipeline.grounding import check_params_grounded
+from app.quota import BedrockDisabled, BedrockGuardUnavailable, BedrockQuotaExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,11 @@ def extract_stated_answer(source_text: str) -> tuple[Fraction, str] | None:
                 {"name": _STATED_ANSWER_DECLINE_TOOL, "schema": _DECLINE_TOOL_SCHEMA},
             ],
         )
+    except (BedrockDisabled, BedrockQuotaExceeded, BedrockGuardUnavailable):
+        # Quota / kill-switch signals must propagate so the request handler
+        # can turn them into 429 / 503 instead of a silent None result that
+        # /storyboard would treat as "no stated answer" and continue.
+        raise
     except Exception:
         logger.warning("Stated-answer extraction call failed", exc_info=True)
         return None

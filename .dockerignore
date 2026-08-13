@@ -1,0 +1,57 @@
+# VCS
+.git
+.github
+
+# Python — patterns need **/ to match nested (e.g. backend/.venv)
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.eggs
+**/build
+**/dist
+**/.venv
+**/venv
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+
+# Node
+**/node_modules
+**/.vite
+frontend/dist
+frontend/playwright-report
+frontend/test-results
+frontend/blob-report
+frontend/playwright/.cache
+
+# Render / DB output — must not bake into image
+media
+backend/media
+backend/var
+backend/scripts/_benchmark_output
+
+# Secrets
+.env
+**/.env
+!.env.docker.example
+
+# Local scratch / SDD
+.superpowers
+.worktrees
+.impeccable
+.claude
+docs/superpowers
+
+# Reference material (not runtime)
+eval\ set
+project\ description.md
+project_pitch_slides.pptx
+DESIGN.md
+PRODUCT.md
+
+# OS
+.DS_Store
+
+# Docker itself (Dockerfiles/compose don't need to be in build context)
+Dockerfile*
+docker-compose*.yml

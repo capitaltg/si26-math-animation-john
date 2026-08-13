@@ -17,6 +17,30 @@ class Settings(BaseSettings):
     aws_session_token: str | None = None
     session_cookie_secure: bool = False
 
+    # Optional Postgres/SQLite DSN. When unset, falls back to sqlite at
+    # `meta_db_path` so local dev keeps working without Docker.
+    database_url: str | None = None
+    # Redis DSN. When unset, Bedrock rate limiting degrades to no-op so local
+    # dev / tests without Redis still function; the demo compose always sets it.
+    redis_url: str | None = None
+
+    # Bedrock spend guards. See app/pipeline/bedrock_client.py.
+    #: Master kill switch. Any Bedrock call raises BedrockDisabled when true.
+    bedrock_disabled: bool = False
+    #: Global calls per UTC day allowed before returning 429. 0 disables L3.
+    bedrock_daily_call_cap: int = 0
+    #: Per-client-IP calls per rolling hour. 0 disables L2.
+    bedrock_per_ip_hourly_cap: int = 0
+
+    # Media volume ceiling — sum of all clips + thumbnails across sessions.
+    # 0 disables. Sweep runs on startup and every `media_sweep_interval_seconds`.
+    media_max_bytes: int = 0
+    media_sweep_interval_seconds: int = 300
+
+    # Comma-separated CORS origins. Local dev default keeps Vite on :5173.
+    # In prod, same-origin via nginx means CORS is optional; leave narrow.
+    cors_allow_origins: str = "http://localhost:5173"
+
     # meta-template system (Phase 1) — all disabled by default
     meta_templates_enabled: bool = False
     meta_codegen_enabled: bool = False
