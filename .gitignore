@@ -54,6 +54,12 @@ frontend/playwright/.cache/
 # Impeccable design-hook state (generated)
 .impeccable/
 
+# Claude Code local config. Named files, not the whole directory:
+# .claude/settings.json is also the conventional home for shared project config
+# (permissions, hooks, project skills), so keep that door open.
+.claude/settings.json
+.claude/settings.local.json
+
 # Skill files (local tooling, not project code)
 .claude/skills/
 .claude/scripts/
