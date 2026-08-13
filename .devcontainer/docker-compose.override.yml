@@ -4,17 +4,54 @@
 # directory — not the file that literally contains the path. Here that
 # project directory is the repository root, so `.` == repo root.
 #
-# Adds one mount: the whole repo at /workspace so .vscode/tasks.json, the
-# Makefile, README, and docs/ are visible inside the container, alongside
-# the /app/backend subtree that Dockerfile.backend already copies in.
+# Two jobs:
+#
+# 1. Mount the whole repo at /workspace so .vscode/, Makefile, README,
+#    docs/ are visible inside the container, alongside the /app/backend
+#    subtree Dockerfile.backend already copies in.
+#
+# 2. Provide dev-only defaults for POSTGRES_PASSWORD (and DATABASE_URL,
+#    which the base compose interpolates from it). On a fresh clone with
+#    no .env, the base file's `${POSTGRES_PASSWORD}` resolves empty and
+#    Postgres refuses to boot; this ensures "Reopen in Container" works
+#    on any host that has Docker, without needing Node on PATH or any
+#    host-side initializeCommand script.
+#
+#    These credentials MUST NOT reach production — they are hard-coded
+#    dev values. docker-compose.tls.yml / base compose are unchanged, so
+#    a prod bring-up still requires the operator to set a real
+#    POSTGRES_PASSWORD in .env (see docs/DEPLOY.md).
 #
 # Does NOT override `working_dir`. The image's WORKDIR is /app/backend
 # because docker-entrypoint.sh runs `alembic upgrade head` from there
-# (alembic.ini is at /app/backend/alembic.ini). VS Code's `workspaceFolder`
-# in devcontainer.json controls where the editor and integrated terminal
-# open — it is independent of the container's WORKDIR.
+# (alembic.ini is at /app/backend/alembic.ini). VS Code's
+# `workspaceFolder` in devcontainer.json controls terminal cwd — it is
+# independent of the container's WORKDIR.
 
 services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: devcontainer_dev_password
+    # Distinct volume so a switch between the shared prod password
+    # (from .env) and the dev-only password above does not collide with
+    # a pre-existing database initialized under a different password
+    # (Postgres only honors POSTGRES_PASSWORD on FIRST init).
+    volumes:
+      - postgres_devcontainer_data:/var/lib/postgresql/data
+
   backend:
     volumes:
       - .:/workspace:cached
+    environment:
+      # Base interpolates DATABASE_URL from POSTGRES_PASSWORD at compose
+      # substitution time (before overlay merge), so we must set the full
+      # URL explicitly here — overriding just POSTGRES_PASSWORD would not
+      # reach back into the already-interpolated string.
+      DATABASE_URL: postgresql+psycopg://demo:devcontainer_dev_password@postgres:5432/demo
+
+  meta-worker:
+    environment:
+      DATABASE_URL: postgresql+psycopg://demo:devcontainer_dev_password@postgres:5432/demo
+
+volumes:
+  postgres_devcontainer_data:

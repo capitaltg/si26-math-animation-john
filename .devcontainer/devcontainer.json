@@ -11,20 +11,13 @@
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
 
-  // Runs on the HOST before compose creates any container. On a fresh clone
-  // there's no .env, so `POSTGRES_PASSWORD` resolves to empty and the
-  // Postgres image refuses to boot ("must specify POSTGRES_PASSWORD"),
-  // which cascades — backend + devcontainer never come up. Seed the file
-  // from the shipped example so the devcontainer boots on first-open.
-  //
-  // Array form runs directly (no shell), and Node runs the same on macOS,
-  // Linux, and Windows — POSIX `test`/`cp` and PowerShell `Copy-Item`
-  // are both non-portable. Node is a project prerequisite anyway
-  // (frontend), so this adds no new host dependency.
-  //
-  // The example's default password is dev-only; docs/DEPLOY.md covers
-  // rotating it before going public.
-  "initializeCommand": ["node", ".devcontainer/init.mjs"],
+  // No initializeCommand: everything the devcontainer needs to boot on a
+  // fresh clone (POSTGRES_PASSWORD, DATABASE_URL) is baked into the
+  // compose override at .devcontainer/docker-compose.override.yml. This
+  // keeps "Reopen in Container" working on any host that has Docker,
+  // with no host-side Node / shell / script prerequisite. Real AWS
+  // credentials still come from an operator-created .env when the AI
+  // features are needed.
 
   // Bring up the whole dev stack so postgres/redis are available inside the
   // devcontainer network. Frontend-dev is under the "dev" profile.
