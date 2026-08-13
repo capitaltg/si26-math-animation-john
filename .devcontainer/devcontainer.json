@@ -16,9 +16,15 @@
   // Postgres image refuses to boot ("must specify POSTGRES_PASSWORD"),
   // which cascades — backend + devcontainer never come up. Seed the file
   // from the shipped example so the devcontainer boots on first-open.
-  // The example's default password is dev-only; document rotation before
-  // going public in docs/DEPLOY.md.
-  "initializeCommand": "test -f .env || cp .env.docker.example .env",
+  //
+  // Array form runs directly (no shell), and Node runs the same on macOS,
+  // Linux, and Windows — POSIX `test`/`cp` and PowerShell `Copy-Item`
+  // are both non-portable. Node is a project prerequisite anyway
+  // (frontend), so this adds no new host dependency.
+  //
+  // The example's default password is dev-only; docs/DEPLOY.md covers
+  // rotating it before going public.
+  "initializeCommand": ["node", ".devcontainer/init.mjs"],
 
   // Bring up the whole dev stack so postgres/redis are available inside the
   // devcontainer network. Frontend-dev is under the "dev" profile.
