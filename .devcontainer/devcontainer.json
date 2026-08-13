@@ -1,0 +1,68 @@
+{
+  "name": "si26-math-animation",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "../docker-compose.dev.yml",
+    "docker-compose.override.yml"
+  ],
+  "service": "backend",
+  // Editor + terminal cwd inside the container. Independent of the image's
+  // WORKDIR (/app/backend), which the entrypoint still uses for alembic.
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+
+  // No initializeCommand: everything the devcontainer needs to boot on a
+  // fresh clone (POSTGRES_PASSWORD, DATABASE_URL) is baked into the
+  // compose override at .devcontainer/docker-compose.override.yml. This
+  // keeps "Reopen in Container" working on any host that has Docker,
+  // with no host-side Node / shell / script prerequisite. Real AWS
+  // credentials still come from an operator-created .env when the AI
+  // features are needed.
+
+  // Bring up the whole dev stack so postgres/redis are available inside the
+  // devcontainer network. Frontend-dev is under the "dev" profile.
+  "runServices": ["backend", "postgres", "redis", "frontend-dev"],
+
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": { "label": "Frontend (Vite dev)", "onAutoForward": "openPreview" },
+    "8000": { "label": "Backend (FastAPI)",   "onAutoForward": "silent" }
+  },
+
+  // No Docker feature. Running `make` (which shells out to
+  // `docker compose ...`) from INSIDE the devcontainer is unreliable
+  // because bind-mount paths in the child compose (e.g. ./backend) are
+  // paths inside the devcontainer, not on the host daemon that would
+  // actually mount them. Instead:
+  //
+  //   * The dev stack is ALREADY running (see `runServices` above), so
+  //     hot-reload backend + vite HMR are available without any extra
+  //     command.
+  //   * For lifecycle changes (make dev / make down / make restart /
+  //     make tls), open a terminal on the HOST — not inside the
+  //     devcontainer — and run `make <target>` there.
+  //   * Editing, running tests inside the backend container, and using
+  //     the VS Code debugger all work fine from inside the container.
+
+  "postAttachCommand": {
+    "hint": "echo 'Dev stack is running via runServices (backend + vite + postgres + redis). Edit code here; run make from the HOST terminal for lifecycle changes (make dev / make down / make restart / make tls).'"
+  },
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["backend/tests"],
+        "editor.formatOnSave": false
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}

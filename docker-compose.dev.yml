@@ -1,0 +1,59 @@
+# Dev overlay — hot-reload backend + vite dev server + supporting infra.
+# Not for production use.
+#
+#   Full dev stack:   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#                     (or: `make dev`)
+#   Frontend only:    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile frontend up -d frontend-dev
+#                     (or: `make frontend`)
+#
+# Effects vs base:
+#   * `backend` runs `uvicorn --reload`; source is bind-mounted from ./backend
+#   * `nginx` (prod SPA) is deactivated in dev; the vite dev server (:5173)
+#     serves the frontend with HMR and proxies /upload /render /etc back to
+#     the backend directly.
+#   * new `frontend-dev` service runs `npm run dev` with the source
+#     bind-mounted; used both for the full dev stack and the `frontend`
+#     profile.
+
+services:
+  # Prod nginx not needed in dev.
+  nginx:
+    profiles: ["_disabled_in_dev"]
+
+  backend:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # Publish the API on the host so vite (running on the host or in the
+    # frontend-dev container) can proxy straight to it.
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind the source tree — a save triggers uvicorn --reload.
+      # Anonymous volumes shadow directories we do NOT want overwritten by
+      # the host: __pycache__ + var + media stay container-side.
+      - ./backend:/app/backend
+      - /app/backend/__pycache__
+      - /app/backend/app/__pycache__
+      - /app/backend/var
+      # Media stays on a named volume so it survives dev restarts.
+
+  frontend-dev:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    environment:
+      # vite proxy targets — see frontend/vite.proxy.js
+      VITE_BACKEND_URL: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [app]
+    # `frontend` profile: `make frontend` brings only this + minimal deps up.
+    profiles: ["frontend", "dev"]
+
+volumes:
+  frontend_node_modules:

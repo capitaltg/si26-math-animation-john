@@ -23,7 +23,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    env_file: .env
+    env_file:
+      # Optional so `docker compose config` works before .env is created
+      # (the operator's runtime path still requires the vars, they just
+      # come from the shell / docker environment in that case).
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://demo:${POSTGRES_PASSWORD}@postgres:5432/demo
       REDIS_URL: redis://redis:6379/0
@@ -51,7 +56,12 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     command: ["python", "-m", "scripts.meta_worker"]
-    env_file: .env
+    env_file:
+      # Optional so `docker compose config` works before .env is created
+      # (the operator's runtime path still requires the vars, they just
+      # come from the shell / docker environment in that case).
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://demo:${POSTGRES_PASSWORD}@postgres:5432/demo
       REDIS_URL: redis://redis:6379/0
