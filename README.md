@@ -7,9 +7,24 @@ The LLM never computes arithmetic: it proposes structurally compatible templates
 ## Repository layout
 
 ```
-backend/    FastAPI app, pipeline, Manim templates, tests
-frontend/   React + Vite single-page app
+backend/          FastAPI app, pipeline, Manim templates, tests
+frontend/         React + Vite single-page app
+docker-compose.*  Container stack (prod + dev + tls overlays)
+docs/DEPLOY.md    Deploy runbook
+.devcontainer/    VS Code / Cursor devcontainer definition
+Makefile          `make help` for all workflow shortcuts
 ```
+
+## Two ways to run it
+
+- **Docker (recommended for demos + a fresh laptop)** — one `make up`
+  brings up nginx + backend + postgres + redis with sane rate limits and
+  cost guards for a public URL. See **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+  Frequently used Makefile targets: `make dev`, `make frontend`,
+  `make up`, `make tls`, `make down`, `make help`.
+- **Bare metal (this section)** — install Python + Node + native deps and
+  run backend + frontend directly. Faster iteration if you already have
+  the toolchain; skip Docker entirely.
 
 ## Prerequisites
 
