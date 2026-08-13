@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 
 from app.meta.dsl.v3_common import (
     MAX_SCENE_SECONDS,
+    MAX_SIMPLE_STAGGER_SECONDS,
     MIN_CONCLUSION_HOLD_SECONDS,
     MIN_SCENE_SECONDS,
 )
@@ -89,18 +90,28 @@ def check_duration(program) -> QualityCheck:
 
 
 def check_grouped_simple_reveals(plan, program) -> QualityCheck:
-    ordered_refs = {
-        visual.ref for visual in [plan.primary_visual, *plan.supporting_visuals]
-        if visual.kind == "ordered_values"
-    }
-    serial = [
+    """Enforce the Global Constraint's per-item stagger ceiling.
+
+    A `mode="stagger"` reveal is legal on every visual kind whose strategy
+    admits it (see `visual_registry._SUPPORTED_STRATEGIES`); the Global
+    Constraint bounds only how far apart successive items may fade in.
+    `RevealRequest.stagger_seconds` is already schema-capped at
+    `MAX_SIMPLE_STAGGER_SECONDS`, so this check is defence in depth against a
+    program deserialized from elsewhere or an internal caller that skipped the
+    plan-level cap.
+    """
+    over = [
         index for index, entry in enumerate(program.timeline)
         if entry.action.kind == "reveal"
-        and entry.action.mode != "together"
-        and any(target.visual_ref in ordered_refs for target in entry.action.targets)
+        and entry.action.mode == "stagger"
+        and entry.action.stagger_seconds > MAX_SIMPLE_STAGGER_SECONDS
     ]
-    if serial:
-        return _failed("serial_simple_reveal", f"timeline[{serial[0]}].action.mode", "ordered values must reveal together")
+    if over:
+        return _failed(
+            "serial_simple_reveal",
+            f"timeline[{over[0]}].action.stagger_seconds",
+            f"stagger reveal exceeds the {MAX_SIMPLE_STAGGER_SECONDS:g}s per-item ceiling",
+        )
     return _passed("serial_simple_reveal", "timeline")
 
 

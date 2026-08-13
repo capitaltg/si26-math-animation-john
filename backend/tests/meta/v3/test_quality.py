@@ -176,9 +176,11 @@ def apply_literal_test_mutation(candidate, mutation):
 #   `check_duration` is a pure invariant. The scheduler's independent
 #   `timeline_over_budget` gate is exercised through `schedule_beats`
 #   directly (see test_teaching_compiler.py).
-# - `split_group_reveal`: reachable via a real short_stagger plan
-#   (covered by `test_a_short_stagger_plan_on_ordered_values_fails_the_reveal_together_gate`
-#   below).
+# - `split_group_reveal`: the `RevealRequest.stagger_seconds` field is
+#   schema-capped at `MAX_SIMPLE_STAGGER_SECONDS`, so the check exists only as
+#   defence in depth against a `SceneProgramDocument` that skipped the plan
+#   layer. `test_a_short_stagger_plan_on_ordered_values_carries_a_bounded_stagger`
+#   below asserts the happy path (stagger allowed, within the cap).
 # - `row_anchor_for_item`: reachable via a real whole-collection callout
 #   (covered by `test_a_whole_collection_callout_still_fails_semantic_anchor_specificity`
 #   below).
@@ -205,14 +207,14 @@ def test_quality_mutations_fail(valid_program, mutation, expected_code):
     assert expected_code in [check.code for check in report.checks if not check.passed]
 
 
-def test_a_short_stagger_plan_on_ordered_values_fails_the_reveal_together_gate():
-    """`check_grouped_simple_reveals` refuses any ordered_values reveal whose
-    mode is not `together`. The compiler emits `stagger` mode when
-    `plan.strategy == "short_stagger"` (`beat_expander.py:289`), which
-    `visual_registry.py` accepts for ordered_values -- so this shape is
-    reachable compiler output, and the failing input is a real
-    `SceneProgramDocument` from `compile_teaching_plan`, not a `model_copy`
-    of one.
+def test_a_short_stagger_plan_on_ordered_values_carries_a_bounded_stagger():
+    """`short_stagger` is a first-class strategy for `ordered_values` in
+    `_SUPPORTED_STRATEGIES`, and the compiler emits `mode="stagger"` on its
+    reveal (`beat_expander._reveal_unrevealed`). The Global Constraint bounds
+    only the per-item gap, so a compiled program must both carry a positive
+    `stagger_seconds` (proving the strategy is actually rendered as a stagger)
+    AND stay inside the schema ceiling that `check_grouped_simple_reveals`
+    enforces.
     """
     plan = TeachingPlanDocument.model_validate({
         "plan_version": 3,
@@ -240,15 +242,14 @@ def test_a_short_stagger_plan_on_ordered_values_fails_the_reveal_together_gate()
         if entry.action.kind == "reveal"
         and any(target.visual_ref == "values" for target in entry.action.targets)
     )
-    assert stagger_reveal.action.mode == "stagger", (
-        "the compiler must really emit a stagger reveal for a short_stagger plan"
-    )
+    assert stagger_reveal.action.mode == "stagger"
+    assert 0 < stagger_reveal.action.stagger_seconds <= 0.3
 
     report = validate_static_quality(plan, program)
 
-    assert report.passed is False
+    assert report.passed is True
     failed_codes = [check.code for check in report.checks if not check.passed]
-    assert "serial_simple_reveal" in failed_codes
+    assert "serial_simple_reveal" not in failed_codes
 
 
 def _mid_scene_conclude_plan_data():
