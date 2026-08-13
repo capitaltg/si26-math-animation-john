@@ -178,7 +178,6 @@ To stop all Bedrock calls immediately:
 ```bash
 # edit .env and set BEDROCK_DISABLED=1
 make restart
-# (or: docker compose up -d --force-recreate --no-deps backend nginx)
 ```
 
 **Important**: `docker compose restart` does NOT reread `.env` — env is baked
@@ -209,10 +208,18 @@ docker compose logs -f                        # everything
 ### Restart just one service
 
 ```bash
-docker compose restart backend    # only picks up code changes bind-mounted in;
+docker compose restart backend    # only picks up bind-mounted code changes;
                                   # does NOT reread .env
-docker compose up -d --force-recreate --no-deps backend   # to reread .env
+make restart                       # to reread .env — recreates backend
+                                   # (and meta-worker if running) using the
+                                   # currently-active overlay
 ```
+
+Use `make restart` rather than a bare `docker compose up -d --force-recreate
+backend nginx`: touching nginx under the TLS overlay collides with Caddy's
+`:80`, and a bare base-only recreate under the dev overlay silently drops
+hot-reload, source bind mounts, and the published `:8000` port on the
+backend container.
 
 ### Redeploy after a code change
 

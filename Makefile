@@ -56,12 +56,30 @@ ps:  ## show container status
 # them here would collide with Caddy's :80 under the TLS overlay for no
 # benefit. Meta-worker is profile-gated, so it must be brought up with
 # `--profile meta` to be visible to compose.
+#
+# Detect which overlay is currently active by checking for
+# overlay-exclusive containers (frontend-dev = dev, caddy = tls). Restarting
+# with the wrong compose invocation would drop bind mounts, hot-reload, and
+# ports for a dev backend, or refuse to boot under TLS.
 .PHONY: restart
-restart:  ## recreate services that consume .env (backend, and meta-worker if it's running)
-	$(COMPOSE_BASE) up -d --force-recreate --no-deps backend
-	@if [ -n "$$($(COMPOSE_BASE) --profile meta ps -q meta-worker 2>/dev/null)" ]; then \
+restart:  ## recreate services that consume .env (backend + meta-worker if running); works under base, dev, or tls overlay
+	@# Detect the active overlay via the compose service label on any
+	@# running container — `compose ps` from the wrong compose invocation
+	@# won't see services declared only in an overlay, but `docker ps` sees
+	@# every container regardless of how it was launched.
+	@project="$$(basename $(PWD) | tr -d ' _-' | tr '[:upper:]' '[:lower:]')"; \
+	proj_filter="label=com.docker.compose.project"; \
+	if docker ps --filter "$$proj_filter" --filter "label=com.docker.compose.service=frontend-dev" --format '{{.ID}}' | grep -q .; then \
+	  compose="$(COMPOSE_DEV)"; echo "dev overlay detected — recreating via docker-compose.dev.yml"; \
+	elif docker ps --filter "$$proj_filter" --filter "label=com.docker.compose.service=caddy" --format '{{.ID}}' | grep -q .; then \
+	  compose="$(COMPOSE_TLS)"; echo "TLS overlay detected — recreating via docker-compose.tls.yml"; \
+	else \
+	  compose="$(COMPOSE_BASE)"; echo "no overlay detected — recreating via base compose"; \
+	fi; \
+	$$compose up -d --force-recreate --no-deps backend; \
+	if docker ps --filter "$$proj_filter" --filter "label=com.docker.compose.service=meta-worker" --format '{{.ID}}' | grep -q .; then \
 	  echo "meta-worker running — recreating it too"; \
-	  $(COMPOSE_BASE) --profile meta up -d --force-recreate --no-deps meta-worker; \
+	  $$compose --profile meta up -d --force-recreate --no-deps meta-worker; \
 	fi
 
 # --- dev ---------------------------------------------------------------------
