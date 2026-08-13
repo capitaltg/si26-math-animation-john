@@ -164,19 +164,22 @@ class SessionStore:
         """Register `path` and return an id. Returns None if the file no longer
         exists — eviction may have removed it since the caller last saw the
         path, and registering a dead path would hand back a guaranteed-404 URL.
+
+        The existence check runs INSIDE ``self._lock`` so an ``enforce_global_cap``
+        pass can't delete the file between check and insert.
         """
         path = Path(path)
-        if not path.exists():
-            return None
-        clip_id = str(uuid4())
-        entry = _Entry(
-            path=path,
-            session_id=session_id,
-            size=_safe_size(path),
-            created_at=time.time(),
-        )
         evicted: list[_Entry] = []
         with self._lock:
+            if not path.exists():
+                return None
+            clip_id = str(uuid4())
+            entry = _Entry(
+                path=path,
+                session_id=session_id,
+                size=_safe_size(path),
+                created_at=time.time(),
+            )
             self._reserved.discard(path)
             self._clips[clip_id] = entry
             self._expire_ttl_locked(evicted)
@@ -197,19 +200,19 @@ class SessionStore:
         return entry.path
 
     def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str | None:
-        """See `register_clip` — same missing-file guard."""
+        """See `register_clip` — same missing-file guard, same in-lock recheck."""
         path = Path(path)
-        if not path.exists():
-            return None
-        thumb_id = str(uuid4())
-        entry = _Entry(
-            path=path,
-            session_id=session_id,
-            size=_safe_size(path),
-            created_at=time.time(),
-        )
         evicted: list[_Entry] = []
         with self._lock:
+            if not path.exists():
+                return None
+            thumb_id = str(uuid4())
+            entry = _Entry(
+                path=path,
+                session_id=session_id,
+                size=_safe_size(path),
+                created_at=time.time(),
+            )
             self._reserved.discard(path)
             self._thumbnails[thumb_id] = entry
             self._expire_ttl_locked(evicted)
