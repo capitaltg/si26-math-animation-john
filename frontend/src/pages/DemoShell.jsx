@@ -4,6 +4,7 @@ import StageRail from '../components/StageRail'
 import Queue from './Queue'
 import Focus from './Focus'
 import RenderToast from '../components/RenderToast'
+import RenderDock from '../components/RenderDock'
 
 async function responseJson(resp, fallbackMessage) {
   try {
@@ -27,6 +28,8 @@ function deriveStage(candidates, options, storyboard) {
 
 export const DemoContext = createContext(null)
 
+let toastSeq = 0
+
 export default function DemoShell() {
   const [candidates, setCandidates] = useState(null)
   const [selected, setSelected] = useState({})
@@ -40,9 +43,16 @@ export default function DemoShell() {
   const [fileName, setFileName] = useState(null)
   const [pendingRenders, setPendingRenders] = useState(new Set())
   const [toasts, setToasts] = useState([])
+  // The batch the render dock reports on: which scenes were dispatched, when the
+  // wait started, and how each one came back. Toasts are transient and easy to
+  // miss; this is the in-place record that stands until the teacher hides it.
+  const [renderJob, setRenderJob] = useState(null)  // {ids: string[], startedAt, results: {}}
 
   const pushToast = useCallback((toast) => {
-    const id = crypto.randomUUID()
+    // Not crypto.randomUUID(): it is undefined outside a secure context, so on
+    // an http:// demo host it would throw here — inside the render effect's
+    // success path, which would cost the toast *and* the status update.
+    const id = `toast-${toastSeq++}`
     setToasts((previous) => [...previous, { id, ...toast }])
     return id
   }, [])
@@ -50,6 +60,8 @@ export default function DemoShell() {
   const dismissToast = useCallback((id) => {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }, [])
+
+  const dismissRenderJob = useCallback(() => setRenderJob(null), [])
 
   // Fire-once render dispatch, not polling: /render is a synchronous batch
   // endpoint (POST only — there is no GET /storyboard/{id} to poll), so a
@@ -61,6 +73,11 @@ export default function DemoShell() {
   const renderInFlight = useRef(false)
   const storyboardRef = useRef(storyboard)
   useEffect(() => { storyboardRef.current = storyboard }, [storyboard])
+  // Read inside the effect's async tail so a scene approved *after* the POST
+  // went out is still recognised as requested when the response covers it.
+  const pendingRef = useRef(pendingRenders)
+  useEffect(() => { pendingRef.current = pendingRenders }, [pendingRenders])
+  const jobOpen = useRef(false)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
@@ -76,9 +93,27 @@ export default function DemoShell() {
   // actually covered, so any ids added mid-flight survive and the next
   // pendingRenders-change re-fires the effect for just those.
   useEffect(() => {
+    // An empty queue means the batch this job was reporting on is over: the
+    // dock stays up showing what it did, but the next approval opens a new job
+    // with its own clock rather than reviving this one.
+    if (!pendingRenders || pendingRenders.size === 0) {
+      jobOpen.current = false
+      return
+    }
     if (renderInFlight.current) return
-    if (!pendingRenders || pendingRenders.size === 0) return
     renderInFlight.current = true
+    // Stand the dock up now, not when the response lands — the wait is the part
+    // that needs reporting. A follow-up POST from the drain path joins the same
+    // open job (same clock, same rows) rather than starting a second one.
+    const dispatched = [...pendingRenders]
+    if (jobOpen.current) {
+      setRenderJob((previous) => (previous
+        ? { ...previous, ids: [...new Set([...previous.ids, ...dispatched])] }
+        : { ids: dispatched, startedAt: Date.now(), results: {} }))
+    } else {
+      jobOpen.current = true
+      setRenderJob({ ids: dispatched, startedAt: Date.now(), results: {} })
+    }
     ;(async () => {
       const processed = new Set()
       try {
@@ -91,8 +126,18 @@ export default function DemoShell() {
         const clips = Array.isArray(data.clips) ? data.clips : []
         if (!mountedRef.current) return
         const currentStoryboard = storyboardRef.current
+        // /render answers for *every* approved scene in the session, not just
+        // the ones this call queued, and it serves an unchanged scene straight
+        // from cache. Announcing all of them would re-toast clips the teacher
+        // was already told about on an earlier batch, so only scenes still
+        // waiting in the queue earn a notification — `processed` below still
+        // takes the full list, because draining is a different question.
+        const requested = pendingRef.current ?? new Set()
+        const results = {}
         for (const clip of clips) {
           processed.add(clip.scene_id)
+          if (!requested.has(clip.scene_id)) continue
+          results[clip.scene_id] = clip.clip_url ? 'ok' : 'failed'
           const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
           const title = scene?.detected_summary || 'Scene'
           if (clip.clip_url) {
@@ -101,6 +146,9 @@ export default function DemoShell() {
             pushToast({ sceneId: clip.scene_id, title, kind: 'warn', message: 'Render failed — open the problem to retry.' })
           }
         }
+        setRenderJob((previous) => (previous
+          ? { ...previous, results: { ...previous.results, ...results } }
+          : previous))
         setStoryboard(prev => prev?.map(s => {
           const clip = clips.find(c => c.scene_id === s.scene_id)
           if (!clip) return s
@@ -114,6 +162,16 @@ export default function DemoShell() {
       } catch (err) {
         if (!mountedRef.current) return
         pushToast({ title: 'Render error', kind: 'warn', message: err.message })
+        // The dock must not read "finished" over rows that never resolved: the
+        // batch failed as a unit, so every scene still waiting on it failed.
+        setRenderJob((previous) => (previous
+          ? {
+            ...previous,
+            results: Object.fromEntries(
+              previous.ids.map((id) => [id, previous.results[id] ?? 'failed']),
+            ),
+          }
+          : previous))
         // On failure, clear the whole pendingRenders — the batch failed as a
         // unit and the user needs to reapprove/retry. Retaining ids would
         // loop the failing call indefinitely.
@@ -346,6 +404,8 @@ export default function DemoShell() {
     setToasts,
     pushToast,
     dismissToast,
+    renderJob,
+    dismissRenderJob,
     handleUpload,
     toggle,
     handleGetOptions,
@@ -362,12 +422,19 @@ export default function DemoShell() {
 
   return (
     <DemoContext.Provider value={value}>
-      <div className="shell" data-testid="demo-shell" aria-label="demo">
+      {/* The dock is fixed to the bottom, so the shell pads out of its way
+          while it is up rather than letting it cover a clip. */}
+      <div
+        className={`shell${renderJob ? ' shell--docked' : ''}`}
+        data-testid="demo-shell"
+        aria-label="demo"
+      >
         <StageRail current={stage} />
         <Routes>
           <Route index element={<Queue />} />
           <Route path="problem/:id" element={<Focus />} />
         </Routes>
+        <RenderDock />
         <RenderToast />
       </div>
     </DemoContext.Provider>

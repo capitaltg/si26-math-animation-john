@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import useElapsedSeconds, { formatClock } from './lib/useElapsedSeconds'
 import {
   IconAlert,
   IconCard,
@@ -61,11 +62,6 @@ const STATE_WORDS = {
   active: 'in progress',
   failed: 'failed',
   todo: 'not started',
-}
-
-function formatElapsed(seconds) {
-  const minutes = Math.floor(seconds / 60)
-  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 // 12.5 seconds, not 12.50; 8 seconds, not 8.0.
@@ -281,6 +277,12 @@ function ReadyBand({ draft, onApprove, onReject, busy, error }) {
 export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, onApproved }) {
   const [enabled, setEnabled] = useState(false)
   const [builds, setBuilds] = useState([])
+  // When the figures below were last true. `elapsed_seconds` is computed by the
+  // server and only arrives on a POLL_MS poll, so the clock is drawn as
+  // "server value + seconds since that poll" — otherwise it sits still for four
+  // seconds and then jumps four, which reads as a hung build rather than a slow
+  // one.
+  const [polledAt, setPolledAt] = useState(null)
   const [drafts, setDrafts] = useState({})
   const [approved, setApproved] = useState({})   // candidate_id -> template name
   const [refreshFailed, setRefreshFailed] = useState({})  // candidate_id -> bool
@@ -310,7 +312,10 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     try {
       const resp = await fetch('/meta/my/builds', { credentials: 'include' })
       const data = await responseJson(resp)
-      if (resp.ok && Array.isArray(data)) setBuilds(data)
+      if (resp.ok && Array.isArray(data)) {
+        setBuilds(data)
+        setPolledAt(Date.now())
+      }
     } catch {
       // A dropped poll is not worth a banner; the next one reports the truth.
     }
@@ -332,6 +337,9 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     const timer = setInterval(loadBuilds, POLL_MS)
     return () => clearInterval(timer)
   }, [enabled, anyRunning, loadBuilds])
+
+  // Seconds accrued since that poll, ticking once a second on its own.
+  const sincePoll = useElapsedSeconds(polledAt, anyRunning)
 
   // Fetch each ready build's draft once. Keyed by draft id, so a refinement
   // arriving as a new revision is fetched again rather than showing the old one.
@@ -512,7 +520,8 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
       {builds.map((build) => {
         const draft = build.draft_id ? drafts[build.draft_id] : null
         const approvedName = approved[build.candidate_id]
-        const stalled = build.stage === 'queued' && build.elapsed_seconds >= STALL_SECONDS
+        const elapsed = build.elapsed_seconds + sincePoll
+        const stalled = build.stage === 'queued' && elapsed >= STALL_SECONDS
         const candidate = candidates.find((entry) => entry.candidate_id === build.candidate_id)
         return (
           <section className="workshop" key={build.candidate_id} aria-labelledby={`workshop-title-${build.candidate_id}`}>
@@ -521,7 +530,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
                 <span>{approvedName ? 'New visual ready to use' : 'Teaching a new visual'}</span>
                 {!TERMINAL_STAGES.has(build.stage) && (
                   <span className="workshop__elapsed" aria-hidden="true">
-                    {formatElapsed(build.elapsed_seconds)}
+                    {formatClock(elapsed)}
                   </span>
                 )}
               </p>

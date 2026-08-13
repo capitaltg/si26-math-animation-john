@@ -16,11 +16,13 @@ function ClipModal({ open, onClose, clipUrl, title }) {
 }
 
 export default function RenderToast() {
-  const { toasts, dismissToast } = useContext(DemoContext)
+  const { toasts, dismissToast, renderJob } = useContext(DemoContext)
   const [watching, setWatching] = useState(null) // {clipUrl, title} or null
   return (
     <>
-      <div className="toasts" role="status" aria-live="polite">
+      {/* Lifted clear of the render dock while that is up: the two report the
+          same batch and a toast landing on top of the bar hides the rows. */}
+      <div className={`toasts${renderJob ? ' toasts--docked' : ''}`} role="status" aria-live="polite">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast--${t.kind ?? 'ok'}`}>
             <div className="toast__body">

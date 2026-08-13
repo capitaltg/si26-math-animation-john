@@ -158,6 +158,23 @@ a:hover { text-decoration: underline; }
   overflow: hidden; clip: rect(0,0,0,0); border: 0;
 }
 
+/* ============================== MOTION =================================== */
+/* The one animation in the system. `IconWorking` is the only mark that claims
+   work is happening right now, so it has to actually move — a still arc reads
+   as a stalled job, which is exactly the wrong report. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1.1s linear infinite;
+  transform-origin: 50% 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}
+
 /* ============================== BUTTONS ================================== */
 .btn {
   font-family: var(--font-ui);
@@ -550,6 +567,11 @@ a:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
+/* Bottom padding is raised while the render dock is up so the fixed bar cannot
+   cover a clip at the end of the page. */
+.shell--docked {
+  padding-bottom: 12rem;
+}
 .landing {
   flex: 1 1 auto;
 }
@@ -803,6 +825,9 @@ a:hover { text-decoration: underline; }
 .pill--ok     { background: var(--ok-field);       color: var(--ok);         border-color: var(--ok-line); }
 .pill--danger { background: var(--danger-field);   color: var(--danger);     border-color: var(--danger-line); }
 .pill--muted  { background: var(--board-quiet);    color: var(--ink-soft);   border-color: var(--line); }
+/* Working Blue — the same family the active stage stamp uses, so "in progress"
+   looks the same wherever it is reported. */
+.pill--working { background: var(--action-field);  color: var(--action);     border-color: var(--teach-line); }
 
 /* ============================== TABS ===================================== */
 .tabs {
@@ -1198,6 +1223,83 @@ a:hover { text-decoration: underline; }
 }
 .mismatch__ack { white-space: nowrap; }
 
+/* ============================== RENDER DOCK ============================== */
+/* A fixed bottom bar — never a modal, never an overlay — carrying the account of
+   the current render batch. The shell pads to `12rem` while it is up so the bar
+   cannot cover a clip. */
+.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  background-color: var(--paper);
+  color: var(--ink);
+  border-top: 3px solid var(--line-strong);
+  box-shadow: var(--shadow-raised);
+}
+.dock__inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0.8rem 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.dock__head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+.dock__head-mark { display: inline-flex; color: var(--action); }
+.dock__title {
+  font-family: var(--font-display);
+  font-size: var(--t-xl);
+  font-weight: 700;
+  margin: 0;
+  color: var(--brand-ink);
+}
+.dock__clock {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-sm);
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.dock__note {
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin-left: auto;
+}
+.dock__hide { margin-left: auto; }
+.dock__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+}
+.dock__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  min-width: 0;
+}
+.dock__mark { display: inline-flex; }
+.dock__row[data-state='rendering'] .dock__mark { color: var(--action); }
+.dock__row[data-state='rendered'] .dock__mark { color: var(--ok); }
+.dock__row[data-state='failed'] .dock__mark { color: var(--danger); }
+/* Capped and truncated so a long template name cannot reflow the bar. */
+.dock__row-name {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ============================== TOASTS + MODAL =========================== */
 .toasts {
   position: fixed;
@@ -1209,6 +1311,7 @@ a:hover { text-decoration: underline; }
   z-index: 100;
   max-width: 380px;
 }
+.toasts--docked { bottom: 10rem; }
 .toast {
   background: var(--paper-warm);
   border: 1px solid var(--line-strong);

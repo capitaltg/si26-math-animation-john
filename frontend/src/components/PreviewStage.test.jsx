@@ -24,3 +24,20 @@ test('placeholder without Compiling when not pending', () => {
   render(<PreviewStage scene={{status:'rendered', detected_summary:'perimeter'}} clipUrl={null} />)
   expect(screen.queryByText(/compiling/i)).not.toBeInTheDocument()
 })
+
+test('says the clip is being rendered instead of showing a still that implies nothing is happening', () => {
+  const { container } = render(
+    <PreviewStage scene={{status:'approved', thumbnail_url:'/t.png', detected_summary:'perimeter'}} clipUrl={null} rendering />
+  )
+  expect(screen.getByText(/rendering the clip/i)).toBeInTheDocument()
+  expect(container.querySelector('.spin')).not.toBeNull()
+  expect(container.querySelector('img')).toBeNull()
+})
+
+test('a finished clip wins over the rendering placeholder', () => {
+  const { container } = render(
+    <PreviewStage scene={{status:'rendered', detected_summary:'perimeter'}} clipUrl="/c.mp4" rendering />
+  )
+  expect(container.querySelector('video')).toBeInTheDocument()
+  expect(screen.queryByText(/rendering the clip/i)).not.toBeInTheDocument()
+})
