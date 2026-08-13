@@ -154,7 +154,10 @@ class TemplateDraftFixture(Base):
     __tablename__ = "template_draft_fixtures"
     __table_args__ = (Index("ix_template_draft_fixtures_draft", "draft_id"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Not a bare uuid4().hex like every other id here: drafts.py derives it as
+    # f"{draft_id}-fixture-{index}", so 32 hex chars plus the suffix overruns 36.
+    # SQLite ignores VARCHAR limits and accepted it; Postgres rejects the insert.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_drafts.id"), nullable=False)
     observation_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("fallback_observations.id"), nullable=True
