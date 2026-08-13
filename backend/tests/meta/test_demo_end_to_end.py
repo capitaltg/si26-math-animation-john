@@ -20,6 +20,7 @@ mapped onto the fields those acceptance contracts read.
 """
 
 import json
+import os
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -60,14 +61,38 @@ _EXPRESSION = TypeAdapter(ExpressionNode)
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    meta_db = tmp_path / "meta.db"
-    engine = db.make_engine(meta_db)
-    monkeypatch.setattr(db, "get_engine", lambda: engine)
-    db.create_all(engine)
+    # The clean-env rehearsal (`scripts/rehearse-clean.sh`) exports
+    # `REHEARSAL_META_DB_PATH` pointing at a DB it already ran
+    # `alembic upgrade head` against, so the fixture must reuse that DB
+    # instead of building a fresh one via `create_all` -- otherwise the
+    # rehearsal never proves the alembic-head schema actually drives the
+    # demo. When the rehearsal env is unset, keep the historical
+    # per-test tmp DB + `create_all` behavior so nothing about the
+    # default suite changes.
+    rehearsal_db = os.environ.get("REHEARSAL_META_DB_PATH")
+    if rehearsal_db:
+        meta_db = Path(rehearsal_db)
+        engine = db.make_engine(meta_db)
+        monkeypatch.setattr(db, "get_engine", lambda: engine)
+        # No create_all: the rehearsal already migrated the schema.
+    else:
+        meta_db = tmp_path / "meta.db"
+        engine = db.make_engine(meta_db)
+        monkeypatch.setattr(db, "get_engine", lambda: engine)
+        db.create_all(engine)
     # The render steps run in subprocesses that open their own meta_session from
     # settings, so they must be pointed at the same on-disk DB as this process.
     monkeypatch.setenv("META_DB_PATH", str(meta_db))
-    monkeypatch.setenv("META_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    # The clean-env rehearsal (`scripts/rehearse-clean.sh`) pre-sets
+    # `REHEARSAL_META_ARTIFACT_ROOT` so it can inspect preview artifacts
+    # after the run. Reading `META_ARTIFACT_ROOT` directly here would let
+    # any ambient value in a developer shell or CI environment redirect
+    # test artifacts into a real store; the dedicated env is set only by
+    # the rehearsal script, so an unrelated caller's env cannot leak in.
+    artifact_root = os.environ.get("REHEARSAL_META_ARTIFACT_ROOT") or str(
+        tmp_path / "artifacts"
+    )
+    monkeypatch.setenv("META_ARTIFACT_ROOT", artifact_root)
     monkeypatch.setenv("META_TEMPLATES_ENABLED", "1")
     monkeypatch.setenv("META_CODEGEN_ENABLED", "1")
     monkeypatch.setenv("META_APPROVAL_ENABLED", "1")
@@ -831,3 +856,69 @@ def test_rotation_demo_slide_approves_end_to_end(rendered_rotation):
 
     # Reuse on slide 2: a real MP4 renders for a second parameter set.
     assert result.mp4_path.exists() and result.mp4_path.stat().st_size > 0
+
+
+def test_client_fixture_routes_artifacts_via_rehearsal_env(tmp_path, monkeypatch):
+    """The clean-env rehearsal (`scripts/rehearse-clean.sh`) exports
+    `REHEARSAL_META_ARTIFACT_ROOT` so it can scan the directory after
+    the run and prove preview artifacts landed on disk. Reading
+    `META_ARTIFACT_ROOT` directly would let an ambient value in a
+    developer shell or CI environment redirect test artifacts into a
+    real store, so the fixture goes through the dedicated var instead.
+    Regression: with the rehearsal env set, the fixture's inner
+    `META_ARTIFACT_ROOT` must match it; with only an ambient
+    `META_ARTIFACT_ROOT` set, the fixture must ignore it and fall back
+    to `tmp_path/artifacts`."""
+    preset = tmp_path / "preset-artifacts"
+    monkeypatch.setenv("REHEARSAL_META_ARTIFACT_ROOT", str(preset))
+
+    fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+    next(fixture_gen)
+    try:
+        assert os.environ["META_ARTIFACT_ROOT"] == str(preset)
+    finally:
+        fixture_gen.close()
+
+
+def test_client_fixture_ignores_ambient_meta_artifact_root(tmp_path, monkeypatch):
+    """Ambient META_ARTIFACT_ROOT (e.g. a developer's shell exporting it
+    for the live app, or a CI variable) must not redirect test
+    artifacts. The fixture reads the rehearsal-specific env only."""
+    ambient = tmp_path / "ambient-artifacts"
+    monkeypatch.setenv("META_ARTIFACT_ROOT", str(ambient))
+    monkeypatch.delenv("REHEARSAL_META_ARTIFACT_ROOT", raising=False)
+
+    fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+    next(fixture_gen)
+    try:
+        assert os.environ["META_ARTIFACT_ROOT"] == str(tmp_path / "artifacts")
+    finally:
+        fixture_gen.close()
+
+
+def test_client_fixture_reuses_prebuilt_db_when_rehearsal_env_is_set(
+    tmp_path, monkeypatch
+):
+    """When the rehearsal runs alembic against its own DB first, the
+    fixture must reuse that DB (so the alembic-head schema is what the
+    demo runs against) rather than building a fresh tmp DB via
+    `create_all` -- otherwise the rehearsal's migration step proves
+    nothing about the DB the demo actually touches."""
+    prebuilt = tmp_path / "prebuilt.db"
+    engine = db.make_engine(prebuilt)
+    db.create_all(engine)  # stand in for `alembic upgrade head`
+    engine.dispose()
+
+    monkeypatch.setenv("REHEARSAL_META_DB_PATH", str(prebuilt))
+
+    fixture_gen = client.__wrapped__(tmp_path, monkeypatch)  # type: ignore[attr-defined]
+    next(fixture_gen)
+    try:
+        assert os.environ["META_DB_PATH"] == str(prebuilt)
+        # The engine bound inside the fixture must point at the prebuilt DB,
+        # NOT at tmp_path/meta.db that the default branch would create.
+        active_engine = db.get_engine()
+        assert active_engine.url.database == str(prebuilt)
+        assert not (tmp_path / "meta.db").exists()
+    finally:
+        fixture_gen.close()
