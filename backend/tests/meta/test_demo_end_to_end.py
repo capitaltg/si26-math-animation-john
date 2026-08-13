@@ -663,14 +663,79 @@ def _run_demo_lesson(client: TestClient, lesson: DemoLesson, tmp_path: Path) -> 
     )
 
 
-@pytest.fixture
-def rendered_median(client, tmp_path):
-    return _run_demo_lesson(client, MEDIAN_LESSON, tmp_path)
+def _build_demo_client_context(tmp_path: Path):
+    """Yield a `TestClient` wired for the demo runbook; restore env on exit.
+
+    Usable at any pytest scope: the `client` fixture wraps this for
+    per-test isolation, while `_shared_demo_client` reuses it once per
+    session so the median + perimeter runbook renders (`rendered_median`,
+    `rendered_perimeter`) don't repeat across parametrised runbook tests
+    and `test_v3_demo_quality.py`.
+    """
+    saved_env: dict[str, str | None] = {}
+
+    def _setenv(key: str, value: str) -> None:
+        saved_env.setdefault(key, os.environ.get(key))
+        os.environ[key] = value
+
+    saved_get_engine = db.get_engine
+    try:
+        rehearsal_db = os.environ.get("REHEARSAL_META_DB_PATH")
+        if rehearsal_db:
+            meta_db = Path(rehearsal_db)
+            engine = db.make_engine(meta_db)
+            db.get_engine = lambda: engine
+        else:
+            meta_db = tmp_path / "meta.db"
+            engine = db.make_engine(meta_db)
+            db.get_engine = lambda: engine
+            db.create_all(engine)
+        _setenv("META_DB_PATH", str(meta_db))
+        artifact_root = os.environ.get("REHEARSAL_META_ARTIFACT_ROOT") or str(
+            tmp_path / "artifacts"
+        )
+        _setenv("META_ARTIFACT_ROOT", artifact_root)
+        _setenv("META_TEMPLATES_ENABLED", "1")
+        _setenv("META_CODEGEN_ENABLED", "1")
+        _setenv("META_APPROVAL_ENABLED", "1")
+        _setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
+        _setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+        _setenv("META_REVIEWER_TOKEN", "test-token")
+        get_settings.cache_clear()
+        from app.main import create_app
+
+        yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
+    finally:
+        for key, original in saved_env.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+        db.get_engine = saved_get_engine
+        get_settings.cache_clear()
 
 
-@pytest.fixture
-def rendered_perimeter(client, tmp_path):
-    return _run_demo_lesson(client, PERIMETER_LESSON, tmp_path)
+@pytest.fixture(scope="session")
+def _shared_demo_client(tmp_path_factory):
+    """One `TestClient` + demo env for the whole session, so the median and
+    perimeter runbook renders (each ~a real MP4 + probe render) run once
+    instead of once per parametrised runbook test AND once per
+    `test_v3_demo_quality.py` assertion. See :func:`_build_demo_client_context`.
+    """
+    tmp_path = tmp_path_factory.mktemp("demo-runbook-session")
+    yield from _build_demo_client_context(tmp_path)
+
+
+@pytest.fixture(scope="session")
+def rendered_median(_shared_demo_client, tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("rendered-median")
+    return _run_demo_lesson(_shared_demo_client, MEDIAN_LESSON, tmp_path)
+
+
+@pytest.fixture(scope="session")
+def rendered_perimeter(_shared_demo_client, tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("rendered-perimeter")
+    return _run_demo_lesson(_shared_demo_client, PERIMETER_LESSON, tmp_path)
 
 
 @pytest.fixture
