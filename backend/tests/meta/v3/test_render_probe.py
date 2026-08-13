@@ -71,6 +71,13 @@ def valid_manifest():
         # `show_answer_stage` says it should. Equal here: a passing manifest.
         "final_answer_text": "2 × 3 = 6 m",
         "declared_answer_text": "2 × 3 = 6 m",
+        # What the answer READS at the end of the work beat, beside the "work"
+        # stage the timeline declared. Equal here: `Transform`'s glyph smear
+        # settled before the beat ended, so the captured frame shows the work
+        # arithmetic rather than a mid-morph outline.
+        "work_beat_id": "focus_middle",
+        "work_beat_answer_text": "2 × 3 = ? m",
+        "declared_work_answer_text": "2 × 3 = ? m",
         "answer_anchor": None,
         "derivation_visible": True,
     }
@@ -85,6 +92,7 @@ def valid_manifest():
     ("path", "undeclared_path_event"),
     ("answer", "final_answer_not_persistent"),
     ("unresolved_answer", "final_answer_not_persistent"),
+    ("unresolved_work_answer", "work_answer_not_persistent"),
     ("outside_safe_frame", "frame_out_of_bounds"),
     ("overlapping_visuals", "visual_overlap"),
     ("unlabelled_dimension", "dimension_label_missing"),
@@ -152,6 +160,13 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
         # The answer is on screen, but still reads as the unresolved work stage --
         # the defect `final_answer_visible` alone passed happily on.
         manifest["final_answer_text"] = "2 × 3 = ? m"
+    elif mutation == "unresolved_work_answer":
+        # The work beat ended before `Transform`'s glyph smear settled -- so the
+        # captured frame reads as the `unknown` stage's "?" rather than the
+        # arithmetic "8 x 3 = ?" the timeline declared. The defect this gate
+        # exists to catch: an intermediate beat left mid-morph, invisible to
+        # every check that looked only at the timeline.
+        manifest["work_beat_answer_text"] = "?"
     elif mutation == "empty_visual_bounds":
         # Defense-in-depth: every teeth-bearing check downstream is a
         # `declared ⊆ observed` subset test, so an empty observation would
@@ -242,6 +257,7 @@ def test_state_order_passes_when_no_answer_anchor_is_declared(valid_manifest):
     "path_events", "declared_path_events", "dimension_labels",
     "declared_dimension_labels", "state_events", "declared_state_events",
     "final_answer_visible", "final_answer_text", "declared_answer_text",
+    "work_beat_id", "work_beat_answer_text", "declared_work_answer_text",
     "answer_anchor", "derivation_visible",
 ])
 def test_rendered_quality_fails_closed_when_required_evidence_is_missing(valid_manifest, field):
@@ -457,6 +473,57 @@ def test_a_program_that_stages_nothing_resolves_its_answer_on_screen():
     # `answer_unit`, so the resolved statement reads "8 × 3 = 24".
     assert manifest["final_answer_text"] == "8 × 3 = 24"
     assert manifest["declared_answer_text"] == "8 × 3 = 24"
+    assert validate_rendered_quality(manifest).passed is True
+
+
+def test_work_beat_captured_frame_shows_the_arithmetic_stage():
+    """A real probe records what the answer READS at the work beat's end.
+
+    The conclude beat's `Transform` from `work` to `value` morphs point sets
+    over roughly a second, and the same is true of the transition INTO `work`.
+    Nothing observed the mid-lesson morph settling: every gate checked the
+    timeline, none checked the frame -- exactly the class of gap #77's central
+    defect went through. This proves the probe now records the answer text at
+    the work beat's captured frame, so the gate has evidence to hold to.
+    """
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Find a rectangle area by multiplying its sides.",
+        "primary_visual": {
+            "kind": "rectangle_measurement", "ref": "rectangle",
+            "length": {"node": "field_ref", "field": "length"},
+            "width": {"node": "field_ref", "field": "width"}, "unit": "cm",
+        },
+        "strategy": "group_reveal",
+        "beats": [
+            {"id": "reveal_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "show the measured rectangle"},
+            {"id": "multiply_sides", "kind": "derive", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "multiply the two side lengths"},
+            {"id": "show_answer", "kind": "conclude", "targets": [{"visual_ref": "rectangle"}],
+             "intent": "state the area"},
+        ],
+        "variation_seed": "work-beat-probe",
+    })
+    program = compile_teaching_plan(
+        plan, MultiplyNode(operands=[FieldRefNode(field="length"), FieldRefNode(field="width")]),
+        frozenset({"length", "width"}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+
+    manifest = run_probe_subprocess(ProbeRequest(
+        scene_program=program,
+        known_fields=["length", "width"],
+        field_values={"length": 8, "width": 3},
+    )).manifest
+
+    # `beat_expander._work_beat_id` picks the last `focus`/`derive` beat before
+    # conclude to host `show_answer_stage(work)`; here the only such beat is
+    # `multiply_sides`. Its captured frame must read as the work arithmetic --
+    # not the `unknown` stage's "?", which is what a mid-morph frame would show.
+    assert manifest["work_beat_id"] == "multiply_sides"
+    assert manifest["work_beat_answer_text"] == "8 × 3 = ?"
+    assert manifest["declared_work_answer_text"] == "8 × 3 = ?"
     assert validate_rendered_quality(manifest).passed is True
 
 
