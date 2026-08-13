@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     #: Per-client-IP calls per rolling hour. 0 disables L2.
     bedrock_per_ip_hourly_cap: int = 0
 
+    # Media volume ceiling — sum of all clips + thumbnails across sessions.
+    # 0 disables. Sweep runs on startup and every `media_sweep_interval_seconds`.
+    media_max_bytes: int = 0
+    media_sweep_interval_seconds: int = 300
+
+    # Comma-separated CORS origins. Local dev default keeps Vite on :5173.
+    # In prod, same-origin via nginx means CORS is optional; leave narrow.
+    cors_allow_origins: str = "http://localhost:5173"
+
     # meta-template system (Phase 1) — all disabled by default
     meta_templates_enabled: bool = False
     meta_codegen_enabled: bool = False

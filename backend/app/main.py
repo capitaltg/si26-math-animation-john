@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,19 @@ from app.routes import router, store
 logger = logging.getLogger(__name__)
 
 
+async def _periodic_media_sweep(interval: int, max_bytes: int):
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            evicted = store.enforce_global_cap(max_bytes)
+            if evicted:
+                logger.info("Evicted %d media entries to hold media volume cap", evicted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Periodic media sweep failed")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     # Registries live in memory; anything left under root_dir belongs to a
@@ -24,7 +38,24 @@ async def _lifespan(_app: FastAPI):
             logger.info("Removed %d orphan session file(s) on startup", removed)
     except Exception:
         logger.exception("Orphan sweep failed during startup")
-    yield
+
+    settings = get_settings()
+    sweep_task: asyncio.Task | None = None
+    if settings.media_max_bytes > 0:
+        sweep_task = asyncio.create_task(
+            _periodic_media_sweep(
+                settings.media_sweep_interval_seconds, settings.media_max_bytes
+            )
+        )
+    try:
+        yield
+    finally:
+        if sweep_task is not None:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 def create_app() -> FastAPI:
@@ -79,9 +110,12 @@ def create_app() -> FastAPI:
             },
         )
 
+    cors_origins = [
+        o.strip() for o in get_settings().cors_allow_origins.split(",") if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -90,6 +124,13 @@ def create_app() -> FastAPI:
     # ContextVar. Starlette runs middleware in reverse-add order, so this
     # add_middleware() call after CORS still lands it outside CORS.
     app.add_middleware(ClientIPMiddleware)
+    @app.get("/healthz", include_in_schema=False)
+    async def _healthz():
+        # Liveness only — cheap, no external dependencies. Docker HEALTHCHECK
+        # curls this; deep dependency checks would flap the healthcheck if
+        # Postgres/Redis blip briefly and force nginx to drain the backend.
+        return {"status": "ok"}
+
     app.include_router(router)
     if get_settings().meta_templates_enabled:
         from app.meta.review_api import router as meta_review_router

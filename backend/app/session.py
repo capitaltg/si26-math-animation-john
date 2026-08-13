@@ -248,6 +248,45 @@ class SessionStore:
                     pass
         return removed
 
+    def enforce_global_cap(self, max_bytes: int) -> int:
+        """Evict oldest clips/thumbs across all sessions until total ≤ max_bytes.
+
+        Complements `_enforce_session_bytes_locked` (per-session cap) with a
+        volume-wide ceiling: on a public demo the sum of per-session budgets
+        can still eat the whole disk. Returns the count of registrations
+        dropped (not bytes freed). A cap of 0 disables the check.
+        """
+        if max_bytes <= 0:
+            return 0
+        evicted: list[_Entry] = []
+        with self._lock:
+            total = sum(
+                e.size
+                for reg in (self._clips, self._thumbnails)
+                for e in reg.values()
+            )
+            while total > max_bytes:
+                # Pick the globally oldest entry across both registries. Both
+                # OrderedDicts are insertion-ordered → first item per reg is
+                # its oldest; compare the two heads by created_at.
+                candidates = []
+                for reg in (self._clips, self._thumbnails):
+                    if reg:
+                        oldest_id = next(iter(reg))
+                        candidates.append((reg[oldest_id].created_at, oldest_id, reg))
+                if not candidates:
+                    break
+                candidates.sort(key=lambda t: t[0])
+                _, oldest_id, oldest_reg = candidates[0]
+                evicted.append(oldest_reg.pop(oldest_id))
+                total = sum(
+                    e.size
+                    for reg in (self._clips, self._thumbnails)
+                    for e in reg.values()
+                )
+            self._delete_orphaned_files_locked(evicted)
+        return len(evicted)
+
     # --- internal ----------------------------------------------------------
 
     def _drop_session_entries_locked(self, session_id: str) -> None:

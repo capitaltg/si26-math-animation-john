@@ -25,6 +25,7 @@ COPY backend /app/backend
 
 # Runtime dirs owned by the same UID manim base uses (manimuser=1000).
 RUN mkdir -p /app/backend/var /app/backend/media /app/media \
+    && chmod +x /app/backend/docker-entrypoint.sh \
     && chown -R manimuser:manimuser /app
 
 USER manimuser
@@ -32,5 +33,13 @@ WORKDIR /app/backend
 
 EXPOSE 8000
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# Docker HEALTHCHECK — nginx `depends_on: backend: service_healthy` will not
+# start proxying until this succeeds, so the SPA never sees a 502 window on
+# redeploy. `start_period` covers alembic + uvicorn boot.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=45s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/healthz >/dev/null || exit 1
+
+# tini reaps zombies + forwards signals; the entrypoint script runs alembic
+# upgrade head, then execs the CMD so tini stays PID 1's child.
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/backend/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

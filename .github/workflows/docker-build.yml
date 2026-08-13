@@ -1,0 +1,75 @@
+name: Docker build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.backend"
+      - "Dockerfile.frontend"
+      - "docker-compose.yml"
+      - "docker-compose.tls.yml"
+      - ".dockerignore"
+      - "nginx/**"
+      - "Caddyfile"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    paths:
+      - "Dockerfile.backend"
+      - "Dockerfile.frontend"
+      - "docker-compose.yml"
+      - "docker-compose.tls.yml"
+      - ".dockerignore"
+      - "nginx/**"
+      - "Caddyfile"
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/docker-build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Validate the base compose file. TLS overlay lint runs separately since
+      # it references DOMAIN/TLS_EMAIL and would otherwise warn spuriously.
+      - name: Compose config (base)
+        run: |
+          echo "POSTGRES_PASSWORD=ci_dummy" > .env
+          docker compose config --quiet
+          rm .env
+
+      - name: Compose config (TLS overlay)
+        run: |
+          echo "POSTGRES_PASSWORD=ci_dummy" > .env
+          echo "DOMAIN=demo.example.com" >> .env
+          echo "TLS_EMAIL=demo@example.com" >> .env
+          docker compose -f docker-compose.yml -f docker-compose.tls.yml config --quiet
+          rm .env
+
+      # Build the backend image. Cached across runs via GitHub Actions cache.
+      - name: Build backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: false
+          load: false
+          tags: si26-math-animation-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: false
+          load: false
+          tags: si26-math-animation-nginx:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

@@ -1,0 +1,39 @@
+# Overlay for production TLS. Bring up with:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# Effects vs base:
+#   * Caddy takes ports 80 + 443, terminates TLS, auto-provisions a cert.
+#   * Nginx loses its host port binding; it is only reachable via the app
+#     network, from Caddy.
+#   * Nginx trusts Caddy (172.16.0.0/12) for X-Forwarded-For — set through
+#     an env-driven include or a mount depending on your host CIDR.
+
+services:
+  nginx:
+    ports: []          # unpublish :80; only Caddy is public
+    volumes:
+      # Trust Caddy's X-Forwarded-For so per-IP rate limits and the L2
+      # Bedrock cap key off the real client, not the Caddy container IP.
+      - ./nginx/trusted-proxies-tls.d:/etc/nginx/trusted-proxies.d:ro
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      nginx:
+        condition: service_started
+    environment:
+      DOMAIN: ${DOMAIN}
+      TLS_EMAIL: ${TLS_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    networks: [app]
+
+volumes:
+  caddy_data:
+  caddy_config:

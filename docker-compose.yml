@@ -13,7 +13,9 @@ services:
       - "${PUBLIC_HTTP_PORT:-80}:80"
     depends_on:
       backend:
-        condition: service_started
+        # Wait for /healthz to answer 200 (see Dockerfile.backend HEALTHCHECK)
+        # so we don't proxy requests during alembic upgrade / uvicorn boot.
+        condition: service_healthy
     restart: unless-stopped
     networks: [app]
 
@@ -53,13 +55,15 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://demo:${POSTGRES_PASSWORD}@postgres:5432/demo
       REDIS_URL: redis://redis:6379/0
+      # Backend runs alembic on boot; skip here to avoid a redundant lock race.
+      SKIP_MIGRATIONS: "1"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - backend_media:/app/backend/media
       - backend_var:/app/backend/var

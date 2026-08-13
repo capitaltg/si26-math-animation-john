@@ -43,6 +43,9 @@ OWNER_SCOPED_ROUTES: frozenset[tuple[str, str]] = frozenset({
 })
 
 NOT_OWNER_SCOPED_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    # Liveness probe for docker HEALTHCHECK / nginx depends_on. Constant
+    # response, no state.
+    ("GET", "/healthz"),
     # Session bootstrap or session-agnostic.
     ("POST", "/upload"),
     ("POST", "/options"),

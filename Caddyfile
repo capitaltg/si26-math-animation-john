@@ -1,0 +1,30 @@
+# Terminates TLS in front of nginx, auto-provisions a Let's Encrypt cert for
+# ${DOMAIN}, and forwards HTTP(S) to the internal nginx container.
+#
+# Requirements:
+#   * DOMAIN=your.host in .env
+#   * TLS_EMAIL=you@your.host in .env (used by ACME)
+#   * ports 80 and 443 reachable from the internet
+#
+# Bring up with:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+
+{
+    email {$TLS_EMAIL}
+    # Uncomment to use the ACME staging endpoint while testing certificate
+    # issuance without burning Let's Encrypt production rate limits.
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+    encode zstd gzip
+    # Client's real IP goes into X-Forwarded-For; nginx below re-derives
+    # $remote_addr via set_real_ip_from (documented in nginx.conf).
+    reverse_proxy nginx:80 {
+        # Explicitly overwrite XFF with the client Caddy observed, so a
+        # client-supplied X-Forwarded-For cannot bypass the per-IP quota by
+        # threading a fake value through Caddy → nginx → backend.
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}
