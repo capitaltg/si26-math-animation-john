@@ -1152,7 +1152,14 @@ def _play_action(scene, action: ResolvedAction, rendered: RenderedScene, motion,
 def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, palette: str):
     kind = action.action.kind
     if kind == "reveal":
-        return AnimationGroup(*(motion(_target_mobject(rendered, target.ref)) for target in action.targets))
+        anims = tuple(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
+        # `mode="stagger"` fades items in with a small per-item delay bounded by
+        # `MAX_SIMPLE_STAGGER_SECONDS`. Manim's `AnimationGroup.lag_ratio` is a
+        # fraction of the previous animation's runtime; the ceiling is
+        # sub-second while a per-item reveal runs ~1s, so the seconds value
+        # doubles as a small, correctly-signed lag ratio.
+        lag_ratio = action.action.stagger_seconds if action.action.mode == "stagger" else 0.0
+        return AnimationGroup(*anims, lag_ratio=lag_ratio)
     if kind == "trace":
         path = _path_mobject(action.path)
         _apply_style(path, resolve_semantic_style(palette, "focus"))

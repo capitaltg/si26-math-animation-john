@@ -9,7 +9,7 @@ from app.meta.dsl.teaching_plan import (
 )
 from app.meta.dsl.v3_common import (
     LEGACY_MIN_ACTION_SECONDS, LEGACY_MIN_SCENE_SECONDS,
-    MAX_ACTION_SECONDS, MAX_SCENE_SECONDS,
+    MAX_ACTION_SECONDS, MAX_SCENE_SECONDS, MAX_SIMPLE_STAGGER_SECONDS,
     AnchorRef, CalloutText, GeneratedText, ProseText, StyleRole, TargetRef,
 )
 
@@ -112,6 +112,11 @@ class RevealAction(BaseModel):
     kind: Literal["reveal"] = "reveal"
     targets: list[TargetRef] = Field(min_length=1, max_length=8)
     mode: Literal["together", "stagger"] = "together"
+    #: Per-item delay when ``mode == "stagger"``. Ignored when ``mode == "together"``.
+    #: Capped at the same ceiling as the plan-schema field
+    #: (``RevealRequest.stagger_seconds``) so a program deserialized from
+    #: elsewhere cannot smuggle a longer gap past the Global Constraint.
+    stagger_seconds: float = Field(default=0.0, ge=0, le=MAX_SIMPLE_STAGGER_SECONDS)
 
 
 class SetRoleAction(BaseModel):
