@@ -14,7 +14,8 @@ export default function Focus() {
   const ctx = useContext(DemoContext)
   const {
     storyboard, drafts, fieldErrors, loading,
-    saveEdits, setDrafts, approveScene, rejectScene, retryScene, setPendingRenders,
+    saveEdits, setDrafts, approveScene, rejectScene, retryScene,
+    pendingRenders, setPendingRenders,
     acknowledgeMismatch,
   } = ctx
   const timerRef = useRef(null)
@@ -128,7 +129,7 @@ export default function Focus() {
 
       <div className="focus__split">
         <section className="focus__left">
-          <PreviewStage scene={scene} clipUrl={clipUrl} />
+          <PreviewStage scene={scene} clipUrl={clipUrl} rendering={pendingRenders.has(scene.scene_id)} />
           <SolutionCard answer={scene.computed_answer} />
           <GatesDisclosure gates={scene.gates ?? []} />
         </section>

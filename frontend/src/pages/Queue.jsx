@@ -55,6 +55,7 @@ export default function Queue() {
     handleGetOptions,
     handleBuildStoryboard,
     approveScene,
+    pendingRenders,
     setPendingRenders,
     refreshOptionsFor,
   } = useContext(DemoContext)
@@ -179,15 +180,23 @@ export default function Queue() {
     <section className="band">
       <h2>Problems in your storyboard</h2>
       <ul className="qlist">
-        {storyboard.map((scene) => (
-          <li key={scene.scene_id}>
-            <Link to={`/demo/problem/${scene.scene_id}`} className="qrow" data-status={scene.status}>
-              <div className="qrow__title">{scene.detected_summary}</div>
-              <div className="qrow__meta">{templateLabel(scene.template)} · slide {scene.slide_index}</div>
-              <span className={`pill pill--${pillFor(scene.status)}`}>{statusLabel(scene.status)}</span>
-            </Link>
-          </li>
-        ))}
+        {storyboard.map((scene) => {
+          // A queued render outranks the stored status in the row: "approved"
+          // next to a scene whose clip is being rendered right now reads as
+          // nothing happening, which is the one thing that isn't true.
+          const rendering = pendingRenders.has(scene.scene_id)
+          return (
+            <li key={scene.scene_id}>
+              <Link to={`/demo/problem/${scene.scene_id}`} className="qrow" data-status={rendering ? 'rendering' : scene.status}>
+                <div className="qrow__title">{scene.detected_summary}</div>
+                <div className="qrow__meta">{templateLabel(scene.template)} · slide {scene.slide_index}</div>
+                <span className={`pill pill--${rendering ? 'working' : pillFor(scene.status)}`}>
+                  {rendering ? 'rendering…' : statusLabel(scene.status)}
+                </span>
+              </Link>
+            </li>
+          )
+        })}
       </ul>
       {readyCount > 0 && (
         <button className="btn btn--primary" onClick={renderAllReady}>

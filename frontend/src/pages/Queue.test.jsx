@@ -70,6 +70,22 @@ test('shows status pill per row', () => {
   expect(screen.getByText(/^rejected$/i)).toBeInTheDocument()
 })
 
+test('a queued render outranks the stored status in the row', () => {
+  renderWithContext({
+    candidates: [],
+    options: [],
+    // Both are "approved" on the server; only s1's clip is actually being made.
+    storyboard: [
+      { scene_id: 's1', detected_summary: 'Add fractions', template: 'number_line', slide_index: 1, status: 'approved' },
+      { scene_id: 's2', detected_summary: 'Solve for x', template: 'balance_scale', slide_index: 2, status: 'approved' },
+    ],
+    pendingRenders: new Set(['s1']),
+  })
+  expect(screen.getByText(/rendering…/i)).toBeInTheDocument()
+  expect(screen.getByText(/^approved$/i)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /Add fractions/i })).toHaveAttribute('data-status', 'rendering')
+})
+
 test('renders "Approve all & render remaining" button when ready scenes exist', () => {
   const { rerender } = renderWithContext({
     candidates: [],
