@@ -63,6 +63,7 @@ def validate_rendered_quality(manifest: dict) -> QualityReport:
         check_declared_path_events(manifest),
         check_dimension_labels(manifest),
         check_final_answer_persistence(manifest),
+        check_work_beat_answer_persistence(manifest),
         check_rendered_duration(manifest),
         check_rendered_conclusion_hold(manifest),
     ]
@@ -91,6 +92,9 @@ def check_manifest_contract(manifest: dict) -> QualityCheck:
         "final_answer_visible": bool,
         "final_answer_text": (str, type(None)),
         "declared_answer_text": (str, type(None)),
+        "work_beat_id": (str, type(None)),
+        "work_beat_answer_text": (str, type(None)),
+        "declared_work_answer_text": (str, type(None)),
         "answer_anchor": (str, type(None)),
         "derivation_visible": bool,
     }
@@ -399,6 +403,40 @@ def check_final_answer_persistence(manifest: dict) -> QualityCheck:
             "final frame does not show the resolved answer",
         )
     return _passed("final_answer_not_persistent", "final_answer_visible")
+
+
+def check_work_beat_answer_persistence(manifest: dict) -> QualityCheck:
+    """The work beat's captured frame must SHOW the work stage.
+
+    The conclude beat's `Transform` from `work` to `value` morphs one point set
+    onto another over roughly a second, and for most of that second the answer
+    is a smear of interpolated glyphs -- `8 x 3 = ?` does not become `8 x 3 = 24`
+    by substitution but by dragging outlines. The same is true of the beat that
+    transforms into `work`: the frame captured at that beat's end reads as a
+    smear unless the transition has settled by then.
+
+    Nothing observed the smear settling. `check_final_answer_persistence` holds
+    the FINAL frame to the timeline's declared stage; every intermediate beat
+    was assumed to settle without evidence. This is the same class of gap that
+    let #77's central defect through -- every gate checked the timeline, none
+    checked the frame -- and would let a future change that leaves the answer
+    mid-morph when the beat ends slip past a green suite.
+
+    A lesson whose answer expression has no arithmetic emits no `show_answer_
+    stage(work)` action, so `declared_work_answer_text` is `None`. Treat that
+    as "nothing to hold to" and pass, matching how the final-frame check
+    handles a program that stages its answer nowhere.
+    """
+    declared = manifest.get("declared_work_answer_text")
+    if declared is None:
+        return _passed("work_answer_not_persistent", "declared_work_answer_text")
+    observed = manifest.get("work_beat_answer_text")
+    if observed != declared:
+        return _failed(
+            "work_answer_not_persistent", "work_beat_answer_text",
+            "work beat's captured frame does not show the work stage of the answer",
+        )
+    return _passed("work_answer_not_persistent", "work_beat_answer_text")
 
 
 def _load_manifest(path: Path) -> dict:
