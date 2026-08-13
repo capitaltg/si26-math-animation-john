@@ -41,11 +41,19 @@ async def _lifespan(_app: FastAPI):
 
     settings = get_settings()
     sweep_task: asyncio.Task | None = None
-    if settings.media_max_bytes > 0:
+    # Both must be strictly positive — interval 0 would asyncio.sleep(0) in a
+    # tight loop and pin a CPU. A misconfigured .env should not brick the app,
+    # so we log and skip rather than raise.
+    if settings.media_max_bytes > 0 and settings.media_sweep_interval_seconds > 0:
         sweep_task = asyncio.create_task(
             _periodic_media_sweep(
                 settings.media_sweep_interval_seconds, settings.media_max_bytes
             )
+        )
+    elif settings.media_max_bytes > 0:
+        logger.warning(
+            "MEDIA_MAX_BYTES is set but MEDIA_SWEEP_INTERVAL_SECONDS is not > 0; "
+            "periodic media sweep disabled"
         )
     try:
         yield

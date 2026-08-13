@@ -10,7 +10,9 @@
 
 services:
   nginx:
-    ports: []          # unpublish :80; only Caddy is public
+    # `!reset []` (Compose ≥ 2.24) is REQUIRED — a bare `ports: []` merges
+    # with the base list and the base :80 mapping wins, colliding with Caddy.
+    ports: !reset []
     volumes:
       # Trust Caddy's X-Forwarded-For so per-IP rate limits and the L2
       # Bedrock cap key off the real client, not the Caddy container IP.

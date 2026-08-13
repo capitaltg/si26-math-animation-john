@@ -57,6 +57,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       # Backend runs alembic on boot; skip here to avoid a redundant lock race.
       SKIP_MIGRATIONS: "1"
+    # This image inherits Dockerfile.backend's HEALTHCHECK (curl /healthz),
+    # but the worker runs no HTTP server, so that probe would report
+    # `unhealthy` forever. Disable it here — the worker's liveness is that
+    # it hasn't exited, which restart policy already covers.
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy

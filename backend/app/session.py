@@ -160,9 +160,15 @@ class SessionStore:
         with self._lock:
             return set(self._reserved)
 
-    def register_clip(self, path: Path, *, session_id: str | None = None) -> str:
-        clip_id = str(uuid4())
+    def register_clip(self, path: Path, *, session_id: str | None = None) -> str | None:
+        """Register `path` and return an id. Returns None if the file no longer
+        exists — eviction may have removed it since the caller last saw the
+        path, and registering a dead path would hand back a guaranteed-404 URL.
+        """
         path = Path(path)
+        if not path.exists():
+            return None
+        clip_id = str(uuid4())
         entry = _Entry(
             path=path,
             session_id=session_id,
@@ -190,9 +196,12 @@ class SessionStore:
             return None
         return entry.path
 
-    def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str:
-        thumb_id = str(uuid4())
+    def register_thumbnail(self, path: Path, *, session_id: str | None = None) -> str | None:
+        """See `register_clip` — same missing-file guard."""
         path = Path(path)
+        if not path.exists():
+            return None
+        thumb_id = str(uuid4())
         entry = _Entry(
             path=path,
             session_id=session_id,

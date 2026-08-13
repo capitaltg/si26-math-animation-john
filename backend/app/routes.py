@@ -434,6 +434,10 @@ def _resolve_cached_clip(session, scene: Scene, params_hash: str) -> str | None:
             clip_id = store.register_clip(
                 current.render_path, session_id=session.session_id
             )
+            if clip_id is None:
+                # Render file evicted between the exists() check above and the
+                # register — treat as cache miss.
+                return None
             session.scene_clip_id[scene.scene_id] = clip_id
     return f"/clips/{clip_id}"
 
@@ -579,16 +583,23 @@ def render(session_id: str | None = Cookie(default=None)):
                         clip_id = store.register_clip(
                             output_path, session_id=session.session_id
                         )
-                        clip_url = f"/clips/{clip_id}"
-                        status = "fallback" if scene.fallback_reason else "approved"
-                        render_gate_status = "passed"
-                        session.scenes[scene.scene_id] = current.model_copy(
-                            update={
-                                "render_path": output_path,
-                                "rendered_params_hash": params_hash,
-                            }
-                        )
-                        session.scene_clip_id[scene.scene_id] = clip_id
+                        if clip_id is None:
+                            # Render file was evicted between write and
+                            # register — treat as if the render was superseded
+                            # so the fallback branch fires and status flips to
+                            # "error", which the caller retries.
+                            still_current = False
+                        else:
+                            clip_url = f"/clips/{clip_id}"
+                            status = "fallback" if scene.fallback_reason else "approved"
+                            render_gate_status = "passed"
+                            session.scenes[scene.scene_id] = current.model_copy(
+                                update={
+                                    "render_path": output_path,
+                                    "rendered_params_hash": params_hash,
+                                }
+                            )
+                            session.scene_clip_id[scene.scene_id] = clip_id
                 if not still_current:
                     logger.info(
                         "Discarding render for scene %s; superseded before publish",
@@ -640,7 +651,12 @@ def _scene_out(session: Session, scene: Scene, candidates: list[Candidate]) -> S
         thumb_id = store.register_thumbnail(
             scene.thumbnail_path, session_id=session.session_id
         )
-        thumbnail_url = f"/thumbnails/{thumb_id}"
+        if thumb_id is None:
+            # Thumbnail file was evicted after the scene captured its path.
+            # Clear the stale ref so subsequent renders don't keep re-trying.
+            scene.thumbnail_path = None
+        else:
+            thumbnail_url = f"/thumbnails/{thumb_id}"
     if candidates:
         source_excerpt = " / ".join(c.source_excerpt for c in candidates)
         detected_summary = " / ".join(c.one_line_summary for c in candidates)
