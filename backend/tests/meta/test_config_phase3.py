@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from app.config import Settings, get_settings
 from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
@@ -12,7 +10,7 @@ def test_meta_artifact_root_defaults_under_backend_var(monkeypatch):
     assert settings.meta_artifact_root.parts[-2:] == ("var", "meta_artifacts")
 
 
-def test_meta_artifact_root_resolves_relative_path(monkeypatch, tmp_path):
+def test_meta_artifact_root_resolves_relative_path(monkeypatch):
     monkeypatch.setenv("META_ARTIFACT_ROOT", "relative/artifacts")
     get_settings.cache_clear()
     try:
@@ -27,141 +25,6 @@ def test_meta_draft_max_refinements_default():
     assert Settings().meta_draft_max_refinements == 5
 
 
-def test_version_constants_identify_the_current_compiler_and_renderer_wave():
-    # Both constants are part of every draft's artifact hash and of approval's
-    # stale-runtime precondition, so a compiler or renderer change has to bump
-    # them: a draft validated by an older compiler must not stay approvable under
-    # a newer one. This is the tripwire that keeps the next compiler/renderer
-    # change from forgetting the bump.
-    #
-    # DSL_COMPILER_VERSION 5 covers the pair-elimination legibility wave: the
-    # compiler emits an outside-in dim to `neutral` from a collection born
-    # `structure`, drops the `evaluated_answer` visual in favour of
-    # `answer_anchor`, and the renderer builds each visual in its declared
-    # initial role.
-    #
-    # DSL_COMPILER_VERSION 6 adds the `unit_tape` visual kind and the
-    # `unit_substitution` strategy to `dsl/teaching_plan.py` and
-    # `dsl/scene_program.py`.
-    #
-    # DSL_COMPILER_VERSION 7 pairs `unit_tape` with `unit_rate`: the compiler
-    # stages a per-one focus on box[0] at the reveal beat (preserving generic
-    # role changes for other targets), rejects a plan whose tape value is not
-    # guaranteed >= 1, and the quality gate rejects any active whole-tape
-    # focus through the reveal.
-    #
-    # DYNAMIC_RENDERER_VERSION 6 covers `number_line` labelling each marker and
-    # reserving a strip below the line for those labels, growing its measured
-    # height; and the line itself moving to draw at its markers' y instead of
-    # at its label-padded bounds' center, so it passes through its own dots
-    # again.
-    #
-    # DSL_COMPILER_VERSION 8 adds the `coordinate_plane` visual kind and the
-    # matching `CoordinatePlaneProgramVisual`; a version-7 compiler cannot
-    # recognise the new kind, so a report stamped 7 must go stale.
-    #
-    # DYNAMIC_RENDERER_VERSION 7 covers rendering the new `coordinate_plane`
-    # visual kind (axes through the projected zero, plotted points with
-    # labels, whole-number ticks); a version-6 renderer cannot deserialize the
-    # new frozen visual.
-    #
-    # DSL_COMPILER_VERSION 8 adds the optional `grid` flag on
-    # `CoordinatePlaneVisual` (issue #108 acceptance); a plan requesting a
-    # grid cannot be validated against the version-7 model, which forbids
-    # extra fields.
-    #
-    # DYNAMIC_RENDERER_VERSION 8 covers optional grid lines, per-point
-    # `label_dx`/`label_dy` quadrant offsets, and skipping tick labels the
-    # measurer suppressed to avoid overlapping a point label -- a version-7
-    # renderer would overlay glyphs the newer measurer already resolved.
-    #
-    # DSL_COMPILER_VERSION 9 adds the `data_display` visual kind (M19: single
-    # kind with a `display_style` variant selector covering bar_graph,
-    # line_plot, dot_plot, histogram, box_plot). A version-8 compiler cannot
-    # deserialize the new kind.
-    #
-    # DYNAMIC_RENDERER_VERSION 9 covers building each of the five
-    # `data_display` styles as a rendered visual -- a version-8 renderer has
-    # no branch for the new kind.
-    #
-    # DSL_COMPILER_VERSION 10 adds the `inverse_operation` strategy on `bar`
-    # (M11: one-/two-step equation solving on a tape-diagram bar) and the
-    # `ray_shade` strategy on `number_line` (M11: inequality boundary + ray).
-    # A version-9 compiler rejects the new strategy literals as unknown enum
-    # values.
-    #
-    # DSL_COMPILER_VERSION 11 introduces the equation-partition DSL fields
-    # (`BarVisual.constant` / `.coefficient` and `NumberLineVisual.boundary`
-    # / `.boundary_kind` / `.ray_direction`) and the compiler branches that
-    # stage x_region / constant_region / x_part role changes for
-    # `inverse_operation` and boundary-circle / shaded-ray reveals for
-    # `ray_shade`. A version-10 compiler rejects the new fields as unknown.
-    #
-    # DYNAMIC_RENDERER_VERSION 10 draws the bar's partition dividers and the
-    # number_line's open/closed boundary circle plus shaded ray -- primitives
-    # a version-9 renderer has no branch for.
-    #
-    # DSL_COMPILER_VERSION 12 adds the `signed_hop` and `distance_from_zero`
-    # strategies to `number_line` (M6) and tightens
-    # `magnitude_comparison`'s compile-time guard so a signed number_line
-    # (negative minimum or negative marker) is refused; a version-11 compiler
-    # accepted such a plan and does not recognise the new strategy literals.
-    #
-    # DSL_COMPILER_VERSION 13 adds the `equivalence_align` and
-    # `common_denominator_bridge` strategies on `partition`; a version-12
-    # compiler rejects the new strategy literals, so a plan that carries
-    # them cannot be validated against the older model.
-    #
-    # DSL_COMPILER_VERSION 14 adds the `percent_of_whole` and `percent_change`
-    # strategies on the `bar` kind (M9), and refuses `magnitude_comparison` on
-    # a bar whose `maximum` literal is 100 -- the percent-of-whole ratio
-    # semantic must use the new strategy so the sweep reads as "part of the
-    # whole" rather than "walk to some capacity". A version-13 compiler both
-    # rejects the new strategy literals and accepts a percent-semantic
-    # magnitude_comparison, so a report stamped 13 for either shape is stale.
-    #
-    # DSL_COMPILER_VERSION 15 adds the `rotation` strategy on `coordinate_plane`
-    # (M22): `CoordinatePlaneVisual` gains optional `polygons`, `pivot`,
-    # `rotation_angle_deg`, `rotation_iterations` fields, `CoordinatePlane
-    # ProgramVisual` gains a frozen `rotation_frames` payload, and a new
-    # `RotateAction` joins `ProgramAction`. A version-14 compiler rejects the
-    # new strategy literal and unknown fields.
-    #
-    # DYNAMIC_RENDERER_VERSION 11 covers rendering declared polygons, a pivot
-    # mark, and one-step-per-iteration rotations against a persistent ghost
-    # trail -- primitives a version-10 renderer has no branch for.
-    #
-    # DYNAMIC_RENDERER_VERSION 12 shrinks coordinate_plane axis tick numbers
-    # from the 36pt `label` role to the 24pt `polygon_label` role in both the
-    # measurer and the renderer. Tick label widths and heights change, which
-    # shifts collision-driven thinning and the point-label quadrant search --
-    # both the pixel geometry and the layout bounds a version-11 renderer
-    # would have produced are no longer what a version-12 render emits, so a
-    # coordinate_plane report stamped 11 must not stay approvable.
-    #
-    # DYNAMIC_RENDERER_VERSION 13 additionally renders coordinate_plane point
-    # labels at the smaller `polygon_label` role, drops the "pivot" text
-    # glyph, and suppresses the axis "0" tick labels when the pivot is at
-    # the origin. Point-label pixel geometry, the pivot text presence, and
-    # the origin-tick bounds all change, so a report stamped 12 no longer
-    # describes the version-13 frame.
-    #
-    # DYNAMIC_RENDERER_VERSION 14 shrinks coordinate_plane axis tick numbers
-    # to a new 20pt `axis_tick` role (one step below the 24pt
-    # `polygon_label` role vertex letters and point labels use) and paints
-    # point labels in the palette's `focus` colour instead of the default
-    # neutral text colour. Tick widths shrink -- shifting the collision
-    # thinning stride and point-label quadrant search -- and the plotted
-    # coordinate readouts move from white to orange, so a version-13
-    # measurer's bounds and a version-13 renderer's hues no longer
-    # describe the version-14 frame.
-    assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 14
-
-
-def test_version_constants_carry_m22_bumps():
-    """M22 (rotation strategy + RotateAction) bumps both constants."""
-    from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
-
+def test_version_constants_identify_current_runtime():
     assert DSL_COMPILER_VERSION == 15
     assert DYNAMIC_RENDERER_VERSION == 14
