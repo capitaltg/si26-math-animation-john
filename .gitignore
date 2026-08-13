@@ -36,6 +36,7 @@ docs/superpowers/
 /eval set/
 /project description.md
 /project_pitch_slides.pptx
+/demo.ps1
 
 # OS
 .DS_Store
