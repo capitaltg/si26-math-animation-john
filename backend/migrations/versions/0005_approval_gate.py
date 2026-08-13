@@ -23,6 +23,7 @@ def upgrade() -> None:
         ["fingerprint_key"],
         unique=True,
         sqlite_where=sa.text("status = 'enabled'"),
+        postgresql_where=sa.text("status = 'enabled'"),
     )
     op.create_index(
         "uq_enabled_version_per_template_name",
@@ -30,6 +31,7 @@ def upgrade() -> None:
         ["template_name"],
         unique=True,
         sqlite_where=sa.text("status = 'enabled'"),
+        postgresql_where=sa.text("status = 'enabled'"),
     )
 
 

@@ -12,11 +12,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-db_path = Path(get_settings().meta_db_path)
-db_path.parent.mkdir(parents=True, exist_ok=True)
-database_url = URL.create("sqlite", database=str(db_path)).render_as_string(
-    hide_password=False
-)
+_settings = get_settings()
+if _settings.database_url:
+    database_url = _settings.database_url
+else:
+    db_path = Path(_settings.meta_db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    database_url = URL.create("sqlite", database=str(db_path)).render_as_string(
+        hide_password=False
+    )
 # ConfigParser treats percent signs as interpolation markers.
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 

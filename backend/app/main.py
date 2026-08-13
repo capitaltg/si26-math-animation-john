@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.middleware import ClientIPMiddleware
+from app.quota import BedrockDisabled, BedrockQuotaExceeded
 from app.routes import router, store
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,32 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.exception_handler(BedrockDisabled)
+    async def _bedrock_disabled(_request, exc: BedrockDisabled):
+        logger.warning("Bedrock call refused by kill switch: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "AI features are temporarily disabled by the operator."},
+        )
+
+    @app.exception_handler(BedrockQuotaExceeded)
+    async def _bedrock_quota(_request, exc: BedrockQuotaExceeded):
+        logger.warning("Bedrock quota exhausted: %s", exc)
+        message = (
+            "The demo has reached its usage quota — please try again later."
+            if exc.scope == "global"
+            else "You've hit the per-user quota for this demo — please try again in an hour."
+        )
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+            content={
+                "detail": message,
+                "scope": exc.scope,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173"],
@@ -48,6 +76,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # ClientIPMiddleware must run BEFORE any code that reads the client-IP
+    # ContextVar. Starlette runs middleware in reverse-add order, so this
+    # add_middleware() call after CORS still lands it outside CORS.
+    app.add_middleware(ClientIPMiddleware)
     app.include_router(router)
     if get_settings().meta_templates_enabled:
         from app.meta.review_api import router as meta_review_router

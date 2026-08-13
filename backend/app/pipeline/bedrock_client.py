@@ -5,6 +5,7 @@ import boto3
 
 from app.config import get_settings
 from app.pipeline.bedrock_mocks import mock_call_with_tool
+from app.quota import enforce_bedrock_quota
 
 #: When set to a truthy value, ``call_with_tool`` short-circuits to a canned
 #: response registry instead of calling Bedrock. Intended for browser-level
@@ -41,6 +42,9 @@ def call_with_tool(
 ) -> tuple[str, dict]:
     if _mock_enabled():
         return mock_call_with_tool(system_prompt, user_message, tools)
+    # Kill switch + L2/L3 quota gate — raises BedrockDisabled or
+    # BedrockQuotaExceeded before we spend an AWS call.
+    enforce_bedrock_quota()
     settings = get_settings()
     client = get_bedrock_client()
     response = client.converse(
