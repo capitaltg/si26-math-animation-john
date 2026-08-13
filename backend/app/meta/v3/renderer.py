@@ -271,6 +271,13 @@ def _build_visual(placed, palette: str):
         raise ValueError(f"unsupported resolved visual {measured.ref}")
 
     _apply_style(root, style)
+    # `_build_coordinate_plane` stashes a list of (mobject, role) pairs the
+    # family-wide `_apply_style` above just clobbered -- vertex letters on
+    # the polygon fill and plotted point labels want a distinct role from
+    # the axes/grid/polygon they share `root` with. Replay them here so
+    # the final colours survive.
+    for mobject, role in getattr(root, "_coordinate_plane_role_overrides", ()):
+        _apply_style(mobject, resolve_semantic_style(palette, role))
     if {"value", "maximum"} <= payload.keys():
         # The bar's `value` is stored in the payload but never influenced how
         # segments render -- every segment landed in the whole-visual style,
@@ -463,7 +470,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
         # would have drawn over it -- keep the tick mark, drop the glyph.
         if tick["label"]:
             label_y = axis_y - tick_gap - (tick["label_height"] / 2) * scale
-            tick_labels.append(_text(tick["label"], "polygon_label", Point(u, label_y), scale))
+            tick_labels.append(_text(tick["label"], "axis_tick", Point(u, label_y), scale))
     for tick in payload["y_ticks"]:
         v = tick["v"] * scale + cy
         tick_mobjects.append(Line(
@@ -472,7 +479,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
         ))
         if tick["label"]:
             label_x = axis_x - tick_gap - (tick["label_width"] / 2) * scale
-            tick_labels.append(_text(tick["label"], "polygon_label", Point(label_x, v), scale))
+            tick_labels.append(_text(tick["label"], "axis_tick", Point(label_x, v), scale))
     children = _parts_as_dots(measured, offset, "point")
     point_labels = []
     for point in payload["points"]:
@@ -541,6 +548,22 @@ def _build_coordinate_plane(measured, placed, palette: str):
         *grid_lines, x_axis, y_axis, *tick_mobjects, *tick_labels,
         *visible_children, *point_labels,
     )
+    # Caller applies the visual's `initial_role` style to `root`, which
+    # `.set_color`-walks the whole family and would paint every glyph the
+    # same colour as the polygon fill -- vertex letters and point labels
+    # would then disappear against the blue polygon they sit on. Attach a
+    # deferred override list so the outer style pass can replay per-glyph
+    # colours AFTER its family walk lands. `focus` (orange) on the vertex
+    # letters and the plotted point labels reads distinct against both the
+    # blue polygon fill and the black scene background.
+    vertex_letters = [
+        child for (part, _index), child in children.items()
+        if part == "polygon_vertex_label"
+    ]
+    root._coordinate_plane_role_overrides = [
+        *((label, "focus") for label in point_labels),
+        *((label, "focus") for label in vertex_letters),
+    ]
     return root, children
 
 
@@ -1247,7 +1270,13 @@ def _build_rotate_animation(action: ResolvedAction, rendered: RenderedScene, pal
         label_key = (ref, "polygon_vertex_label", vertex_index)
         letter = chr(ord("A") + vertex_index)
         new_label = _text(letter + "′" * iteration, "polygon_label", label_point, context.scale)
-        _apply_style(new_label, resolve_semantic_style(palette, rendered.roles[label_key]))
+        # Vertex letters sit on the polygon fill, so they render in the
+        # palette's `focus` role rather than the polygon's own role -- the
+        # initial build applies the same override (see
+        # `_build_coordinate_plane`), so a rotation's rebuilt label must
+        # match or the primed letters would flash to the polygon colour
+        # mid-Transform and become unreadable against the fill.
+        _apply_style(new_label, resolve_semantic_style(palette, "focus"))
         animations.append(Transform(rendered.targets[label_key], new_label))
     return AnimationGroup(*animations)
 

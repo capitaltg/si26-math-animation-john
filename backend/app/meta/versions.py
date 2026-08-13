@@ -127,4 +127,18 @@ DSL_COMPILER_VERSION = 15
 #    payload no longer carries. Point-label bounds and origin-tick bounds
 #    both shift as a result, so a version-12 measurer's report would no
 #    longer describe the version-13 frame.
-DYNAMIC_RENDERER_VERSION = 13
+# 14: `coordinate_plane` tick numbers move to a new `axis_tick` role (20pt)
+#    -- shrunk one step below the 24pt `polygon_label` role vertex letters
+#    and point labels still use. Tick label widths and heights shrink,
+#    which shifts the collision thinning stride and the point-label
+#    quadrant search away from what a version-13 measurer reported. And
+#    plotted point labels and polygon vertex letters (A, B, C, plus their
+#    rotation-primed images) render in the palette's `focus` colour rather
+#    than inheriting the plane's `structure` colour from the family-wide
+#    `_apply_style` walk that the version-13 renderer left them subject
+#    to -- so the coordinate readouts and the letters sitting on the
+#    (`structure`-filled or, at focus stages, `focus`-filled) polygon read
+#    distinct from the polygon fill they overlap. A version-13 preview
+#    therefore no longer describes the version-14 frame in either pixel
+#    geometry or hue.
+DYNAMIC_RENDERER_VERSION = 14

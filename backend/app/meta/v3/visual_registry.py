@@ -1521,7 +1521,7 @@ def _coordinate_tick_payload(tick_values, unit_scale, measurer, *, axis: str):
     if not tick_values:
         return []
     size_index = 2 if axis == "x" else 3
-    measured = [(value, format_number(value), *measurer.measure(format_number(value), "polygon_label"))
+    measured = [(value, format_number(value), *measurer.measure(format_number(value), "axis_tick"))
                 for value in tick_values]
     stride = 1
     while stride < len(measured):
