@@ -136,8 +136,12 @@ export default function DemoShell() {
         const results = {}
         for (const clip of clips) {
           processed.add(clip.scene_id)
-          if (!requested.has(clip.scene_id)) continue
+          // The dock tracks what the server last said about every scene in the
+          // batch, so a clip that comes back fine on a follow-up call corrects
+          // a row an earlier failure had marked failed. Only the notification
+          // is scoped — a corrected row is not news worth a second toast.
           results[clip.scene_id] = clip.clip_url ? 'ok' : 'failed'
+          if (!requested.has(clip.scene_id)) continue
           const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
           const title = scene?.detected_summary || 'Scene'
           if (clip.clip_url) {
@@ -162,20 +166,29 @@ export default function DemoShell() {
       } catch (err) {
         if (!mountedRef.current) return
         pushToast({ title: 'Render error', kind: 'warn', message: err.message })
-        // The dock must not read "finished" over rows that never resolved: the
-        // batch failed as a unit, so every scene still waiting on it failed.
+        // The dock must not read "finished" over rows that never resolved: this
+        // call failed as a unit, so every scene *it carried* failed. Scenes
+        // approved after it went out are untouched — nothing was attempted for
+        // them yet.
         setRenderJob((previous) => (previous
           ? {
             ...previous,
             results: Object.fromEntries(
-              previous.ids.map((id) => [id, previous.results[id] ?? 'failed']),
+              dispatched.map((id) => [id, previous.results[id] ?? 'failed']),
             ),
           }
           : previous))
-        // On failure, clear the whole pendingRenders — the batch failed as a
-        // unit and the user needs to reapprove/retry. Retaining ids would
-        // loop the failing call indefinitely.
-        setPendingRenders(new Set())
+        // Drop only what this call carried, exactly as the success path does.
+        // Clearing the whole set used to strand any scene approved mid-flight:
+        // it was never attempted, yet it vanished from the queue and no
+        // follow-up call was ever made for it. Retaining just those cannot spin
+        // — the next call dispatches them, and if it fails too they are
+        // dispatched ids by then and get dropped here.
+        setPendingRenders(prev => {
+          const next = new Set(prev)
+          for (const id of dispatched) next.delete(id)
+          return next
+        })
       } finally {
         renderInFlight.current = false
       }

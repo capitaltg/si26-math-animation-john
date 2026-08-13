@@ -172,6 +172,37 @@ test('a clip re-returned by a follow-up batch is not announced twice', async () 
   expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(2)
 })
 
+test('a failed call keeps scenes approved mid-flight and makes the follow-up call for them', async () => {
+  const user = userEvent.setup()
+  const gate = deferred()
+  // The first call carries s1 only, and fails.
+  nextRender = () => gate.promise.then(() => json({ detail: 'boom' }, 500))
+  mount()
+  await reachStoryboard(user)
+
+  await user.click(screen.getByText('Scene one'))
+  await user.click(await screen.findByRole('button', { name: /approve & render/i }))
+  await screen.findByRole('region', { name: /render progress/i })
+
+  // s2 is approved while that first call is still out, so nothing has been
+  // attempted for it when the call fails.
+  await user.click(await screen.findByRole('button', { name: /approve all/i }))
+  nextRender = () => json({ clips: [{ scene_id: 's2', status: 'approved', clip_url: '/clips/s2' }] })
+  gate.resolve()
+
+  // The failure must not take s2 down with it: clearing the whole queue used to
+  // strand it — never attempted, gone from the queue, no follow-up call ever.
+  await waitFor(() => expect(renderCalls).toHaveLength(2))
+  expect(renderCalls[1]).toContain('s2')
+
+  const dock = await screen.findByRole('region', { name: /render progress/i })
+  await waitFor(() => expect(dock).toHaveTextContent(/Render finished — 1 failed/i))
+  expect(screen.getByText(/— failed/)).toBeInTheDocument()
+  expect(screen.getByText(/— rendered/)).toBeInTheDocument()
+  // s2's clip is announced; the failed call's error toast is the only other one.
+  expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(1)
+})
+
 test('a failed batch is reported on the dock, not left reading as finished', async () => {
   const user = userEvent.setup()
   nextRender = () => json({ detail: 'boom' }, 500)

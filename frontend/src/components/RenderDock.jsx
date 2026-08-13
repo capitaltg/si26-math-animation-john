@@ -63,8 +63,12 @@ export default function RenderDock() {
   })
 
   const failed = rows.filter((row) => row.state === 'failed').length
+  // Counts what is still outstanding, not the whole batch: once a drain has
+  // landed some clips — or a failed call has resolved part of the job — saying
+  // "Rendering 3 clips" over one remaining scene is just wrong.
+  const outstanding = rows.filter((row) => row.state === 'rendering' || row.state === 'queued').length
   const heading = running
-    ? `Rendering ${rows.length} ${rows.length === 1 ? 'clip' : 'clips'}`
+    ? `Rendering ${outstanding} ${outstanding === 1 ? 'clip' : 'clips'}`
     : failed > 0
       ? `Render finished — ${failed} failed`
       : 'Render finished'

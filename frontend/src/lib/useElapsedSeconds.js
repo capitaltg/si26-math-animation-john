@@ -17,16 +17,27 @@ function secondsSince(startedAt) {
 // stopped, so a finished job keeps showing how long it took.
 export default function useElapsedSeconds(startedAt, running = true) {
   const [seconds, setSeconds] = useState(() => (startedAt == null ? 0 : secondsSince(startedAt)))
+  const [anchor, setAnchor] = useState(startedAt)
+
+  // Re-anchoring is done *during* render, not in an effect. An effect runs after
+  // paint, so a new anchor arriving alongside a new polled figure would paint one
+  // frame of "new figure + previous anchor's offset" — 0:48 flashing before 0:44
+  // — and the caller would see the clock jump forward and then back, which is
+  // the exact jitter this hook exists to remove. Setting state during render of
+  // the same component makes React discard this pass and re-render with the
+  // reset value before anything reaches the screen; it converges because
+  // `anchor` is set to `startedAt` here.
+  if (anchor !== startedAt) {
+    setAnchor(startedAt)
+    setSeconds(startedAt == null ? 0 : secondsSince(startedAt))
+  }
+
   useEffect(() => {
-    if (startedAt == null) {
-      setSeconds(0)
-      return undefined
-    }
-    setSeconds(secondsSince(startedAt))
-    if (!running) return undefined
+    if (startedAt == null || !running) return undefined
     const timer = setInterval(() => setSeconds(secondsSince(startedAt)), 1000)
     return () => clearInterval(timer)
   }, [startedAt, running])
+
   return seconds
 }
 
