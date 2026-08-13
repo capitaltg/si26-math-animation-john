@@ -313,10 +313,11 @@ def test_get_dynamic_template_rejects_a_tampered_hash_after_cache_is_populated(s
 
 
 def test_published_v3_template_resolves_layout_for_each_params_set(session):
-    """Task 11's reuse test: the same published template, resolved against two
-    different digit widths, must still produce a correctly item-specific anchor
-    (values.item[3].bottom) for its median callout -- layout is never cached or
-    baked in at publish time, it is resolved fresh for every params set."""
+    """Published layout resolves afresh for each params set.
+
+    Different digit widths must still produce the item-specific
+    ``values.item[3].bottom`` anchor; layout is never baked in at publication.
+    """
     from app.meta.dynamic_scene import resolve_dynamic_scene
     from app.meta.dynamic_templates import get_dynamic_template, resolve_dynamic_ref
 

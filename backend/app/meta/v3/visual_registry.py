@@ -107,9 +107,9 @@ def _polygon_signed_area_doubled(vertices):
 def _polygon_self_intersects(vertices):
     """Return True iff `vertices` (in edge order) produces crossing edges.
 
-    Used both by the measurer (to reject a bowtie ordering at plan-validation
-    time) and by the compiler (Task 4), which imports this directly to check
-    the polygon's post-rotation image without re-measuring the whole plane.
+    The measurer rejects bowtie ordering during plan validation; the compiler
+    imports this directly to check post-rotation geometry without re-measuring
+    the whole plane.
     """
     n = len(vertices)
     edges = [(vertices[i], vertices[(i + 1) % n]) for i in range(n)]

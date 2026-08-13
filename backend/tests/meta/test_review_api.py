@@ -668,8 +668,7 @@ def test_update_fixture_reordered_or_reformatted_params_count_as_unchanged(clien
 
 
 def test_update_fixture_changed_params_still_invalidates_approval_evidence(client, pending_v3_draft):
-    """The narrowed invalidation must keep Task 10's fail-closed behavior
-    exactly for an actual params change (not just widen it to never fire)."""
+    """An actual params change invalidates approval evidence fail-closed."""
     draft_id = pending_v3_draft.id
     fixture = client.get(f"/meta/drafts/{draft_id}").json()["fixtures"][0]
 
