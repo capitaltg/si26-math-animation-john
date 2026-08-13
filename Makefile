@@ -28,17 +28,20 @@ up: env  ## start the production stack (HTTP :80)
 	$(COMPOSE_BASE) up -d
 	@echo "→ http://localhost"
 
+# Tear-down order matters: overlays first so no service holds the shared
+# network open. `--remove-orphans` covers profile-gated services (meta-worker,
+# frontend-dev, caddy) that the base command wouldn't see.
 .PHONY: down
 down:  ## stop the stack (keep volumes)
-	$(COMPOSE_BASE) down
-	-$(COMPOSE_DEV) down
-	-$(COMPOSE_TLS) down
+	-$(COMPOSE_TLS) down --remove-orphans
+	-$(COMPOSE_DEV) down --remove-orphans
+	$(COMPOSE_BASE) down --remove-orphans
 
 .PHONY: nuke
 nuke:  ## stop the stack AND delete volumes (Postgres, Redis, media)
-	$(COMPOSE_BASE) down -v
-	-$(COMPOSE_DEV) down -v
-	-$(COMPOSE_TLS) down -v
+	-$(COMPOSE_TLS) down -v --remove-orphans
+	-$(COMPOSE_DEV) down -v --remove-orphans
+	$(COMPOSE_BASE) down -v --remove-orphans
 
 .PHONY: logs
 logs:  ## tail logs from all services
@@ -48,9 +51,12 @@ logs:  ## tail logs from all services
 ps:  ## show container status
 	$(COMPOSE_BASE) ps
 
+# `restart` alone does NOT reread .env (env is baked into the container at
+# create time). Use up -d --force-recreate so the kill switch and any other
+# env change actually take effect.
 .PHONY: restart
-restart:  ## restart backend + nginx (picks up .env changes)
-	$(COMPOSE_BASE) restart backend nginx
+restart:  ## recreate backend + nginx so .env changes (kill switch, caps) take effect
+	$(COMPOSE_BASE) up -d --force-recreate --no-deps backend nginx
 
 # --- dev ---------------------------------------------------------------------
 
@@ -71,7 +77,7 @@ dev-logs:  ## tail dev logs
 
 .PHONY: dev-down
 dev-down:  ## stop dev stack
-	$(COMPOSE_DEV) down
+	$(COMPOSE_DEV) down --remove-orphans
 
 # --- tls ---------------------------------------------------------------------
 
@@ -106,22 +112,36 @@ backup:  ## dump Postgres to demo-YYYY-MM-DD.sql.gz in the current directory
 
 # --- ci ---------------------------------------------------------------------
 
+# `set -e` + trap: if any curl/health step fails the trap fires `down` so a
+# broken run does not leave the stack half-up.
 .PHONY: smoke
-smoke: env  ## bring up prod, hit /healthz, tear down
-	$(COMPOSE_BASE) up -d
-	@echo "waiting for backend to become healthy..."
-	@for i in $$(seq 1 60); do \
+smoke: env  ## bring up prod, hit /healthz, tear down (always)
+	@set -e; \
+	trap '$(COMPOSE_BASE) down --remove-orphans' EXIT; \
+	$(COMPOSE_BASE) up -d; \
+	echo "waiting for backend to become healthy..."; \
+	for i in $$(seq 1 60); do \
 	  s=$$($(COMPOSE_BASE) ps --format json backend 2>/dev/null | grep -o '"Health":"healthy"' || true); \
 	  if [ -n "$$s" ]; then echo "healthy"; break; fi; \
 	  sleep 2; \
-	done
-	@curl -fsS http://localhost/healthz && echo
-	$(COMPOSE_BASE) down
+	done; \
+	curl -fsS http://localhost/healthz && echo
 
+# lint-compose must NOT mutate the operator's .env. Docker compose needs an
+# .env file to exist because services declare `env_file: .env`; we work in a
+# temp directory whose only role is to hold an empty .env, and inject the
+# required substitution values via the shell environment (compose reads
+# shell env BEFORE .env, so the empty file is fine).
 .PHONY: lint-compose
-lint-compose: env  ## validate every compose overlay
-	$(COMPOSE_BASE) config --quiet
-	$(COMPOSE_DEV)  config --quiet
-	@grep -q '^DOMAIN=' .env || echo "DOMAIN=example.com" >> .env
-	@grep -q '^TLS_EMAIL=' .env || echo "TLS_EMAIL=demo@example.com" >> .env
-	$(COMPOSE_TLS)  config --quiet
+lint-compose:  ## validate every compose overlay (no side effects on .env)
+	@set -e; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf $$tmp' EXIT; \
+	touch $$tmp/.env; \
+	env_vars="POSTGRES_PASSWORD=ci_dummy DOMAIN=demo.example.com TLS_EMAIL=demo@example.com"; \
+	for files in "-f $(PWD)/docker-compose.yml" \
+	             "-f $(PWD)/docker-compose.yml -f $(PWD)/docker-compose.dev.yml" \
+	             "-f $(PWD)/docker-compose.yml -f $(PWD)/docker-compose.tls.yml"; do \
+	  (cd $$tmp && env $$env_vars docker compose $$files config --quiet) || exit 1; \
+	done; \
+	echo "base + dev + tls: OK"

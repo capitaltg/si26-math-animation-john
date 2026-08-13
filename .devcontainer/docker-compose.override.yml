@@ -1,0 +1,18 @@
+# Devcontainer-only overrides layered on top of docker-compose.yml +
+# docker-compose.dev.yml. Adds:
+#   * repo-root mount at /workspace so .vscode/tasks.json, the Makefile,
+#     README, docs/ are all visible inside the container — not just the
+#     backend/ subtree that Dockerfile.backend copies to /app/backend.
+#   * host Docker socket mount so `make dev` / `make down` from inside
+#     the devcontainer drive the host's daemon (Docker-outside-of-Docker).
+#
+# The workspace path matches devcontainer.json's `workspaceFolder`.
+
+services:
+  backend:
+    volumes:
+      # Whole repo — read/write so Makefile, tasks.json, code all edit in place.
+      - ..:/workspace:cached
+      # Host Docker socket for compose commands from inside the container.
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace

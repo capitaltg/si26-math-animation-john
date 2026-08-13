@@ -120,8 +120,8 @@ table is a summary.
 | `AWS_SESSION_TOKEN` | – | Set if using temporary creds. |
 | `BEDROCK_MODEL_ID` | `global.anthropic.claude-sonnet-4-6` | Bedrock model id. |
 | `BEDROCK_DISABLED` | `0` | Kill switch — see [Kill switch](#kill-switch). |
-| `BEDROCK_DAILY_CALL_CAP` | `0` (off) | Global calls per UTC day allowed. `0` disables L3. |
-| `BEDROCK_PER_IP_HOURLY_CAP` | `0` (off) | Per-client-IP calls per hour. `0` disables L2. |
+| `BEDROCK_DAILY_CALL_CAP` | shipped: `2000` (code default: `0` = off) | Global calls per UTC day allowed. Set to `0` to disable L3. |
+| `BEDROCK_PER_IP_HOURLY_CAP` | shipped: `40` (code default: `0` = off) | Per-client-IP calls per hour. Set to `0` to disable L2. |
 | `META_TEMPLATES_ENABLED` | `false` | Enable the meta-template teacher API. |
 | `META_CODEGEN_ENABLED` | `false` | Enable the meta-template code generator (needed for `meta-worker`). |
 | `META_APPROVAL_ENABLED` | `false` | Enable the meta-template approval gate. |
@@ -177,12 +177,18 @@ To stop all Bedrock calls immediately:
 
 ```bash
 # edit .env and set BEDROCK_DISABLED=1
-docker compose restart backend
-# (only include meta-worker in the restart if META_CODEGEN_ENABLED=true)
+make restart
+# (or: docker compose up -d --force-recreate --no-deps backend nginx)
 ```
 
-Every Bedrock call will now return `503 AI features are temporarily disabled`.
-Flip it back to `0` and restart to resume.
+**Important**: `docker compose restart` does NOT reread `.env` — env is baked
+into the container at *create* time, so a plain restart leaves the old kill
+switch value active. `make restart` recreates the affected containers via
+`up -d --force-recreate` so the new env takes effect. Same applies to any
+change to `BEDROCK_*`, `MEDIA_*`, `CORS_*`, etc.
+
+Once recreated, every Bedrock call returns `503 AI features are temporarily
+disabled`. Flip `BEDROCK_DISABLED=0` and `make restart` to resume.
 
 ---
 
@@ -198,8 +204,9 @@ docker compose logs -f                        # everything
 ### Restart just one service
 
 ```bash
-docker compose restart backend
-docker compose restart nginx
+docker compose restart backend    # only picks up code changes bind-mounted in;
+                                  # does NOT reread .env
+docker compose up -d --force-recreate --no-deps backend   # to reread .env
 ```
 
 ### Redeploy after a code change

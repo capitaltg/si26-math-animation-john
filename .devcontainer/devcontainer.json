@@ -2,10 +2,11 @@
   "name": "si26-math-animation",
   "dockerComposeFile": [
     "../docker-compose.yml",
-    "../docker-compose.dev.yml"
+    "../docker-compose.dev.yml",
+    "docker-compose.override.yml"
   ],
   "service": "backend",
-  "workspaceFolder": "/app",
+  "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
 
   // Bring up the whole dev stack so postgres/redis are available inside the
@@ -15,13 +16,23 @@
   "forwardPorts": [5173, 8000],
   "portsAttributes": {
     "5173": { "label": "Frontend (Vite dev)", "onAutoForward": "openPreview" },
-    "8000": { "label": "Backend (FastAPI)",  "onAutoForward": "silent" }
+    "8000": { "label": "Backend (FastAPI)",   "onAutoForward": "silent" }
   },
 
-  // Devcontainer inherits Dockerfile.backend's HEALTHCHECK, which is fine
-  // for the attached service. Give it a moment before showing shell.
   "postAttachCommand": {
     "hint": "echo 'Dev stack up. Try: make help  |  make dev  |  make frontend  |  make down'"
+  },
+
+  // Docker-outside-of-Docker so `make` targets that shell out to
+  // `docker compose ...` work from inside the devcontainer — the host
+  // socket is mounted (see docker-compose.override.yml), and this feature
+  // installs the CLI + Compose plugin.
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": true,
+      "installDockerBuildx": true,
+      "installDockerComposeSwitch": true
+    }
   },
 
   "customizations": {
@@ -40,9 +51,5 @@
         "ms-azuretools.vscode-docker"
       ]
     }
-  },
-
-  // Point VS Code / Cursor tasks at the Makefile so Command Palette →
-  // "Tasks: Run Task" → dev / frontend / down works without leaving the IDE.
-  "features": {}
+  }
 }
