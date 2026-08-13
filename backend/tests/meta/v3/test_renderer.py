@@ -150,6 +150,62 @@ def test_set_role_transitions_every_resolved_target(resolved_median_scene):
     assert {rendered.roles[target] for target in expected_targets} == {"focus"}
 
 
+def test_short_stagger_reveal_builds_one_animation_per_item():
+    """`AnimationGroup.lag_ratio` staggers between its sub-animations, not
+    inside a single grouped one, so a `mode="stagger"` reveal that names the
+    whole-collection VGroup has to expand into per-item animations. Otherwise
+    the reveal degrades to one `FadeIn` on the group and every value pops in
+    together despite the positive `stagger_seconds`.
+    """
+    from app.meta.v3.renderer import _action_animation
+
+    plan = TeachingPlanDocument.model_validate({
+        "plan_version": 3,
+        "learning_objective": "Identify the middle value in an ordered odd-sized set.",
+        "primary_visual": {
+            "kind": "ordered_values",
+            "ref": "values",
+            "values": [{"node": "field_ref", "field": f"v{index}"} for index in range(1, 8)],
+        },
+        "strategy": "short_stagger",
+        "beats": [
+            {"id": "reveal_values", "kind": "reveal", "targets": [{"visual_ref": "values"}],
+             "intent": "reveal the ordered values one after another"},
+            {"id": "focus_middle", "kind": "focus",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "identify the unpaired middle value"},
+            {"id": "show_answer", "kind": "conclude",
+             "targets": [{"visual_ref": "values", "part": "item", "index": 3}],
+             "intent": "state the median"},
+        ],
+        "variation_seed": "renderer-short-stagger",
+    })
+    program = compile_teaching_plan(
+        plan,
+        FieldRefNode(field="v4"),
+        frozenset({f"v{index}" for index in range(1, 8)}),
+        CompileContext(concept_family="measurement", grade_band="3-5"),
+    )
+    resolved = resolve_scene(
+        program,
+        {f"v{index}": index for index in range(1, 8)},
+        LiteralTextMeasurer(),
+    )
+    rendered = _build_vertical_lesson(resolved, "ocean")
+    reveal = next(
+        action for action in resolved.timeline
+        if action.action.kind == "reveal" and action.action.mode == "stagger"
+    )
+
+    animation = _action_animation(reveal, rendered, _reveal, "ocean")
+
+    assert len(animation.animations) == 7
+    assert animation.lag_ratio == reveal.action.stagger_seconds
+    assert animation.lag_ratio > 0
+    revealed_mobjects = [sub.mobject for sub in animation.animations]
+    assert revealed_mobjects == list(rendered.targets[("values", None, None)].submobjects)
+
+
 def test_coincident_non_reveal_actions_share_timeline_duration(resolved_median_scene):
     focus = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.action.role == "focus")
     constraint = next(action for action in resolved_median_scene.timeline if action.action.kind == "set_role" and action.targets[0].ref.index == 0)

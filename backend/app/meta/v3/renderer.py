@@ -1152,14 +1152,25 @@ def _play_action(scene, action: ResolvedAction, rendered: RenderedScene, motion,
 def _action_animation(action: ResolvedAction, rendered: RenderedScene, motion, palette: str):
     kind = action.action.kind
     if kind == "reveal":
-        anims = tuple(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
         # `mode="stagger"` fades items in with a small per-item delay bounded by
         # `MAX_SIMPLE_STAGGER_SECONDS`. Manim's `AnimationGroup.lag_ratio` is a
         # fraction of the previous animation's runtime; the ceiling is
         # sub-second while a per-item reveal runs ~1s, so the seconds value
         # doubles as a small, correctly-signed lag ratio.
-        lag_ratio = action.action.stagger_seconds if action.action.mode == "stagger" else 0.0
-        return AnimationGroup(*anims, lag_ratio=lag_ratio)
+        #
+        # A whole-collection reveal names one target -- the group's `VGroup` --
+        # so passing that single group to `AnimationGroup` leaves `lag_ratio`
+        # with nothing to stagger and every item fades in at once. Expand each
+        # group target into its submobjects so the stagger actually plays.
+        if action.action.mode == "stagger":
+            items = []
+            for target in action.targets:
+                mobject = _target_mobject(rendered, target.ref)
+                items.extend(mobject.submobjects if mobject.submobjects else [mobject])
+            anims = tuple(motion(item) for item in items)
+            return AnimationGroup(*anims, lag_ratio=action.action.stagger_seconds)
+        anims = tuple(motion(_target_mobject(rendered, target.ref)) for target in action.targets)
+        return AnimationGroup(*anims, lag_ratio=0.0)
     if kind == "trace":
         path = _path_mobject(action.path)
         _apply_style(path, resolve_semantic_style(palette, "focus"))

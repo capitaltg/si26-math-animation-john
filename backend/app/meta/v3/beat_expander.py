@@ -383,15 +383,15 @@ class BeatExpander:
         revealed.update(self._target_key(target) for target in pending)
         if mode is None:
             mode = "stagger" if plan.strategy == "short_stagger" else "together"
-        # A `mode="stagger"` reveal with a zero item gap renders identically to
-        # `together`. The plan schema exposes the gap as an optional field, so
-        # fall back to the Global Constraint's ceiling when the caller picked
-        # the strategy but did not name a value -- the renderer needs a
-        # positive `lag_ratio` for the stagger to be visible.
+        # Strategy-driven callers (`beat.kind == "reveal"` on a `short_stagger`
+        # plan) pass no `stagger_seconds` and get the Global Constraint's
+        # ceiling, so the renderer has a positive `lag_ratio` to play. A custom
+        # `RevealRequest` supplies its own field value verbatim -- including
+        # `0.0`, which the schema explicitly allows -- so an author who asks
+        # for a synchronous reveal is not silently upgraded to a staggered one.
         if mode == "stagger":
             resolved_stagger = (
-                stagger_seconds if stagger_seconds is not None and stagger_seconds > 0
-                else MAX_SIMPLE_STAGGER_SECONDS
+                MAX_SIMPLE_STAGGER_SECONDS if stagger_seconds is None else stagger_seconds
             )
         else:
             resolved_stagger = 0.0
