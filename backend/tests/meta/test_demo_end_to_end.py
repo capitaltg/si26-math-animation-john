@@ -21,6 +21,7 @@ mapped onto the fields those acceptance contracts read.
 
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -663,14 +664,21 @@ def _run_demo_lesson(client: TestClient, lesson: DemoLesson, tmp_path: Path) -> 
     )
 
 
-def _build_demo_client_context(tmp_path: Path):
-    """Yield a `TestClient` wired for the demo runbook; restore env on exit.
+@contextmanager
+def _demo_env_and_client(tmp_path: Path):
+    """Set demo-runbook env + patch the engine long enough to run one lesson,
+    then restore both -- so the env mutations required at import time in the
+    subprocesses that ``_run_demo_lesson`` spawns never survive past the
+    fixture that requested them.
 
-    Usable at any pytest scope: the `client` fixture wraps this for
-    per-test isolation, while `_shared_demo_client` reuses it once per
-    session so the median + perimeter runbook renders (`rendered_median`,
-    `rendered_perimeter`) don't repeat across parametrised runbook tests
-    and `test_v3_demo_quality.py`.
+    The session-scoped `rendered_median` / `rendered_perimeter` fixtures each
+    enter this once, `_run_demo_lesson` executes inside the with-block (its
+    render subprocesses inherit the env), and the `finally` restores the
+    original env + `db.get_engine` before yielding. Any later test in the
+    session sees the process's original env, not the demo overrides -- which
+    previously broke `test_meta_settings_defaults` and
+    `test_approve_disabled_returns_409_before_checking_preconditions` when
+    `META_APPROVAL_ENABLED=1` leaked in as an ambient env var.
     """
     saved_env: dict[str, str | None] = {}
 
@@ -716,26 +724,24 @@ def _build_demo_client_context(tmp_path: Path):
 
 
 @pytest.fixture(scope="session")
-def _shared_demo_client(tmp_path_factory):
-    """One `TestClient` + demo env for the whole session, so the median and
-    perimeter runbook renders (each ~a real MP4 + probe render) run once
-    instead of once per parametrised runbook test AND once per
-    `test_v3_demo_quality.py` assertion. See :func:`_build_demo_client_context`.
+def rendered_median(tmp_path_factory):
+    """Run the median runbook once per session. Env + engine mutations live
+    only inside the with-block, so the returned `DemoRenderResult` is safe to
+    hand to any later test without pytest also handing them a polluted env.
     """
-    tmp_path = tmp_path_factory.mktemp("demo-runbook-session")
-    yield from _build_demo_client_context(tmp_path)
+    demo_tmp = tmp_path_factory.mktemp("demo-runbook-median")
+    lesson_tmp = tmp_path_factory.mktemp("rendered-median")
+    with _demo_env_and_client(demo_tmp) as client:
+        return _run_demo_lesson(client, MEDIAN_LESSON, lesson_tmp)
 
 
 @pytest.fixture(scope="session")
-def rendered_median(_shared_demo_client, tmp_path_factory):
-    tmp_path = tmp_path_factory.mktemp("rendered-median")
-    return _run_demo_lesson(_shared_demo_client, MEDIAN_LESSON, tmp_path)
-
-
-@pytest.fixture(scope="session")
-def rendered_perimeter(_shared_demo_client, tmp_path_factory):
-    tmp_path = tmp_path_factory.mktemp("rendered-perimeter")
-    return _run_demo_lesson(_shared_demo_client, PERIMETER_LESSON, tmp_path)
+def rendered_perimeter(tmp_path_factory):
+    """Run the perimeter runbook once per session. See `rendered_median`."""
+    demo_tmp = tmp_path_factory.mktemp("demo-runbook-perimeter")
+    lesson_tmp = tmp_path_factory.mktemp("rendered-perimeter")
+    with _demo_env_and_client(demo_tmp) as client:
+        return _run_demo_lesson(client, PERIMETER_LESSON, lesson_tmp)
 
 
 @pytest.fixture
