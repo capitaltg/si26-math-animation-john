@@ -383,10 +383,43 @@ def test_0008_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
     get_settings.cache_clear()
     cfg = _alembic_config(url)
     try:
-        command.upgrade(cfg, "head")
+        # Pinned to 0008 rather than head for the same reason 0006's test is:
+        # 0009 is now head and its own guard would raise first.
+        command.upgrade(cfg, "0008_owner_scoped_active_job")
         with pytest.raises(
             RuntimeError, match="0008_owner_scoped_active_job is intentionally irreversible"
         ):
             command.downgrade(cfg, "0007_template_ownership")
+    finally:
+        get_settings.cache_clear()
+
+
+def test_0009_declares_a_fixture_id_wide_enough_for_the_derived_id(tmp_path: Path, monkeypatch):
+    """Guards the ORM declaration, which is what 0009 brings the DB in line with.
+
+    ``drafts.py`` derives fixture ids as f"{draft_id}-fixture-{index}" -- 42
+    chars for a 32-char draft id. This asserts against ``Base.metadata`` rather
+    than a migrated database on purpose: the migration harness here is
+    SQLite-only, SQLite does not enforce VARCHAR lengths, and 0009 is therefore
+    a deliberate no-op on it. Only Postgres rejected the long id, so a
+    SQLite-backed schema assertion could not fail either way.
+    """
+    del tmp_path, monkeypatch
+    fixture_id = f"{'c108d4a6193f4a8c87b0a0da35cd236e'}-fixture-0"
+    declared = Base.metadata.tables["template_draft_fixtures"].columns["id"].type.length
+    assert len(fixture_id) == 42
+    assert declared >= len(fixture_id)
+
+
+def test_0009_downgrade_is_explicitly_irreversible(tmp_path: Path, monkeypatch):
+    db_file = tmp_path / "fixture-id-downgrade" / "meta.db"
+    url = f"sqlite:///{db_file}"
+    monkeypatch.setenv("META_DB_PATH", str(db_file))
+    get_settings.cache_clear()
+    cfg = _alembic_config(url)
+    try:
+        command.upgrade(cfg, "head")
+        with pytest.raises(RuntimeError, match="0009_widen_fixture_id is intentionally irreversible"):
+            command.downgrade(cfg, "0008_owner_scoped_active_job")
     finally:
         get_settings.cache_clear()
