@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.middleware import ClientIPMiddleware
-from app.quota import BedrockDisabled, BedrockQuotaExceeded
+from app.quota import BedrockDisabled, BedrockGuardUnavailable, BedrockQuotaExceeded
 from app.routes import router, store
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=503,
             content={"detail": "AI features are temporarily disabled by the operator."},
+        )
+
+    @app.exception_handler(BedrockGuardUnavailable)
+    async def _bedrock_guard_unavailable(_request, exc: BedrockGuardUnavailable):
+        # Fail-closed: rate-limit backend down while caps are configured. We
+        # refuse the call rather than let it hit AWS unmetered.
+        logger.error("Bedrock rate-limit backend unreachable: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "AI features are temporarily unavailable — please retry shortly."},
         )
 
     @app.exception_handler(BedrockQuotaExceeded)

@@ -14,15 +14,25 @@ every call regardless of Redis state.
 The client IP is threaded from the request layer through a `ContextVar` so
 that background tasks and worker jobs — which invoke Bedrock outside a
 request scope — count against the global budget without needing an IP.
+
+Order matters: L2 (per-IP) is checked and incremented BEFORE L3 (global) so
+that a caller rejected by their per-IP quota does not also consume from the
+global daily budget.
+
+Fail-closed policy: when any cap is configured (> 0) and Redis is unreachable,
+`enforce_bedrock_quota` raises `BedrockGuardUnavailable`. Silently letting
+calls through when the guard is down would defeat the whole point in
+production. Local dev / tests configure both caps to 0 (the default), which
+keeps behavior fail-open.
 """
 
 from __future__ import annotations
 
 import contextvars
 import logging
+import threading
 import time
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Optional
 
 from app.config import get_settings
@@ -37,6 +47,10 @@ client_ip_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 class BedrockDisabled(RuntimeError):
     """Master kill switch is on."""
+
+
+class BedrockGuardUnavailable(RuntimeError):
+    """Redis-backed guard cannot reach Redis and a cap is configured."""
 
 
 @dataclass
@@ -54,27 +68,42 @@ class BedrockQuotaExceeded(RuntimeError):
         )
 
 
-@lru_cache
+# Redis client cache with a retry-on-failure lifecycle. Unlike lru_cache we
+# never lock in a `None` result: a transient Redis outage during boot must not
+# permanently disable both cost guards until the process is restarted.
+_redis_lock = threading.Lock()
+_redis_state: dict = {"url": None, "client": None}
+
+
 def _redis_client():
     settings = get_settings()
     if not settings.redis_url:
         return None
-    try:
-        import redis  # imported lazily so local dev without the wheel still works
+    with _redis_lock:
+        # Rebuild if the URL changed (mainly a test-time concern).
+        if _redis_state["url"] != settings.redis_url:
+            _redis_state.update(url=settings.redis_url, client=None)
+        if _redis_state["client"] is not None:
+            return _redis_state["client"]
+        try:
+            import redis  # imported lazily so local dev without the wheel still works
 
-        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
-        client.ping()
-        return client
-    except Exception:
-        logger.exception("Redis unavailable; Bedrock rate limits disabled")
-        return None
+            client = redis.Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_timeout=2
+            )
+            client.ping()
+            _redis_state["client"] = client
+            return client
+        except Exception:
+            logger.exception("Redis unavailable; will retry on next check")
+            return None
 
 
-def _incr_with_ttl(key: str, ttl_seconds: int) -> int:
-    """Atomic INCR + EXPIRE. Returns new counter value, or 0 if Redis is off."""
+def _incr_with_ttl(key: str, ttl_seconds: int) -> Optional[int]:
+    """Atomic INCR + EXPIRE. Returns new counter value, or None if Redis is down."""
     client = _redis_client()
     if client is None:
-        return 0
+        return None
     try:
         pipe = client.pipeline()
         pipe.incr(key, 1)
@@ -82,8 +111,10 @@ def _incr_with_ttl(key: str, ttl_seconds: int) -> int:
         count, _ = pipe.execute()
         return int(count)
     except Exception:
-        logger.exception("Redis INCR failed for %s; skipping guard", key)
-        return 0
+        logger.exception("Redis INCR failed for %s", key)
+        with _redis_lock:
+            _redis_state["client"] = None  # force reconnect on next attempt
+        return None
 
 
 def _seconds_until_utc_day_end() -> int:
@@ -108,28 +139,46 @@ def enforce_bedrock_quota() -> None:
     if settings.bedrock_disabled:
         raise BedrockDisabled("Bedrock calls are administratively disabled")
 
-    # L3 — global daily cap.
-    if settings.bedrock_daily_call_cap > 0:
-        day_bucket = time.strftime("%Y-%m-%d", time.gmtime())
-        key = f"bedrock:global:{day_bucket}"
-        count = _incr_with_ttl(key, _seconds_until_utc_day_end() + 60)
-        if count and count > settings.bedrock_daily_call_cap:
-            raise BedrockQuotaExceeded(
-                scope="global",
-                limit=settings.bedrock_daily_call_cap,
-                retry_after_seconds=_seconds_until_utc_day_end(),
-            )
+    ip_cap = settings.bedrock_per_ip_hourly_cap
+    global_cap = settings.bedrock_daily_call_cap
+    any_cap_configured = ip_cap > 0 or global_cap > 0
 
-    # L2 — per-IP hourly cap. Only enforced when the request layer supplied an IP.
-    if settings.bedrock_per_ip_hourly_cap > 0:
+    # L2 — per-IP hourly cap. Runs FIRST so an IP-rejected call does not
+    # consume the global bucket. Only enforced when the request layer supplied
+    # an IP (background workers count only against the global cap).
+    if ip_cap > 0:
         ip = client_ip_var.get()
         if ip:
             hour_bucket = time.strftime("%Y-%m-%dT%H", time.gmtime())
             key = f"bedrock:ip:{ip}:{hour_bucket}"
             count = _incr_with_ttl(key, _seconds_until_hour_end() + 60)
-            if count and count > settings.bedrock_per_ip_hourly_cap:
+            if count is None:
+                raise BedrockGuardUnavailable(
+                    "Rate-limit backend unreachable; refusing Bedrock call"
+                )
+            if count > ip_cap:
                 raise BedrockQuotaExceeded(
                     scope="ip",
-                    limit=settings.bedrock_per_ip_hourly_cap,
+                    limit=ip_cap,
                     retry_after_seconds=_seconds_until_hour_end(),
                 )
+
+    # L3 — global daily cap. Runs AFTER L2 so per-IP rejects don't burn budget.
+    if global_cap > 0:
+        day_bucket = time.strftime("%Y-%m-%d", time.gmtime())
+        key = f"bedrock:global:{day_bucket}"
+        count = _incr_with_ttl(key, _seconds_until_utc_day_end() + 60)
+        if count is None:
+            raise BedrockGuardUnavailable(
+                "Rate-limit backend unreachable; refusing Bedrock call"
+            )
+        if count > global_cap:
+            raise BedrockQuotaExceeded(
+                scope="global",
+                limit=global_cap,
+                retry_after_seconds=_seconds_until_utc_day_end(),
+            )
+
+    # Any-cap sentinel: if the operator set neither cap, the guard is entirely
+    # opt-out and we don't need Redis. That's fine — nothing else to do.
+    _ = any_cap_configured
