@@ -83,7 +83,7 @@ export default function Landing() {
         ) : (
           <video
             ref={videoRef}
-            src="/media/perimeter.mp4"
+            src="/samples/triangle-rotation.mp4"
             controls
             loop
             muted
@@ -96,8 +96,9 @@ export default function Landing() {
           />
         )}
         <p className="landing__sample-caption">
-          One clip, one problem, ~10 seconds. Every number on screen was computed in
-          Python before Manim drew it.
+          Rotating triangle ABC about the origin — one clip, one problem, ~10 seconds.
+          Every number on screen, down to the 3 × 90 = 270, was computed in Python
+          before Manim drew it.
         </p>
       </section>
 
