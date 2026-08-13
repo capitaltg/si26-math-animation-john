@@ -203,6 +203,37 @@ test('a failed call keeps scenes approved mid-flight and makes the follow-up cal
   expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(1)
 })
 
+// The mirror of the test above: that one fails first and succeeds second, so it
+// cannot see a later failure erasing an earlier success.
+test('a failed follow-up call leaves an already-rendered clip reported as rendered', async () => {
+  const user = userEvent.setup()
+  const gate = deferred()
+  // The first call carries s1 only, and succeeds.
+  nextRender = () => gate.promise.then(() => json({
+    clips: [{ scene_id: 's1', status: 'approved', clip_url: '/clips/s1' }],
+  }))
+  mount()
+  await reachStoryboard(user)
+
+  await user.click(screen.getByText('Scene one'))
+  await user.click(await screen.findByRole('button', { name: /approve & render/i }))
+  await screen.findByRole('region', { name: /render progress/i })
+
+  // s2 joins the queue mid-flight, so it is the follow-up call's whole payload.
+  await user.click(await screen.findByRole('button', { name: /approve all/i }))
+  nextRender = () => json({ detail: 'boom' }, 500)
+  gate.resolve()
+
+  await waitFor(() => expect(renderCalls).toHaveLength(2))
+  const dock = await screen.findByRole('region', { name: /render progress/i })
+  await waitFor(() => expect(dock).toHaveTextContent(/Render finished — 1 failed/i))
+  // s1 rendered and was announced; the failure of s2 must not demote its row.
+  expect(screen.getByText(/— rendered/)).toBeInTheDocument()
+  expect(screen.getByText(/— failed/)).toBeInTheDocument()
+  expect(screen.queryByText(/— queued/)).not.toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(1)
+})
+
 test('a failed batch is reported on the dock, not left reading as finished', async () => {
   const user = userEvent.setup()
   nextRender = () => json({ detail: 'boom' }, 500)

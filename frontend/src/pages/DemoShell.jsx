@@ -170,14 +170,20 @@ export default function DemoShell() {
         // call failed as a unit, so every scene *it carried* failed. Scenes
         // approved after it went out are untouched — nothing was attempted for
         // them yet.
-        setRenderJob((previous) => (previous
-          ? {
-            ...previous,
-            results: Object.fromEntries(
-              dispatched.map((id) => [id, previous.results[id] ?? 'failed']),
-            ),
-          }
-          : previous))
+        setRenderJob((previous) => {
+          if (!previous) return previous
+          // Merged, never rebuilt: a rebuild from `dispatched` alone erased the
+          // verdict on every scene this call did not carry, so a clip that had
+          // already rendered on an earlier call lost its result and its finished
+          // row fell back to "queued". Only ids with no verdict yet are failed —
+          // a scene that already rendered keeps that.
+          const failures = Object.fromEntries(
+            dispatched
+              .filter((id) => previous.results[id] === undefined)
+              .map((id) => [id, 'failed']),
+          )
+          return { ...previous, results: { ...previous.results, ...failures } }
+        })
         // Drop only what this call carried, exactly as the success path does.
         // Clearing the whole set used to strand any scene approved mid-flight:
         // it was never attempted, yet it vanished from the queue and no
