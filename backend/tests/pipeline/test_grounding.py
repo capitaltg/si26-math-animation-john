@@ -189,11 +189,6 @@ def test_duplicate_param_token_requires_duplicate_source_occurrence():
     ) == ["3"]
 
 
-# ---------------------------------------------------------------------------
-# Multiset + occurrence-binding coverage (spec 2026-08-06)
-# ---------------------------------------------------------------------------
-
-
 def test_two_source_occurrences_allow_two_duplicate_params():
     from app.pipeline.grounding import check_params_grounded
 

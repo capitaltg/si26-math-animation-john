@@ -476,20 +476,11 @@ def test_missing_expected_result_not_counted_raises_precondition(engine, session
 def test_unconfirmed_structural_check_not_counted_raises_precondition(
     engine, session, structural_state
 ):
-    """Precondition 8's ``structural_check_passed.is_(True)`` clause is the
-    security-relevant half of the Task 12.5 repair: ``update_fixture`` nulls
-    ``structural_check_passed`` when a reviewer changes a fixture's params, and
-    this clause is the *only* thing that then stops the draft from being
-    approvable. Nothing tested it -- the two tests that do produce that state
-    (``test_review_api.py``, ``test_review_api_v3.py``) simultaneously null
-    ``validation_report_json``, so approval stops at precondition 3 and never
-    reaches 8, and ``_seed_draft``'s ``structural_ok`` knob was never
-    overridden. Drop the clause and the suite stayed green, silently making
-    params-changed drafts approvable again.
+    """A params edit must not reuse structural approval earned by old params.
 
-    Both reports are left intact, passing and hash-matching, so this trips
-    precondition 8 and only precondition 8. ``None`` is the state
-    ``update_fixture`` actually writes; ``False`` is a failed structural check.
+    Both reports remain valid and hash-matching here, isolating precondition 8.
+    ``None`` is the state ``update_fixture`` writes after an edit; ``False`` is
+    an explicitly failed structural check.
     """
     draft = _seed_draft(session, draft_id="draft-1", structural_ok=structural_state)
     assert json.loads(draft.validation_report_json)["passed"] is True

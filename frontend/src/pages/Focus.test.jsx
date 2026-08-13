@@ -188,13 +188,9 @@ test('revert saves the restored original value immediately', () => {
   expect(saveEdits).toHaveBeenCalledWith('S1', { w: 4 })
 })
 
-// PR-review fix (Finding 2, 2026-08-11): sceneAction now rethrows on
-// failure, so revert/retry/reject must swallow rejections themselves or a
-// 4xx/5xx surfaces as an unhandled promise rejection. These tests fail the
-// whole run if an unhandled rejection is emitted (Vitest reports unhandled
-// rejections as a top-level test failure), so simply completing without
-// throwing — plus an explicit `await` to let the rejection's microtask
-// settle before the test ends — is a real guarantee, not a weak one.
+// sceneAction rethrows failures, so revert/retry/reject must swallow them.
+// Awaiting the handlers and rejection microtask makes an unhandled rejection
+// fail the test instead of escaping after the assertion completes.
 test('reject swallows a rejected rejectScene call (no unhandled rejection)', async () => {
   const rejectScene = vi.fn().mockRejectedValue(new Error('boom'))
   renderFocus({ rejectScene })

@@ -1034,10 +1034,11 @@ def _seed_revalidatable_draft(
 def test_revalidate_after_a_params_edit_restores_evidence_and_allows_approval(
     approval_client, monkeypatch, tmp_path, stubbed_render,
 ):
-    """The issue #63 end-to-end proof: a reviewer corrects a fixture's params,
-    which clears the approval evidence, and revalidation rebuilds it in place
-    so the corrected draft can be approved -- without regenerating and without
-    losing the correction."""
+    """A corrected fixture can be revalidated and approved in place.
+
+    Editing params clears approval evidence; revalidation rebuilds it without
+    regenerating the draft or losing the correction.
+    """
     monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
     get_settings.cache_clear()
     draft_id = _seed_revalidatable_draft(
