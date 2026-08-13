@@ -84,7 +84,25 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    # AOF is mandatory: the L3 global-daily Bedrock counter lives here, and a
+    # Redis restart without persistence would silently reset the day's budget.
+    # `everysec` fsync trades ≤1s of counter loss on crash for throughput.
+    # `volatile-lru` only evicts TTL-bearing keys under memory pressure — all
+    # rate-limit keys carry TTL, and there is no non-TTL data to protect.
+    command:
+      - "redis-server"
+      - "--save"
+      - ""
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--maxmemory"
+      - "128mb"
+      - "--maxmemory-policy"
+      - "volatile-lru"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -97,6 +115,7 @@ volumes:
   postgres_data:
   backend_media:
   backend_var:
+  redis_data:
 
 networks:
   app:
