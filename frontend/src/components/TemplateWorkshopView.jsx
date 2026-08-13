@@ -13,10 +13,6 @@ import {
 
 const STALL_SECONDS = 60
 
-const TERMINAL_STAGES = new Set([
-  'ready', 'approved', 'failed', 'needs_manual', 'already_available',
-])
-
 const BENIGN_ENDINGS = new Set(['needs_manual', 'already_available'])
 
 const STAGES = [
@@ -270,6 +266,7 @@ export function WorkshopBuildCard({
   approvedName,
   refreshFailed,
   elapsed,
+  showElapsed,
   busy,
   error,
   onApprove,
@@ -282,7 +279,7 @@ export function WorkshopBuildCard({
       <header className="workshop__head">
         <p className="workshop__caption" aria-live="polite">
           <span>{approvedName ? 'New visual ready to use' : 'Teaching a new visual'}</span>
-          {!TERMINAL_STAGES.has(build.stage) && (
+          {showElapsed && (
             <span className="workshop__elapsed" aria-hidden="true">
               {formatClock(elapsed)}
             </span>

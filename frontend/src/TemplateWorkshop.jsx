@@ -254,6 +254,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
         const draft = build.draft_id ? drafts[build.draft_id] : null
         const approvedName = approved[build.candidate_id]
         const elapsed = build.elapsed_seconds + sincePoll
+        const showElapsed = !TERMINAL_STAGES.has(build.stage)
         const candidate = candidates.find((entry) => entry.candidate_id === build.candidate_id)
         return (
           <WorkshopBuildCard
@@ -264,6 +265,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
             approvedName={approvedName}
             refreshFailed={refreshFailed[build.candidate_id]}
             elapsed={elapsed}
+            showElapsed={showElapsed}
             busy={busy}
             error={error}
             onApprove={(name) => approveDraft(build, name)}
