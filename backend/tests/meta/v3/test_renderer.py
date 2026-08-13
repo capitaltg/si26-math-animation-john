@@ -199,11 +199,50 @@ def test_short_stagger_reveal_builds_one_animation_per_item():
 
     animation = _action_animation(reveal, rendered, _reveal, "ocean")
 
+    from app.meta.v3.renderer import _stagger_lag_ratio
+
+    expected_ratio = _stagger_lag_ratio(
+        reveal.action.stagger_seconds, reveal.duration_seconds, 7,
+    )
     assert len(animation.animations) == 7
-    assert animation.lag_ratio == reveal.action.stagger_seconds
+    assert animation.lag_ratio == pytest.approx(expected_ratio)
     assert animation.lag_ratio > 0
     revealed_mobjects = [sub.mobject for sub in animation.animations]
     assert revealed_mobjects == list(rendered.targets[("values", None, None)].submobjects)
+
+
+def test_stagger_lag_ratio_bounds_start_gap_by_stagger_seconds():
+    """`stagger_seconds` names a per-item delay in seconds, but Manim's
+    `lag_ratio` is dimensionless and `_play` rescales the `AnimationGroup` to
+    `action.duration_seconds`. The renderer must convert seconds to a ratio so
+    the actual adjacent-start gap under a multi-second action duration stays
+    at (or below) the requested `stagger_seconds`, instead of ballooning by
+    the rescale factor.
+    """
+    from app.meta.v3.renderer import _stagger_lag_ratio
+
+    stagger_seconds = 0.3
+    duration_seconds = 4.0
+    count = 2
+
+    lag_ratio = _stagger_lag_ratio(stagger_seconds, duration_seconds, count)
+
+    # Manim rescales the group of `count` equal-runtime animations so the
+    # adjacent-start gap after rescale is
+    # `lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)`.
+    actual_gap = lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)
+    assert actual_gap == pytest.approx(stagger_seconds)
+    # Sanity: with the raw seconds passed through as the ratio (the previous
+    # behaviour), the gap balloons well past the requested cap.
+    naive_gap = stagger_seconds * duration_seconds / (1 + (count - 1) * stagger_seconds)
+    assert naive_gap > stagger_seconds * 2
+
+    # Un-satisfiable request (gaps do not fit within the action duration)
+    # clamps to Manim's maximum spread rather than exploding past 1.0.
+    assert _stagger_lag_ratio(1.0, 1.0, 3) == 1.0
+    # Degenerate inputs yield a zero ratio (no stagger).
+    assert _stagger_lag_ratio(0.3, 4.0, 1) == 0.0
+    assert _stagger_lag_ratio(0.0, 4.0, 5) == 0.0
 
 
 def test_coincident_non_reveal_actions_share_timeline_duration(resolved_median_scene):
