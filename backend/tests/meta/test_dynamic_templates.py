@@ -58,8 +58,8 @@ def _median_teaching_plan():
     # The same "identify the median of seven ordered values" plan validated
     # end-to-end in tests/render/test_dynamic_render_worker.py -- it compiles to
     # a scene program with a "median_callout" relation targeting
-    # values.item[3].bottom, which is exactly the item-specific anchor the
-    # Task 11 reuse test below checks resolves correctly for every params set.
+    # values.item[3].bottom, the item-specific anchor the reuse test below
+    # resolves for every parameter set.
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",

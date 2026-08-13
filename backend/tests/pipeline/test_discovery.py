@@ -657,15 +657,8 @@ def test_discover_candidates_rejects_malformed_top_level_envelope(mock_call):
         discover_candidates(_text_blocks(["The problem is 4 + 3."]))
 
 
-# The discovery prompt is the gate every candidate passes through; only the
-# answer forms it names get flagged. Downstream v3 strategies also render
-# non-arithmetic answers -- pair_elimination selects a value from a list,
-# ray_shade graphs an inequality's ray, and the M22 rotation strategy stages a
-# rigid-motion image. When the prompt described only "a specific quantity that
-# can be computed", the rotation fixture ("Rotate the triangle 90° about the
-# point, three times. Where does it land?") returned zero candidates and the
-# UI showed "No solvable problems found in this document", which is what this
-# regression guards against.
+# Discovery must admit non-arithmetic answers rendered downstream: selected
+# values, inequality rays, and rigid-motion images.
 _EXPECTED_ADMITTED_ANSWER_FORMS = (
     "computed quantity",
     "selected from a stated collection",

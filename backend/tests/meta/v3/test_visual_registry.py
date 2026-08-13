@@ -11,11 +11,7 @@ from app.meta.v3.visual_registry import VisualRegistry, default_visual_registry
 
 
 class LiteralTextMeasurer:
-    # Scaled like real text: `ManimTextMeasurer` reports roughly 0.3 x 0.45 units
-    # per character at the label font size. This returned 10 x 20 units per
-    # character, which made a six-character label 60 units wide -- harmless while
-    # nothing checked extent, but larger than the frame can hold at any scale, so
-    # `_require_renderable_extent` now rejects it.
+    # Approximate real label metrics so fixture text remains renderable.
     def measure(self, text: str, font_role: str):
         return len(text) * 0.3, 0.6
 

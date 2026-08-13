@@ -382,11 +382,10 @@ class PolygonSpec(BaseModel):
 class CoordinatePlaneVisual(BaseModel):
     """A Cartesian grid with plotted points.
 
-    Foundational archetype for MCAP 5.G.A.1-2 / 6.NS.C.6c / 6.NS.C.8 and the
-    substrate downstream tickets attach transformations, scatter plots, and
-    line/polygon drawings to. The plane's numeric span is declared here so the
-    axes never renegotiate their extent per downstream ticket -- a point at
-    (2, 3) sits in the same fraction of the frame regardless of the strategy.
+    Foundational archetype for MCAP 5.G.A.1-2 / 6.NS.C.6c / 6.NS.C.8 and for
+    transformations, scatter plots, and line or polygon drawings. The plane's
+    numeric span is declared here so axes never renegotiate their extent -- a
+    point at (2, 3) sits in the same frame fraction regardless of the strategy.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -35,8 +35,8 @@ def _kilometers_plan():
         "supporting_visuals": [
             {"kind": "label", "ref": "conversion_label", "text": "1 km = 1000 m"},
         ],
-        # `magnitude_comparison` on a bar now requires a literal bar value so
-        # the compile-time sweep can address specific segments (issue #66).
+        # `magnitude_comparison` requires a literal bar value so the compile-time
+        # sweep can address specific segments.
         # This lesson's bar takes a field-driven value, so it uses `group_reveal`
         # instead -- the strategy is not what the test asserts on.
         "strategy": "group_reveal",
@@ -109,7 +109,7 @@ def test_the_answer_is_not_pinned_to_the_bottom_of_the_frame():
     answer = resolved.visual("evaluated_answer")
     primary = resolved.visual("km_bar")
     assert answer.bounds.top <= primary.bounds.bottom + 1e-9
-    # The old reserved band was y in [-3.6, -2.4]; nothing pins the answer there.
+    # The answer participates in layout instead of occupying a reserved band.
     assert answer.bounds.bottom > -2.4
 
 

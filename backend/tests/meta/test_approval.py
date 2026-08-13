@@ -131,12 +131,8 @@ def _seed_draft(
         ))
     session.flush()
 
-    # Built directly from real DSL document models and TemplateDraft/
-    # TemplateDraftFixture rows (not via a draft-creation pipeline helper) --
-    # the v2 `create_generated_draft` this fixture used to call is gone in v3;
-    # persisting a candidate now requires a full ValidatedCandidate (real
-    # rendered-quality probe), which is more than this file's approval-
-    # precondition tests need or want to pay for.
+    # Build directly because pipeline persistence requires a rendered-quality
+    # probe unrelated to these approval preconditions.
     params_document = ParamsDocument(
         params_version=1,
         fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
@@ -230,9 +226,6 @@ def _seed_draft(
     return draft
 
 
-# ---------------------------------------------------------------- happy path
-
-
 def test_approve_publishes_enabled_version_and_durable_review(engine, session):
     draft = _seed_draft(session, draft_id="draft-1", fingerprint_key="k1")
 
@@ -303,9 +296,6 @@ def test_approve_succeeds_with_a_validation_report_built_by_the_production_build
         reviewer_label="dev", math_semantics_confirmed=True,
     )
     assert version.status == TEMPLATE_VERSION_ENABLED
-
-
-# ------------------------------------------------ preconditions (in order)
 
 
 def test_unknown_draft_raises_not_found(engine, session):
@@ -596,9 +586,6 @@ def test_same_name_same_fingerprint_is_allowed(engine, session):
     assert version.status == TEMPLATE_VERSION_ENABLED
 
 
-# ------------------------------------------- supersede without deleting
-
-
 def test_second_draft_supersedes_first_without_deleting(engine, session):
     _seed_draft(session, draft_id="draft-1", job_id="job-1", fingerprint_key="k1")
     first = approve_draft_service(
@@ -616,17 +603,12 @@ def test_second_draft_supersedes_first_without_deleting(engine, session):
     check = _fresh(engine)
     versions = {v.id: v for v in check.query(models.TemplateVersion).filter_by(fingerprint_key="k1").all()}
     assert len(versions) == 2
-    # first retained (not deleted) but disabled; second enabled
     assert versions[first_id].status == TEMPLATE_VERSION_DISABLED
     assert versions[second.id].status == TEMPLATE_VERSION_ENABLED
     enabled = [v for v in versions.values() if v.status == TEMPLATE_VERSION_ENABLED]
     assert len(enabled) == 1
-    # prior version still independently loadable via its immutable draft link
     assert versions[first_id].draft_id == "draft-1"
     check.close()
-
-
-# ------------------------------------------------- concurrency race
 
 
 def test_concurrent_double_approve_yields_one_version_one_conflict(engine, session, monkeypatch):
@@ -686,9 +668,6 @@ def test_concurrent_double_approve_yields_one_version_one_conflict(engine, sessi
     assert len(reviews) == 1
     assert reviews[0].reviewer_label == "dev-a"
     check.close()
-
-
-# ------------------------------------------------- owner-scoped approval
 
 
 def test_owner_approval_publishes_a_session_scoped_version(engine, session):
@@ -853,9 +832,7 @@ def test_re_approving_for_one_owner_disables_that_owners_prior_version(engine, s
     )
 
 
-# ------------------------------- names across the shared/private boundary
-#
-# The invariant: for any session S, {shared versions} union {S's private
+# For any session S, {shared versions} union {S's private
 # versions} must have unique template_names. Anything else puts two identical
 # keys into one session's snapshot dict, where query order silently decides
 # which template that name resolves to.

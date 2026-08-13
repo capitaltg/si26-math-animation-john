@@ -49,21 +49,17 @@ def test_lru_eviction_clears_every_known_state_location(tmp_path):
     session_id = victim.session_id
     output_dir = victim.output_dir
 
-    # (2) clip registered against this session
     clip_path = output_dir / "clip.mp4"
     clip_path.write_bytes(b"clip")
     clip_id = store.register_clip(clip_path, session_id=session_id)
 
-    # (3) thumbnail registered against this session
     thumb_path = output_dir / "thumb.png"
     thumb_path.write_bytes(b"thumb")
     thumb_id = store.register_thumbnail(thumb_path, session_id=session_id)
 
-    # (5) unregistered file the session left in its output dir
     orphan_in_dir = output_dir / "half-render.tmp"
     orphan_in_dir.write_bytes(b"partial")
 
-    # Sanity: everything is present before eviction.
     assert store.get(session_id) is victim
     assert store.get_clip(clip_id, caller_session_id=session_id) == clip_path
     assert (
@@ -71,27 +67,19 @@ def test_lru_eviction_clears_every_known_state_location(tmp_path):
     )
     assert output_dir.is_dir()
 
-    # Trigger LRU eviction by pushing a second session past max_sessions.
     store.create([_candidate("b")])
 
-    # (1) session index cleared.
     assert store.get(session_id) is None
     assert session_id not in store._sessions
 
-    # (2) no clip entries survive tagged with the evicted session id.
     surviving_clip_owners = {e.session_id for e in store._clips.values()}
     assert session_id not in surviving_clip_owners
 
-    # (3) no thumbnail entries survive tagged with the evicted session id.
     surviving_thumb_owners = {e.session_id for e in store._thumbnails.values()}
     assert session_id not in surviving_thumb_owners
 
-    # (4) session directory removed from disk.
     assert not output_dir.exists()
 
-    # (5) every file the session wrote under its dir is gone with the tree —
-    # rmtree(output_dir) subsumes unregistered files as well as registered
-    # clip/thumbnail paths that lived inside it.
     assert not clip_path.exists()
     assert not thumb_path.exists()
     assert not orphan_in_dir.exists()

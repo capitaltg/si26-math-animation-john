@@ -282,6 +282,8 @@ def _disable_replaced_versions(
     publish_shared: bool,
     now: datetime,
 ) -> None:
+    # Shared publication replaces the shared row and this caller's private
+    # predecessor, while leaving every other owner's private rows isolated.
     disable_scope = (
         or_(
             TemplateVersion.owner_session_id.is_(None),
@@ -330,16 +332,10 @@ def approve_draft_service(
 ) -> TemplateVersion:
     """Publish a reviewed draft as a live TemplateVersion.
 
-    ``owner_session_id`` gates the fixture-count threshold and the name/scoping
-    collision checks (a teacher approval uses the soft, built-from cap; an admin
-    approval uses the full configured count).
-
-    ``publish_shared=True`` writes ``owner_session_id=NULL`` on the version row
-    even when ``owner_session_id`` was passed for the threshold decision, so a
-    teacher approval survives their in-process session dropping and is visible
-    to every session on this box. Product is single-teacher today; the split
-    lets a future multi-tenant surface re-tighten visibility without moving the
-    threshold back at the same time.
+    A non-null ``owner_session_id`` selects private scope and the relaxed,
+    built-from fixture cap unless ``publish_shared`` is true. Ownerless and
+    shared publication use the full configured fixture count; ``publish_shared``
+    always writes ``owner_session_id=NULL`` on the version row.
     """
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -347,6 +343,7 @@ def approve_draft_service(
     try:
         with meta_session() as session:
             draft = _require_approvable_draft(session, draft_id)
+            # Sharing is ownerless evidence: require the full fixture threshold.
             effective_owner = None if publish_shared else owner_session_id
             _require_publishable_draft(
                 session,

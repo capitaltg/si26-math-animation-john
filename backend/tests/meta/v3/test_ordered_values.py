@@ -27,8 +27,7 @@ def test_median_item_anchor_uses_eight_bounds_not_row_center():
     item_bounds = visual.parts[("item", 3)].bounds
     assert item_bottom.x != row_bottom.x
     assert item_bottom.x == item_bounds.center.x
-    # Guard the y-coordinate too: the sibling test used to compare only .x, so
-    # a "bottom" that pointed to bounds.top would slip through.
+    # Both coordinates matter: a bottom anchor could otherwise point at the top edge.
     assert item_bottom.y == item_bounds.bottom
 
 

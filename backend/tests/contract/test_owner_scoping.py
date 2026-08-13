@@ -24,20 +24,13 @@ Adding a route means picking one table. Leaving it out fails the test.
 import pytest
 from fastapi.routing import APIRoute
 
-# --- The spec ---------------------------------------------------------------
-
 OWNER_SCOPED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     # Meta teacher drafts — job.owner_session_id gates access via _owned_draft.
     ("GET",  "/meta/my/drafts/{draft_id}"),
     ("GET",  "/meta/my/drafts/{draft_id}/preview"),
     ("POST", "/meta/my/drafts/{draft_id}/approve"),
     ("POST", "/meta/my/drafts/{draft_id}/reject"),
-    # Artifact registries — clip/thumbnail entries carry a session_id and
-    # store.get_clip / store.get_thumbnail refuse when it doesn't match.
-    # Currently landing on fix/artifact-owner-check (PR pending merge for
-    # issue #149); the entry stays here so that once merged, the actual
-    # cross-session behavior can be locked in with a follow-up behavioral
-    # smoke without renegotiating the contract.
+    # Artifact registries reject clip and thumbnail lookups from another session.
     ("GET",  "/clips/{clip_id}"),
     ("GET",  "/thumbnails/{thumb_id}"),
 })
@@ -83,9 +76,6 @@ NOT_OWNER_SCOPED_ROUTES: frozenset[tuple[str, str]] = frozenset({
 })
 
 
-# --- Enumeration ------------------------------------------------------------
-
-
 def _walk(routes):
     """FastAPI `include_router` wraps its children in `_IncludedRouter`; the
     original nested `APIRoute`s live under `original_router.routes`. Fallback
@@ -105,9 +95,6 @@ def _registered_routes(app) -> frozenset[tuple[str, str]]:
         for method in route.methods - {"HEAD", "OPTIONS"}:
             seen.add((method, route.path))
     return frozenset(seen)
-
-
-# --- Fixture ----------------------------------------------------------------
 
 
 @pytest.fixture
@@ -135,9 +122,6 @@ def enabled_app(tmp_path, monkeypatch):
 
     yield create_app()
     get_settings.cache_clear()
-
-
-# --- The contract -----------------------------------------------------------
 
 
 def test_every_registered_route_is_categorized(enabled_app):

@@ -140,21 +140,19 @@ test('the dock reports the batch while it runs, then that it finished', async ()
 test('a clip re-returned by a follow-up batch is not announced twice', async () => {
   const user = userEvent.setup()
   const gate = deferred()
-  // First call: slow, and covers only the scene approved at dispatch time.
+  // Hold the first batch open while another scene enters the queue.
   nextRender = () => gate.promise.then(() => json({
     clips: [{ scene_id: 's1', status: 'approved', clip_url: '/clips/s1' }],
   }))
   mount()
   await reachStoryboard(user)
 
-  // Approve scene one from its own page: this starts an in-flight /render.
   await user.click(screen.getByText('Scene one'))
   await user.click(await screen.findByRole('button', { name: /approve & render/i }))
   await screen.findByRole('region', { name: /render progress/i })
 
-  // Then approve the rest from the queue while that render is still running.
   await user.click(await screen.findByRole('button', { name: /approve all/i }))
-  // The follow-up call answers for both scenes, s1 straight from cache.
+  // The next response includes the cached first scene as well as the new one.
   nextRender = () => json({
     clips: [
       { scene_id: 's1', status: 'approved', clip_url: '/clips/s1' },
@@ -167,15 +165,12 @@ test('a clip re-returned by a follow-up batch is not announced twice', async () 
   await waitFor(() => {
     expect(screen.getByRole('region', { name: /render progress/i })).toHaveTextContent(/Render finished/i)
   })
-  // Two scenes, two clips, two notifications — s1 is not announced again just
-  // because the second batch's response mentioned it.
   expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(2)
 })
 
 test('a failed call keeps scenes approved mid-flight and makes the follow-up call for them', async () => {
   const user = userEvent.setup()
   const gate = deferred()
-  // The first call carries s1 only, and fails.
   nextRender = () => gate.promise.then(() => json({ detail: 'boom' }, 500))
   mount()
   await reachStoryboard(user)
@@ -184,14 +179,12 @@ test('a failed call keeps scenes approved mid-flight and makes the follow-up cal
   await user.click(await screen.findByRole('button', { name: /approve & render/i }))
   await screen.findByRole('region', { name: /render progress/i })
 
-  // s2 is approved while that first call is still out, so nothing has been
-  // attempted for it when the call fails.
+  // s2 is not part of the failing in-flight batch.
   await user.click(await screen.findByRole('button', { name: /approve all/i }))
   nextRender = () => json({ clips: [{ scene_id: 's2', status: 'approved', clip_url: '/clips/s2' }] })
   gate.resolve()
 
-  // The failure must not take s2 down with it: clearing the whole queue used to
-  // strand it — never attempted, gone from the queue, no follow-up call ever.
+  // Batch cleanup must retain unattempted scene ids for the next dispatch.
   await waitFor(() => expect(renderCalls).toHaveLength(2))
   expect(renderCalls[1]).toContain('s2')
 
@@ -199,16 +192,13 @@ test('a failed call keeps scenes approved mid-flight and makes the follow-up cal
   await waitFor(() => expect(dock).toHaveTextContent(/Render finished — 1 failed/i))
   expect(screen.getByText(/— failed/)).toBeInTheDocument()
   expect(screen.getByText(/— rendered/)).toBeInTheDocument()
-  // s2's clip is announced; the failed call's error toast is the only other one.
   expect(screen.getAllByRole('button', { name: /watch & download/i })).toHaveLength(1)
 })
 
-// The mirror of the test above: that one fails first and succeeds second, so it
-// cannot see a later failure erasing an earlier success.
+// A later batch failure must not erase an earlier success.
 test('a failed follow-up call leaves an already-rendered clip reported as rendered', async () => {
   const user = userEvent.setup()
   const gate = deferred()
-  // The first call carries s1 only, and succeeds.
   nextRender = () => gate.promise.then(() => json({
     clips: [{ scene_id: 's1', status: 'approved', clip_url: '/clips/s1' }],
   }))

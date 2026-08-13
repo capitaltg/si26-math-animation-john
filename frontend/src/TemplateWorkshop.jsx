@@ -58,9 +58,9 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
 
   const loadBuilds = useCallback(async () => {
     try {
-      const resp = await fetch('/meta/my/builds', { credentials: 'include' })
-      const data = await responseJson(resp)
-      if (resp.ok && Array.isArray(data)) {
+      const response = await fetch('/meta/my/builds', { credentials: 'include' })
+      const data = await responseJson(response)
+      if (response.ok && Array.isArray(data)) {
         setBuilds(data)
         setPolledAt(Date.now())
       }
@@ -98,9 +98,9 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     if (wanted.length === 0) return
     let live = true
     Promise.all(wanted.map(async (draftId) => {
-      const resp = await fetch(`/meta/my/drafts/${draftId}`, { credentials: 'include' })
-      const data = await responseJson(resp)
-      return resp.ok && data ? [draftId, data] : null
+      const response = await fetch(`/meta/my/drafts/${draftId}`, { credentials: 'include' })
+      const data = await responseJson(response)
+      return response.ok && data ? [draftId, data] : null
     }))
       .then((loaded) => {
         if (!live) return
@@ -121,14 +121,14 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
       return next
     })
     try {
-      const resp = await fetch('/meta/my/builds', {
+      const response = await fetch('/meta/my/builds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_id: candidateId }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not start building a visual'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not start building a visual'))
       await loadBuilds()
     } catch (err) {
       setRequestError(err.message)
@@ -146,7 +146,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/drafts/${build.draft_id}/approve`, {
+      const response = await fetch(`/meta/my/drafts/${build.draft_id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -155,8 +155,8 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
           math_semantics_confirmed: true,
         }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not use this visual'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not use this visual'))
       let failed = false
       try {
         // The approval itself already succeeded below; a failure here only
@@ -181,12 +181,12 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/builds/${build.candidate_id}`, {
+      const response = await fetch(`/meta/my/builds/${build.candidate_id}`, {
         method: 'DELETE',
         credentials: 'include',
       })
-      if (!resp.ok) {
-        const data = await responseJson(resp)
+      if (!response.ok) {
+        const data = await responseJson(response)
         throw new Error(errorFrom(data, 'Could not clear this attempt'))
       }
       setBuilds((current) => current.filter((entry) => entry.candidate_id !== build.candidate_id))
@@ -201,14 +201,14 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/drafts/${build.draft_id}/reject`, {
+      const response = await fetch(`/meta/my/drafts/${build.draft_id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ feedback }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not ask for another attempt'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not ask for another attempt'))
       if (data?.requeued === false) {
         setError(
           'Automatic generation has run out of attempts for this problem. The '

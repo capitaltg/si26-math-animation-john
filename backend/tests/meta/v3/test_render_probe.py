@@ -114,10 +114,7 @@ def test_rendered_quality_rejects_each_probe_failure(valid_manifest, mutation, e
     elif mutation == "off_frame":
         manifest["visual_bounds"] = {"values": [-1, 0, 900, 120]}
     elif mutation == "outside_safe_frame":
-        # Inside the physical frame, outside the safe box layout targets. This
-        # is the 16-px band the gate used to ignore -- exactly where the
-        # published perimeter lesson's formula label came to rest, which is why
-        # a label visibly touching the frame edge passed the rendered gate.
+        # Inside the physical frame but in the 16-pixel band outside the safe box.
         manifest["visual_bounds"] = {
             **valid_manifest["visual_bounds"], "values": [4, 30, 880, 150],
         }
@@ -745,20 +742,9 @@ def test_a_rotation_lesson_renders_through_the_probe():
     assert manifest["answer_anchor"] == "plane.polygon[0]"
     assert manifest["final_answer_visible"] is True
 
-    # `state_order_invalid` used to be a known gap here: `check_state_order`
-    # requires the declared `answer_anchor` ("plane.polygon[0]") to receive
-    # its own `set_role(focus)` state event, but `beat_expander`'s rotation
-    # branch used to fire the derive beat's generic focus on the WHOLE plane
-    # (`_generic_role_change(beat, "focus", ...)`, beat.targets =
-    # [{"visual_ref": "plane"}]) rather than on the polygon part the anchor
-    # names. That branch now emits its `focus` role change on the polygon
-    # target directly (`TargetRef(visual_ref=ref, part="polygon", index=0)`),
-    # matching `compiler._answer_anchor` exactly -- `polygon` still isn't a
-    # `compiler._PART_CARDINALITY["coordinate_plane"]` entry a PLAN could
-    # target itself, but a compiler-generated action never runs back through
-    # `_validate_target`, so the mismatch was only ever in beat_expander's own
-    # emission, not in what the schema allows. The render now passes every
-    # quality check with no failures.
+    # The generated focus event must target the same polygon part as the answer
+    # anchor. Compiler-generated actions need not expose polygon targeting in
+    # the author-facing plan schema.
     assert _failure_codes(manifest) == set()
 
 

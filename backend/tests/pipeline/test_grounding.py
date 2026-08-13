@@ -85,8 +85,7 @@ def test_derived_total_allowed_only_via_explicit_declaration():
     from app.pipeline.grounding import check_params_grounded
 
     # "7" is absent from the source but a template declares it as 3 + 4.
-    # "5" is grounded literally, so the OLD global-sum heuristic (3+4+5=12)
-    # would have rejected "7"; the explicit subset declaration accepts it.
+    # "5" is grounded literally, while the explicit subset declares 3+4 as 7.
     params = _StubParams(
         tokens=["3", "4", "5", "7"],
         derived_totals=[("7", ["3", "4"])],
@@ -343,8 +342,7 @@ def test_cross_problem_boundary_is_documented_not_prevented():
 def test_word_token_falls_through_canonical_key_untouched():
     from app.pipeline.grounding import _canonical_key
 
-    # Sanity: word tokens (value is None) key on themselves; distinct
-    # words never collide with numeric canonicals.
+    # Word tokens key on themselves and cannot collide with numeric canonicals.
     assert _canonical_key("three") == "three"
     assert _canonical_key("three") != _canonical_key("3")
 

@@ -15,12 +15,9 @@ GAP = 0.45
 #: anchor, plus the `next_to` buff. Fixed in world units because
 #: `renderer._build_relation` builds the callout at that font size regardless
 #: of the lesson's uniform scale, so the space to reserve for it does not
-#: shrink alongside the visuals (see #82).
+#: shrink alongside the visuals.
 CALLOUT_ENVELOPE = 0.9
-#: The answer used to be placed in a reserved strip at the bottom of the frame,
-#: which read as a caption stapled under the lesson rather than as its outcome.
-#: It is now arranged with everything else, so the instructional frame is the
-#: whole safe frame.
+#: Arrange the answer with the lesson instead of reserving a caption-like strip.
 INSTRUCTIONAL_FRAME = SAFE_FRAME
 ANSWER_REF = "evaluated_answer"
 

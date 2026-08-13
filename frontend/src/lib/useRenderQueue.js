@@ -24,15 +24,8 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
-  // Drain-on-completion, not abort-on-change: if pendingRenders grows while a
-  // /render POST is in flight, we let the in-flight call finish rather than
-  // aborting it. Aborting mid-flight left queued scenes stranded — the abort
-  // fired the cleanup, but the effect re-run that triggered it had already
-  // early-returned on renderInFlight.current reading true, so nothing kicked
-  // off a follow-up POST once the aborted call's `finally` cleared the flag.
-  // Instead, on completion we subtract only the scene_ids the response
-  // actually covered, so any ids added mid-flight survive and the next
-  // pendingRenders-change re-fires the effect for just those.
+  // Let an in-flight batch finish, then subtract only the scene ids it covered.
+  // New ids survive for the next dispatch instead of being stranded by cleanup.
   useEffect(() => {
     // An empty queue means the batch this job was reporting on is over: the
     // dock stays up showing what it did, but the next approval opens a new job
@@ -58,12 +51,12 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
     ;(async () => {
       const processed = new Set()
       try {
-        const resp = await fetch('/render', {
+        const response = await fetch('/render', {
           method: 'POST',
           credentials: 'include',
         })
-        if (!resp.ok) throw new Error(`Render request failed (HTTP ${resp.status})`)
-        const data = await resp.json()
+        if (!response.ok) throw new Error(`Render request failed (HTTP ${response.status})`)
+        const data = await response.json()
         const clips = Array.isArray(data.clips) ? data.clips : []
         if (!mountedRef.current) return
         const currentStoryboard = storyboardRef.current
@@ -83,7 +76,9 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
           // is scoped — a corrected row is not news worth a second toast.
           results[clip.scene_id] = clip.clip_url ? 'ok' : 'failed'
           if (!requested.has(clip.scene_id)) continue
-          const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
+          const scene = currentStoryboard?.find(
+            (storyboardScene) => storyboardScene.scene_id === clip.scene_id,
+          )
           const title = scene?.detected_summary || 'Scene'
           if (clip.clip_url) {
             pushToast({ sceneId: clip.scene_id, title, clipUrl: clip.clip_url, kind: 'ok' })
@@ -94,13 +89,13 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
         setRenderJob((previous) => (previous
           ? { ...previous, results: { ...previous.results, ...results } }
           : previous))
-        setStoryboard(prev => prev?.map(s => {
-          const clip = clips.find(c => c.scene_id === s.scene_id)
-          if (!clip) return s
-          return { ...s, status: clip.clip_url ? 'rendered' : 'render_failed', clip_url: clip.clip_url }
-        }) ?? prev)
-        setPendingRenders(prev => {
-          const next = new Set(prev)
+        setStoryboard((currentStoryboardState) => currentStoryboardState?.map((scene) => {
+          const clip = clips.find((candidateClip) => candidateClip.scene_id === scene.scene_id)
+          if (!clip) return scene
+          return { ...scene, status: clip.clip_url ? 'rendered' : 'render_failed', clip_url: clip.clip_url }
+        }) ?? currentStoryboardState)
+        setPendingRenders((currentPending) => {
+          const next = new Set(currentPending)
           for (const id of processed) next.delete(id)
           return next
         })
@@ -113,11 +108,7 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
         // them yet.
         setRenderJob((previous) => {
           if (!previous) return previous
-          // Merged, never rebuilt: a rebuild from `dispatched` alone erased the
-          // verdict on every scene this call did not carry, so a clip that had
-          // already rendered on an earlier call lost its result and its finished
-          // row fell back to "queued". Only ids with no verdict yet are failed —
-          // a scene that already rendered keeps that.
+          // Merge failures so verdicts from earlier calls remain authoritative.
           const failures = Object.fromEntries(
             dispatched
               .filter((id) => previous.results[id] === undefined)
@@ -125,14 +116,9 @@ export default function useRenderQueue({ storyboard, setStoryboard, pushToast })
           )
           return { ...previous, results: { ...previous.results, ...failures } }
         })
-        // Drop only what this call carried, exactly as the success path does.
-        // Clearing the whole set used to strand any scene approved mid-flight:
-        // it was never attempted, yet it vanished from the queue and no
-        // follow-up call was ever made for it. Retaining just those cannot spin
-        // — the next call dispatches them, and if it fails too they are
-        // dispatched ids by then and get dropped here.
-        setPendingRenders(prev => {
-          const next = new Set(prev)
+        // Drop only this call's ids; later approvals still need dispatching.
+        setPendingRenders((currentPending) => {
+          const next = new Set(currentPending)
           for (const id of dispatched) next.delete(id)
           return next
         })

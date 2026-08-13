@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # In prod, same-origin via nginx means CORS is optional; leave narrow.
     cors_allow_origins: str = "http://localhost:5173"
 
-    # meta-template system (Phase 1) — all disabled by default
+    # Meta-template generation is opt-in.
     meta_templates_enabled: bool = False
     meta_codegen_enabled: bool = False
     meta_db_path: Path = BACKEND_ROOT / "var" / "meta.db"

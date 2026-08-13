@@ -5,8 +5,7 @@ import path from 'node:path'
 // Focus + render + toast are covered by unit + component tests
 // (Focus.test.jsx, RenderToast.test.jsx). E2E stops at "candidates
 // surfaced" because backend/app/pipeline/bedrock_mocks.py only mocks
-// discovery; classify_problem/extract_params are needed for /options
-// and would be a separate follow-up.
+// discovery; /options also needs classify_problem and extract_params.
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

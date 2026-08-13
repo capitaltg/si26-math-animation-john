@@ -13,8 +13,10 @@ import {
 
 const STALL_SECONDS = 60
 
+// These endings are successful fallbacks: no unsafe or duplicate template was built.
 const BENIGN_ENDINGS = new Set(['needs_manual', 'already_available'])
 
+// The worker reports discrete stages, so a percentage between them would be fabricated.
 const STAGES = [
   { key: 'filed', label: 'Problem filed' },
   { key: 'queued', label: 'Queued' },

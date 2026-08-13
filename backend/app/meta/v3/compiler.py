@@ -143,13 +143,9 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
     validate_pair_elimination_answer(plan, answer_expression)
     visuals, relations, beats = expand_beats(plan, answer_expression)
     if plan.strategy == "rotation":
-        # `expand_beats` builds every `ProgramVisual` through the generic,
-        # strategy-blind `_program_visual` mapping (`beat_expander.py`) --
-        # branching on `rotation` there is Task 5's `RotateAction` staging
-        # work, and doing it early here would falsely retire
-        # `test_every_supported_strategy_has_expander_behavior`'s tracked gap.
-        # So the frozen frames are stitched onto the already-built
-        # `CoordinatePlaneProgramVisual` as a post-processing step instead.
+        # `expand_beats` uses the strategy-blind `_program_visual` mapping while
+        # the expander separately stages `RotateAction`s. Attach frozen frames to
+        # the already-built `CoordinatePlaneProgramVisual` after expansion.
         visuals = _apply_rotation_frames(plan, visuals)
     recipe = resolve_style_recipe(
         seed=plan.variation_seed,
@@ -179,7 +175,7 @@ def compile_teaching_plan(plan, answer_expression, known_fields, context):
 
 def _apply_rotation_frames(plan, visuals):
     """Stitch `_compute_rotation_frames`'s output onto the primary visual's
-    already-built `CoordinatePlaneProgramVisual` (M22).
+    already-built `CoordinatePlaneProgramVisual`.
 
     `_validate_rotation_compatibility` already ran `_compute_rotation_frames`
     once during `validate_strategy_compatibility` -- any raise happens there,
@@ -656,7 +652,7 @@ def _validate_magnitude_comparison_compatibility(plan):
         # as "greater magnitude". On a signed range that reading is wrong: -5
         # sits left of 2 but has the greater magnitude, so the sweep would teach
         # the opposite. Refuse a plan whose declared span crosses (or lives in)
-        # the negatives; the M6 strategies `signed_hop` and `distance_from_zero`
+        # the negatives; `signed_hop` and `distance_from_zero`
         # handle signed number lines.
         minimum = _literal_number(spec.minimum)
         if minimum is not None and minimum < 0:
@@ -1572,7 +1568,7 @@ def _answer_anchor(plan):
     `pair_elimination` leaves the answer standing as the one unpaired item, so
     the lesson draws no separate answer card and the rendered-quality probe has
     to be told which target to hold to the final frame instead. `rotation`
-    (M22) is the same shape: the final rotated image IS the answer -- there is
+    has the same shape: the final rotated image IS the answer -- there is
     no separate numeric result -- so the probe is pointed at the polygon
     rather than at a card.
     """

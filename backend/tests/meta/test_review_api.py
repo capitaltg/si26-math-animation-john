@@ -209,10 +209,8 @@ def _seed_pending_review_draft(observation_id="obs-1", draft_id=None):
         )
 
 
-# A teaching plan with realistic beat text, used only by the v3 review-evidence
-# test (Step 1 of the brief): the first beat's id must be "reveal_values" so
-# `timeline[0].beat_id` proves the compiled timeline -- not just the teaching
-# plan -- made it through to the review payload.
+# The first beat id proves the compiled timeline, not only the teaching plan,
+# made it through to the review payload.
 def _evidence_plan():
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
@@ -966,12 +964,8 @@ def test_approve_maps_each_service_exception_to_http_status(exc_cls, expected_st
     assert resp.json()["detail"] == "boom"
 
 
-# ----------------------------------------------------------------- revalidate
-#
-# Issue #63: `update_fixture` correctly clears approval evidence when a
-# reviewer actually changes a fixture's params, but until `/revalidate` existed
-# nothing could rebuild it, so the edited draft could never leave
-# pending_review and rejecting it discarded the correction.
+# Revalidation must rebuild evidence cleared by a real fixture edit so the
+# corrected draft can leave pending review without discarding the correction.
 
 
 @pytest.fixture

@@ -370,7 +370,7 @@ def update_fixture(draft_id: str, fixture_id: str, request: FixtureUpdateRequest
     dependencies=[Depends(require_reviewer_token)],
 )
 def revalidate_draft(draft_id: str):
-    """Rebuild the approval evidence a fixture edit cleared (issue #63).
+    """Rebuild the approval evidence cleared by a fixture edit.
 
     Returns the whole refreshed draft rather than just the reports, so the
     review panel can render the restored preview and fixture checks without a

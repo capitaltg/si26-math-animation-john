@@ -436,20 +436,12 @@ def _median_plan_naming_two_different_items():
 
 
 def test_a_plan_naming_two_different_items_passes_semantic_anchor_specificity():
-    """`check_semantic_anchor_specificity` required each relation to match
-    EVERY item target in the plan rather than to be item-level at all. As soon
-    as two beats named different items on one visual, any relation on that
-    visual mismatched at least one of them and the check failed -- on a plan
-    whose only relation (`median_callout` on `values.item[3]`) is item-specific,
-    making the reported detail untrue as well. That blocked legitimate
-    pair_elimination candidates and misdirected the repair loop.
-    """
+    """An item-level relation need not match every item named by the plan."""
     plan = _median_plan_naming_two_different_items()
     program = _compile(
         plan, FieldRefNode(field="v4"), {f"v{index}" for index in range(1, 8)},
     )
-    # Two distinct item targets on one visual, and a relation that really is
-    # item-specific -- the exact combination that used to fail.
+    # Two distinct item targets share one genuinely item-specific relation.
     item_targets = {
         (target.visual_ref, target.part, target.index)
         for beat in plan.beats for target in beat.targets

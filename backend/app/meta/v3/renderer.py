@@ -37,7 +37,7 @@ from app.meta.v3.visual_registry import DEFERRED_PARTS
 
 @dataclass(frozen=True)
 class RotationContext:
-    """M22 rotation geometry a `RotateAction` needs at dispatch time.
+    """Rotation geometry a `RotateAction` needs at dispatch time.
 
     Derived once, at build time, from the same `measured.payload` fields
     `_build_coordinate_plane` reads -- NOT re-derived from mobjects at
@@ -70,7 +70,7 @@ class RenderedScene:
     #: Answer visual ref -> stage name -> mobject. Deliberately NOT in
     #: `targets`: a plan may address the answer, never one of its stages.
     answer_stages: dict[str, dict[str, object]] = field(default_factory=dict)
-    #: Visual ref -> M22 rotation geometry, for a coordinate_plane declaring
+    #: Visual ref -> rotation geometry, for a coordinate_plane declaring
     #: a rotation (empty otherwise). See `RotationContext`.
     rotation_context: dict[str, RotationContext] = field(default_factory=dict)
 
@@ -414,7 +414,7 @@ def _build_coordinate_plane(measured, placed, palette: str):
     them, and inventing target keys for glyphs would let a plan target a
     label the archetype does not expose (mirrors `_number_line_labels`).
 
-    M22 adds an optional pivot dot, an optional primary polygon with
+    A rotating plane adds an optional pivot dot, a primary polygon with
     auto-lettered vertex labels, and a hidden ghost polygon per rotation
     frame the polygon will visit. The primary polygon, its vertex labels,
     and the pivot dot are added to `root` (visible from the visual's own
@@ -1281,7 +1281,7 @@ def _build_distance_annotation(action, palette: str):
 def _build_rotate_animation(action: ResolvedAction, rendered: RenderedScene, palette: str):
     """One discrete rotation step: reveal the vacated ghost, spin the
     polygon about its pivot, and re-letter the vertices with one more
-    prime mark (M22).
+    prime mark.
 
     `action.action.target` (the ORIGINAL, unresolved `TargetRef`) is read
     directly rather than `action.targets[0].ref`: `resolver.bind_timeline`

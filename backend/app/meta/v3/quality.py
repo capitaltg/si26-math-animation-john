@@ -43,9 +43,8 @@ class QualityReport:
             # model (`_STABLE_REPAIR_FEEDBACK_FIELDS` in
             # `app/meta/draft_generation.py`), so the per-check diagnosis has to
             # travel through `hint` or the model never hears what is wrong and
-            # proposes the same repair unchanged. Every `_failed(...)` site
-            # already phrases `detail` as an actionable diagnosis; the previous
-            # generic hint just clobbered it.
+            # proposes the same repair unchanged. Each `_failed(...)` detail is
+            # already phrased as the actionable hint.
             raise V3ValidationError(V3Failure(
                 code=failed.code,
                 path=failed.path,
@@ -391,16 +390,8 @@ def check_strategy_affordance(plan, program) -> QualityCheck:
 
 
 def check_semantic_anchor_specificity(plan, program) -> QualityCheck:
-    # A relation anchored to a whole collection cannot point at one of its
-    # items, so a plan that instructs on individual items needs item-level
-    # relation anchors. Quantify over the *relations*: the previous form
-    # required each relation to match EVERY item target in the plan, so as soon
-    # as two beats named different items of the same visual, any relation on
-    # that visual mismatched at least one of them and the check failed -- on
-    # plans whose anchors were already item-specific. That rejected legitimate
-    # `pair_elimination` candidates (naming two items is how pairing is taught)
-    # and told the repair loop to make an anchor item-specific when it already
-    # was, so retries could not converge.
+    # A relation on an item-addressed visual must itself target an item. Quantify
+    # over relations because one relation cannot match every item named by the plan.
     visuals_with_item_instruction = {
         target.visual_ref
         for beat in plan.beats for target in beat.targets

@@ -2,10 +2,10 @@
 
 ``review_api.update_fixture`` clears every piece of approval evidence when a
 reviewer actually changes a fixture's params: render evidence produced for the
-old params must not survive the edit, and approval preconditions 3, 5 and 8
-(``app/meta/approval.py``) all require that evidence. Without a way to rebuild
-it the corrected draft could never leave ``pending_review``, and the only way
-forward -- reject and regenerate -- discarded the correction (issue #63).
+old params must not survive the edit, and the validation, quality, and fixture
+approval gates all require that evidence. Without a way to rebuild it the
+corrected draft could never leave ``pending_review``; rejecting and regenerating
+would discard the correction.
 
 This module rebuilds it in place. It re-runs the same ``validate_candidate``
 that produced the draft, against the reviewer's edited fixtures, and writes the

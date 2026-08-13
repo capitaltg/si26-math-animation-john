@@ -61,7 +61,7 @@ def test_every_predicate_positive_negative_and_boundary(predicate, values, expec
 
 def test_self_consistent_but_mathematically_wrong_guard_fails_independent_check():
     # This guard is internally self-consistent: 2 + 2 really does equal the literal
-    # the author (Bedrock, in Phase 3) wrote as the "total". The compiler has no way
+    # the author wrote as the "total". The compiler has no way
     # to know the *intended* mathematics is "2 + 3 = 5" for the source problem it was
     # generated from — it only proves the predicate holds for the value asserted.
     wrong_guard = GuardDocument(
@@ -80,7 +80,7 @@ def test_self_consistent_but_mathematically_wrong_guard_fails_independent_check(
 
     # An independently computed expected result for the *actual* source problem
     # ("2 + 3") does not match what this guard accepts — this is exactly the check
-    # spec §5 requires a human reviewer to perform in Phase 3; the compiler's job
+    # requires a human reviewer; the compiler's job
     # (proven here) ends at "predicates are internally consistent," not "predicates
     # describe the intended mathematics."
     independently_expected_sum = 2 + 3

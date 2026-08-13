@@ -156,9 +156,8 @@ def evaluate_program_visual(
                 for point in visual.points
             ],
             "grid": bool(visual.grid),
-            # M22: polygon/pivot/rotation geometry. `polygons` and `pivot`
-            # still run through `_evaluate` (their coordinates are typed
-            # `ExpressionNode` the same as `points`, even though the
+            # Polygon, pivot, and rotation geometry still run through `_evaluate`.
+            # Their coordinates are `ExpressionNode`s like `points`, even though the
             # `rotation` strategy additionally requires them to be literal --
             # a `group_reveal` plane may declare a field-ref polygon).
             # `rotation_frames` is already a list of literal (x, y) floats

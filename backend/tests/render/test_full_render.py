@@ -144,7 +144,6 @@ def test_run_render_worker_caps_subprocess_timeout_by_remaining_deadline(tmp_pat
     passed_timeout = mock_run.call_args.kwargs["timeout"]
     assert passed_timeout <= 5.0
     assert passed_timeout > 0
-    # Sanity: without a deadline, the subprocess would get the full budget.
     assert passed_timeout < RENDER_TIMEOUT_SECONDS
 
 

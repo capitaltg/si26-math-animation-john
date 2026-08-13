@@ -116,12 +116,7 @@ def test_generation_prompt_requires_semantic_teaching_plan(mock_call):
     assert "three to five teaching beats" in prompt
     assert "prefer semantic strategy over custom actions" in prompt
     assert "only inside their owning beat" in prompt
-    # The answer contract the prompt used to state -- answer visuals start neutral
-    # and are introduced only during conclude -- is now the system's job, not the
-    # model's: the answer statement is staged for the plan. Pin the three clauses
-    # that replaced it: who owns the statement, when it resolves, and that the
-    # model must not author its own stand-in (the `? meters` label that motivated
-    # this change came straight out of the old wording).
+    # The system owns answer staging; the model must not author a stand-in.
     assert "the system supplies the answer statement and stages it for you" in prompt
     assert "resolves to the value only at conclude" in prompt
     # `TeachingPlanDocument.require_focus_and_conclusion_order` rejects a
@@ -249,8 +244,7 @@ def test_the_prompt_hands_answer_presentation_to_the_system():
     # A reworded reversion would pass the two negative assertions below;
     # this one pins the contract the prompt now has to state.
     assert "resolves to the value only at conclude" in _DRAFT_SYSTEM_PROMPT
-    # The old instruction is false now: the unresolved answer appears from the
-    # first beat, and only its VALUE waits for conclude.
+    # The unresolved answer appears from the first beat; only its value waits.
     assert "introduced only during\nconclude" not in _DRAFT_SYSTEM_PROMPT
     assert "the final evaluated answer is introduced only during" not in _DRAFT_SYSTEM_PROMPT
 

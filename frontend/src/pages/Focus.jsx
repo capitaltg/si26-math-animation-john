@@ -21,11 +21,12 @@ export default function Focus() {
   const timerRef = useRef(null)
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
 
-  // Compute derived values
-  const idx = storyboard ? storyboard.findIndex(s => s.scene_id === id) : -1
-  const scene = idx >= 0 ? storyboard[idx] : null
+  const sceneIndex = storyboard
+    ? storyboard.findIndex((storyboardScene) => storyboardScene.scene_id === id)
+    : -1
+  const scene = sceneIndex >= 0 ? storyboard[sceneIndex] : null
 
-  // templates + rejected — placeholders until template alternatives are on scene
+  // The scene exposes only its selected template until alternatives are available.
   const templates = useMemo(
     () => (scene?.template ? [{ template: scene.template, matched: true }] : []),
     [scene?.template],
@@ -38,16 +39,16 @@ export default function Focus() {
   const currentDraft = drafts[scene.scene_id] ?? scene.params
   const originalParams = scene.params
 
-  // debounced autosave: on draft change, wait 250ms then persist
+  // Debounce live edits; explicit reverts persist immediately.
   const handleParamsChange = (nextParams) => {
-    setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
+    setDrafts((currentDrafts) => ({ ...currentDrafts, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => { saveEdits(scene.scene_id, nextParams)?.catch?.(() => {}) }, 250)
   }
   const handleParamsRevert = (nextParams) => {
-    setDrafts(prev => ({ ...prev, [scene.scene_id]: nextParams }))
+    setDrafts((currentDrafts) => ({ ...currentDrafts, [scene.scene_id]: nextParams }))
     if (timerRef.current) clearTimeout(timerRef.current)
-    saveEdits(scene.scene_id, nextParams)?.catch?.(() => {}) // revert immediately
+    saveEdits(scene.scene_id, nextParams)?.catch?.(() => {})
   }
 
   const rejected = [] // no scene-level rejected list yet
@@ -70,8 +71,8 @@ export default function Focus() {
     } catch {
       return // stay on Focus so user sees `error` and can retry
     }
-    setPendingRenders(prev => {
-      const next = new Set(prev)
+    setPendingRenders((currentPending) => {
+      const next = new Set(currentPending)
       next.add(scene.scene_id)
       return next
     })
@@ -79,17 +80,17 @@ export default function Focus() {
   }
 
   return (
-    <article className="focus" aria-label={`Problem ${idx + 1} of ${total}`}>
+    <article className="focus" aria-label={`Problem ${sceneIndex + 1} of ${total}`}>
       <header className="focus__top">
         <Link to="/demo" className="btn btn--ghost">← Back to queue</Link>
-        <span className="focus__count">Problem {idx + 1} of {total}</span>
+        <span className="focus__count">Problem {sceneIndex + 1} of {total}</span>
       </header>
 
       <TemplateTabs
         templates={templates}
         rejected={rejected}
         activeTemplate={scene.template}
-        onSwitch={() => { /* alternate-template switching is out of scope this task */ }}
+        onSwitch={() => { /* Alternate-template switching is not implemented. */ }}
       />
 
       {mismatch && (

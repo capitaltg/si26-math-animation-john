@@ -1038,10 +1038,8 @@ def test_unknown_declared_path_hint_says_so_when_the_visual_declares_none(
 def test_unknown_visual_ref_hint_names_the_declared_visuals_from_a_path_ref(
     perimeter_plan, compile_context,
 ):
-    # `_validate_path_ref` raises unknown_visual_ref independently of
-    # `_validate_target` -- the visual_ref prefix of a path_ref string, not a
-    # beat or custom-action target. Task 4 enumerated the target-ref site;
-    # this pins the path-ref site to the same treatment.
+    # `_validate_path_ref` handles a path-ref prefix independently of beat and
+    # custom-action targets, so both validation paths must emit the same hint.
     raw = perimeter_plan.model_dump()
     raw["beats"][1]["custom_actions"] = [
         {"kind": "trace", "path_ref": "missing.perimeter"}
@@ -1414,15 +1412,8 @@ def test_pair_elimination_still_declares_no_answer_visual(
     assert program.answer_anchor is not None
 
 
-# ---------------------------------------------------------------------------
-# regroup and magnitude_comparison
-# ---------------------------------------------------------------------------
-#
-# Before these branches existed, a `regroup` grid or a `magnitude_comparison`
-# bar/number_line validated, compiled, and rendered as a whole-visual reveal
-# with no strategy-specific animation. The expander now walks the primary
-# visual's semantic parts and emits observable role changes that read as the
-# strategy names them. See issue #66.
+# `regroup` and `magnitude_comparison` must animate the primary visual's
+# semantic parts instead of collapsing into a whole-visual reveal.
 
 
 def _grid_regroup_plan(rows, columns):
@@ -2158,10 +2149,7 @@ def test_coordinate_plane_rejects_a_point_target_beyond_the_declared_points(comp
     assert exc_info.value.failure.code == "target_index_out_of_range"
 
 
-# --- M11 acceptance: expressions, one-/two-step equations, inequalities ------
-#
-# Each fixture is one row of ticket #105's acceptance criteria. The strategies
-# and visual kinds involved are:
+# These fixtures cover the following strategy and visual-kind combinations:
 #
 # - `expression_evaluate` (evaluate 3n + 2 at n = 4): label + group_reveal.
 #   No new kind or strategy -- the label carries the expression's text and the

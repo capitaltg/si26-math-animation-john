@@ -63,11 +63,6 @@ def test_removed_strategy_is_rejected_at_schema_validation():
 # the source text only as a comment describing what the other branches contrast
 # with, which is enough to clear the source-text mention check below.
 #
-# See the design's "Schema-complete, behavior-thin" tier:
-# docs/superpowers/specs/2026-08-03-v3-capability-consistency-design.md
-#
-# `rotation` (M22) gained its own `RotateAction` staging in beat_expander.py
-# (Task 5 of the M22 plan), so it no longer belongs in this tracked gap.
 _STRATEGIES_WITHOUT_EXPANDER_BEHAVIOR = set()
 
 
@@ -75,8 +70,8 @@ def test_every_supported_strategy_has_expander_behavior():
     # A source-text search, deliberately crude: it proves a strategy name is
     # *mentioned*, not that the branch differentiates output. `partition` counts
     # as handled on this measure because the name also appears as a visual-kind
-    # key in beat_expander's program-visual map. A stronger check requires
-    # executing the compiler and diffing scene programs -- the design's Phase 2.
+    # key in beat_expander's program-visual map. Proving distinct output would
+    # require executing the compiler and comparing scene programs.
     source = Path(beat_expander.__file__).read_text()
     supported = set().union(*_SUPPORTED_STRATEGIES.values())
     unhandled = {strategy for strategy in supported if strategy not in source}

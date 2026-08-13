@@ -51,7 +51,7 @@ class VisualRegistry:
 def _segments_properly_intersect(a1, a2, b1, b2):
     """Return True iff the closed segments a1-a2 and b1-b2 cross each other's
     interior (touching at a shared endpoint returns False). Used to reject a
-    self-intersecting polygon vertex order (M22).
+    self-intersecting polygon vertex order.
     """
 
     def _orient(p, q, r):
@@ -752,10 +752,8 @@ def _tape_label_bounds(box: Bounds, *, upper: bool) -> Bounds:
     )
 
 
-#: The plane's half-extent in scene units. Chosen once so every downstream
-#: ticket that plots on a coordinate_plane places a point at the same fraction
-#: of the frame -- an M17-style transformation and an M21-style scatter share
-#: the same grid without renegotiating axis spans.
+#: Fixed so every coordinate-plane consumer places a point at the same fraction
+#: of the frame without renegotiating axis spans.
 COORDINATE_PLANE_HALF_WIDTH = 2.6
 COORDINATE_PLANE_HALF_HEIGHT = 2.2
 
@@ -1153,9 +1151,8 @@ def _measure_coordinate_plane(*, spec, values, measurer):
             "label_dx": chosen_dx, "label_dy": chosen_dy,
         })
 
-    # M22: an optional pivot and a primary polygon, both declared inside the
-    # same span the points and axes are drawn against. Off-plane vertices are
-    # refused before projection (raw model coords compared against the exact
+    # The optional pivot and primary polygon share the points' coordinate span.
+    # Off-plane vertices are refused before projection against the exact
     # Fraction span), and duplicate/self-intersecting vertex orders are
     # refused before anything is projected -- a bowtie ordering would still
     # "measure" a bounding box, so the geometric check has to run explicitly.
@@ -1206,8 +1203,8 @@ def _measure_coordinate_plane(*, spec, values, measurer):
     # because `PolygonSpec.polygons` is capped at `max_length=1` in the plan
     # schema (`teaching_plan.py`); a second polygon would silently overwrite
     # the first's parts under these same keys. Enforce that invariant here,
-    # in code, rather than relying solely on the schema cap -- if a future
-    # ticket relaxes the cap, this assert must fail loudly until the part
+    # in code, rather than relying solely on the schema cap. If that cap is
+    # relaxed, this assert must fail loudly until the part
     # keys (and `.anchor()`) are redesigned to carry a polygon index too.
     assert len(polygons) <= 1, (
         "coordinate_plane measurer assumes at most one polygon (parts are "
@@ -1284,7 +1281,7 @@ def _measure_coordinate_plane(*, spec, values, measurer):
         )
         polygon_payload.append({"ref": polygon_ref, "vertices": tuple(projected_vertices)})
 
-    # M22: per-iteration ghost frames, projected through the same `project()`
+    # Project each rotation ghost through the same `project()`
     # closure as `points` and `polygons` above. Frames arrive already
     # validated (off-plane / self-intersecting checks ran once at compile
     # time in `compiler._compute_rotation_frames`); re-checking them here
@@ -1618,9 +1615,7 @@ def _coordinate_plane_bounds(
     return Bounds(left, right, bottom, top)
 
 
-#: Base horizontal extent every data_display style paints its axis in. Fixed
-#: so downstream tickets that reuse the kind land marks at the same fraction
-#: of the frame across variants and lessons.
+#: Fixed axis extent keeps marks at the same frame fraction across styles.
 DATA_DISPLAY_AXIS_WIDTH = 9.0
 #: Vertical room reserved above the axis for bars / marks. Same for every
 #: style so the safe-frame fit check reads the same intent regardless of the
@@ -1699,9 +1694,8 @@ def _measure_data_display_bars(*, spec, values, measurer, contiguous: bool):
     width = DATA_DISPLAY_AXIS_WIDTH
     gap = 0.0 if contiguous else 0.24
     n = len(categories)
-    # Bar width chosen so N bars plus (N-1) gaps span `DATA_DISPLAY_AXIS_WIDTH`
-    # exactly. Fixed axis width means downstream tickets reading this kind's
-    # extent get the same layout regardless of category count.
+    # Fit N bars plus N-1 gaps exactly inside the fixed axis width so layout is
+    # stable across category counts.
     bar_width = (width - gap * (n - 1)) / n
     if bar_width <= 0:
         raise V3ValidationError(V3Failure(

@@ -7,11 +7,11 @@ import RenderToast from '../components/RenderToast'
 import RenderDock from '../components/RenderDock'
 import useRenderQueue from '../lib/useRenderQueue'
 
-async function responseJson(resp, fallbackMessage) {
+async function responseJson(response, fallbackMessage) {
   try {
-    return await resp.json()
+    return await response.json()
   } catch {
-    throw new Error(resp.ok ? 'Server returned an invalid response' : fallbackMessage)
+    throw new Error(response.ok ? 'Server returned an invalid response' : fallbackMessage)
   }
 }
 
@@ -78,13 +78,13 @@ export default function DemoShell() {
     const form = new FormData()
     form.append('file', file)
     try {
-      const resp = await fetch('/upload', {
+      const response = await fetch('/upload', {
         method: 'POST',
         body: form,
         credentials: 'include',
       })
-      const data = await responseJson(resp, 'Upload failed')
-      if (!resp.ok) throw new Error(responseError(data, 'Upload failed'))
+      const data = await responseJson(response, 'Upload failed')
+      if (!response.ok) throw new Error(responseError(data, 'Upload failed'))
       setCandidates(data.candidates)
       setSelected({})
       setFileName(file.name)
@@ -105,14 +105,14 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch('/options', {
+      const response = await fetch('/options', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_ids: candidateIds }),
       })
-      const data = await responseJson(resp, 'Could not get options')
-      if (!resp.ok) throw new Error(responseError(data, 'Could not get options'))
+      const data = await responseJson(response, 'Could not get options')
+      if (!response.ok) throw new Error(responseError(data, 'Could not get options'))
       const initialPicks = Object.fromEntries(
         data.options
           .filter((item) => item.templates.length > 0)
@@ -136,14 +136,14 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch('/options', {
+      const response = await fetch('/options', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_ids: [candidateId] }),
       })
-      const data = await responseJson(resp, 'Could not refresh visualizations')
-      if (!resp.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
+      const data = await responseJson(response, 'Could not refresh visualizations')
+      if (!response.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
       const refreshed = data.options[0]
       if (!refreshed) return
       // If the teacher has since left the visuals stage (e.g. "Back to
@@ -182,16 +182,16 @@ export default function DemoShell() {
         candidate_id: item.candidate_id,
         template: picks[item.candidate_id],
       }))
-      const resp = await fetch('/storyboard', {
+      const response = await fetch('/storyboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ picks: body }),
       })
-      const data = await responseJson(resp, 'Storyboard failed')
-      if (!resp.ok) throw new Error(responseError(data, 'Storyboard failed'))
+      const data = await responseJson(response, 'Storyboard failed')
+      if (!response.ok) throw new Error(responseError(data, 'Storyboard failed'))
       setStoryboard(data.scenes)
-      setDrafts(Object.fromEntries(data.scenes.map((s) => [s.scene_id, s.params])))
+      setDrafts(Object.fromEntries(data.scenes.map((scene) => [scene.scene_id, scene.params])))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -200,9 +200,11 @@ export default function DemoShell() {
   }
 
   function replaceScene(updated, { resetDraft = false } = {}) {
-    setStoryboard((prev) => prev.map((s) => (s.scene_id === updated.scene_id ? updated : s)))
+    setStoryboard((currentStoryboard) => currentStoryboard.map(
+      (scene) => (scene.scene_id === updated.scene_id ? updated : scene),
+    ))
     if (resetDraft) {
-      setDrafts((prev) => ({ ...prev, [updated.scene_id]: updated.params }))
+      setDrafts((currentDrafts) => ({ ...currentDrafts, [updated.scene_id]: updated.params }))
     }
   }
 
@@ -210,21 +212,21 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch(`/storyboard/${sceneId}${path}`, {
+      const response = await fetch(`/storyboard/${sceneId}${path}`, {
         credentials: 'include',
         ...options,
       })
-      const data = await responseJson(resp, 'Action failed')
-      if (resp.status === 422) {
+      const data = await responseJson(response, 'Action failed')
+      if (response.status === 422) {
         const errors = Array.isArray(data?.detail?.errors) ? data.detail.errors : []
         if (errors.length === 0) {
           throw new Error(responseError(data, 'Could not save edits'))
         }
-        setFieldErrors((prev) => ({ ...prev, [sceneId]: errors }))
+        setFieldErrors((currentErrors) => ({ ...currentErrors, [sceneId]: errors }))
         return
       }
-      if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
-      setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
+      if (!response.ok) throw new Error(responseError(data, 'Action failed'))
+      setFieldErrors((currentErrors) => ({ ...currentErrors, [sceneId]: null }))
       replaceScene(data, { resetDraft })
     } catch (err) {
       setError(err.message)

@@ -158,8 +158,7 @@ def test_parallel_with_label_step_rejected():
 
 
 def test_parallel_with_only_timed_action_steps_compiles_fine():
-    # No regression: a parallel block whose direct steps are all timed actions
-    # (which return Animations, not mobjects) must still compile successfully.
+    # Timed actions return Animations, so they remain valid parallel steps.
     document = AnimationDocument(
         animation_version=1,
         root=SequenceNode(
