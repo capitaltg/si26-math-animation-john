@@ -6,6 +6,8 @@
     "docker-compose.override.yml"
   ],
   "service": "backend",
+  // Editor + terminal cwd inside the container. Independent of the image's
+  // WORKDIR (/app/backend), which the entrypoint still uses for alembic.
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
 
@@ -19,20 +21,23 @@
     "8000": { "label": "Backend (FastAPI)",   "onAutoForward": "silent" }
   },
 
-  "postAttachCommand": {
-    "hint": "echo 'Dev stack up. Try: make help  |  make dev  |  make frontend  |  make down'"
-  },
+  // No Docker feature. Running `make` (which shells out to
+  // `docker compose ...`) from INSIDE the devcontainer is unreliable
+  // because bind-mount paths in the child compose (e.g. ./backend) are
+  // paths inside the devcontainer, not on the host daemon that would
+  // actually mount them. Instead:
+  //
+  //   * The dev stack is ALREADY running (see `runServices` above), so
+  //     hot-reload backend + vite HMR are available without any extra
+  //     command.
+  //   * For lifecycle changes (make dev / make down / make restart /
+  //     make tls), open a terminal on the HOST — not inside the
+  //     devcontainer — and run `make <target>` there.
+  //   * Editing, running tests inside the backend container, and using
+  //     the VS Code debugger all work fine from inside the container.
 
-  // Docker-outside-of-Docker so `make` targets that shell out to
-  // `docker compose ...` work from inside the devcontainer — the host
-  // socket is mounted (see docker-compose.override.yml), and this feature
-  // installs the CLI + Compose plugin.
-  "features": {
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-      "moby": true,
-      "installDockerBuildx": true,
-      "installDockerComposeSwitch": true
-    }
+  "postAttachCommand": {
+    "hint": "echo 'Dev stack is running via runServices. Run make from the HOST terminal (not this one) for lifecycle changes.'"
   },
 
   "customizations": {

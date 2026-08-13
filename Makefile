@@ -51,12 +51,18 @@ logs:  ## tail logs from all services
 ps:  ## show container status
 	$(COMPOSE_BASE) ps
 
-# `restart` alone does NOT reread .env (env is baked into the container at
-# create time). Use up -d --force-recreate so the kill switch and any other
-# env change actually take effect.
+# Only backend + (if it's running) meta-worker consume BEDROCK_*, MEDIA_*,
+# CORS_*, etc. — nginx and Caddy have no env-driven config, so touching
+# them here would collide with Caddy's :80 under the TLS overlay for no
+# benefit. Meta-worker is profile-gated, so it must be brought up with
+# `--profile meta` to be visible to compose.
 .PHONY: restart
-restart:  ## recreate backend + nginx so .env changes (kill switch, caps) take effect
-	$(COMPOSE_BASE) up -d --force-recreate --no-deps backend nginx
+restart:  ## recreate services that consume .env (backend, and meta-worker if it's running)
+	$(COMPOSE_BASE) up -d --force-recreate --no-deps backend
+	@if [ -n "$$($(COMPOSE_BASE) --profile meta ps -q meta-worker 2>/dev/null)" ]; then \
+	  echo "meta-worker running — recreating it too"; \
+	  $(COMPOSE_BASE) --profile meta up -d --force-recreate --no-deps meta-worker; \
+	fi
 
 # --- dev ---------------------------------------------------------------------
 

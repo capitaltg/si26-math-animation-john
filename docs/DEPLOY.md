@@ -187,6 +187,11 @@ switch value active. `make restart` recreates the affected containers via
 `up -d --force-recreate` so the new env takes effect. Same applies to any
 change to `BEDROCK_*`, `MEDIA_*`, `CORS_*`, etc.
 
+`make restart` only touches services that actually consume env — `backend`,
+and `meta-worker` if it happens to be running under the `meta` profile.
+Nginx and Caddy have no env-driven config, so leaving them alone avoids the
+port :80 collision that would happen under the TLS overlay.
+
 Once recreated, every Bedrock call returns `503 AI features are temporarily
 disabled`. Flip `BEDROCK_DISABLED=0` and `make restart` to resume.
 
@@ -316,6 +321,21 @@ make help        # list all targets
 triggers uvicorn reload and vite HMR without a rebuild. Postgres and Redis
 still run in containers; media, `.venv`, and `node_modules` are excluded
 from the mount so the container's own copies stay intact.
+
+### VS Code / Cursor devcontainer
+
+Open the repo, run "Reopen in Container" (Dev Containers extension). The
+devcontainer brings up the full dev stack via `runServices` — hot-reload
+backend, vite, postgres, and redis are all running by the time the
+window loads.
+
+Run `make dev` / `make down` / `make restart` etc. from a terminal **on
+the host**, not from inside the devcontainer. The devcontainer doesn't
+ship a Docker daemon by design: bind-mount paths in the child compose
+resolve inside the devcontainer's filesystem, which the host daemon
+cannot see, so nested `docker compose` from inside would try to mount
+paths that don't exist for it. Editing code, running tests inside the
+backend container, and attaching the debugger all work fine from inside.
 
 For running the full test suite locally without Docker, see the paths
 documented in `README.md`.

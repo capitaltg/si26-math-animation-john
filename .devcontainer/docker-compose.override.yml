@@ -1,18 +1,20 @@
 # Devcontainer-only overrides layered on top of docker-compose.yml +
-# docker-compose.dev.yml. Adds:
-#   * repo-root mount at /workspace so .vscode/tasks.json, the Makefile,
-#     README, docs/ are all visible inside the container — not just the
-#     backend/ subtree that Dockerfile.backend copies to /app/backend.
-#   * host Docker socket mount so `make dev` / `make down` from inside
-#     the devcontainer drive the host's daemon (Docker-outside-of-Docker).
+# docker-compose.dev.yml. When compose is invoked with multiple `-f` files,
+# relative paths in EVERY file resolve against the FIRST file's project
+# directory — not the file that literally contains the path. Here that
+# project directory is the repository root, so `.` == repo root.
 #
-# The workspace path matches devcontainer.json's `workspaceFolder`.
+# Adds one mount: the whole repo at /workspace so .vscode/tasks.json, the
+# Makefile, README, and docs/ are visible inside the container, alongside
+# the /app/backend subtree that Dockerfile.backend already copies in.
+#
+# Does NOT override `working_dir`. The image's WORKDIR is /app/backend
+# because docker-entrypoint.sh runs `alembic upgrade head` from there
+# (alembic.ini is at /app/backend/alembic.ini). VS Code's `workspaceFolder`
+# in devcontainer.json controls where the editor and integrated terminal
+# open — it is independent of the container's WORKDIR.
 
 services:
   backend:
     volumes:
-      # Whole repo — read/write so Makefile, tasks.json, code all edit in place.
-      - ..:/workspace:cached
-      # Host Docker socket for compose commands from inside the container.
-      - /var/run/docker.sock:/var/run/docker.sock
-    working_dir: /workspace
+      - .:/workspace:cached
