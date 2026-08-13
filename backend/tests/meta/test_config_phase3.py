@@ -145,8 +145,18 @@ def test_version_constants_identify_the_current_compiler_and_renderer_wave():
     # the origin. Point-label pixel geometry, the pivot text presence, and
     # the origin-tick bounds all change, so a report stamped 12 no longer
     # describes the version-13 frame.
+    #
+    # DYNAMIC_RENDERER_VERSION 14 shrinks coordinate_plane axis tick numbers
+    # to a new 20pt `axis_tick` role (one step below the 24pt
+    # `polygon_label` role vertex letters and point labels use) and paints
+    # point labels in the palette's `focus` colour instead of the default
+    # neutral text colour. Tick widths shrink -- shifting the collision
+    # thinning stride and point-label quadrant search -- and the plotted
+    # coordinate readouts move from white to orange, so a version-13
+    # measurer's bounds and a version-13 renderer's hues no longer
+    # describe the version-14 frame.
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 13
+    assert DYNAMIC_RENDERER_VERSION == 14
 
 
 def test_version_constants_carry_m22_bumps():
@@ -154,4 +164,4 @@ def test_version_constants_carry_m22_bumps():
     from app.meta.versions import DSL_COMPILER_VERSION, DYNAMIC_RENDERER_VERSION
 
     assert DSL_COMPILER_VERSION == 15
-    assert DYNAMIC_RENDERER_VERSION == 13
+    assert DYNAMIC_RENDERER_VERSION == 14
