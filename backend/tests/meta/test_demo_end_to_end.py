@@ -21,6 +21,7 @@ mapped onto the fields those acceptance contracts read.
 
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -663,14 +664,84 @@ def _run_demo_lesson(client: TestClient, lesson: DemoLesson, tmp_path: Path) -> 
     )
 
 
-@pytest.fixture
-def rendered_median(client, tmp_path):
-    return _run_demo_lesson(client, MEDIAN_LESSON, tmp_path)
+@contextmanager
+def _demo_env_and_client(tmp_path: Path):
+    """Set demo-runbook env + patch the engine long enough to run one lesson,
+    then restore both -- so the env mutations required at import time in the
+    subprocesses that ``_run_demo_lesson`` spawns never survive past the
+    fixture that requested them.
+
+    The session-scoped `rendered_median` / `rendered_perimeter` fixtures each
+    enter this once, `_run_demo_lesson` executes inside the with-block (its
+    render subprocesses inherit the env), and the `finally` restores the
+    original env + `db.get_engine` before yielding. Any later test in the
+    session sees the process's original env, not the demo overrides -- which
+    previously broke `test_meta_settings_defaults` and
+    `test_approve_disabled_returns_409_before_checking_preconditions` when
+    `META_APPROVAL_ENABLED=1` leaked in as an ambient env var.
+    """
+    saved_env: dict[str, str | None] = {}
+
+    def _setenv(key: str, value: str) -> None:
+        saved_env.setdefault(key, os.environ.get(key))
+        os.environ[key] = value
+
+    saved_get_engine = db.get_engine
+    try:
+        rehearsal_db = os.environ.get("REHEARSAL_META_DB_PATH")
+        if rehearsal_db:
+            meta_db = Path(rehearsal_db)
+            engine = db.make_engine(meta_db)
+            db.get_engine = lambda: engine
+        else:
+            meta_db = tmp_path / "meta.db"
+            engine = db.make_engine(meta_db)
+            db.get_engine = lambda: engine
+            db.create_all(engine)
+        _setenv("META_DB_PATH", str(meta_db))
+        artifact_root = os.environ.get("REHEARSAL_META_ARTIFACT_ROOT") or str(
+            tmp_path / "artifacts"
+        )
+        _setenv("META_ARTIFACT_ROOT", artifact_root)
+        _setenv("META_TEMPLATES_ENABLED", "1")
+        _setenv("META_CODEGEN_ENABLED", "1")
+        _setenv("META_APPROVAL_ENABLED", "1")
+        _setenv("FINGERPRINT_OBSERVATION_THRESHOLD", "1")
+        _setenv("META_REQUIRED_FIXTURE_COUNT", "1")
+        _setenv("META_REVIEWER_TOKEN", "test-token")
+        get_settings.cache_clear()
+        from app.main import create_app
+
+        yield TestClient(create_app(), headers={"Authorization": "Bearer test-token"})
+    finally:
+        for key, original in saved_env.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+        db.get_engine = saved_get_engine
+        get_settings.cache_clear()
 
 
-@pytest.fixture
-def rendered_perimeter(client, tmp_path):
-    return _run_demo_lesson(client, PERIMETER_LESSON, tmp_path)
+@pytest.fixture(scope="session")
+def rendered_median(tmp_path_factory):
+    """Run the median runbook once per session. Env + engine mutations live
+    only inside the with-block, so the returned `DemoRenderResult` is safe to
+    hand to any later test without pytest also handing them a polluted env.
+    """
+    demo_tmp = tmp_path_factory.mktemp("demo-runbook-median")
+    lesson_tmp = tmp_path_factory.mktemp("rendered-median")
+    with _demo_env_and_client(demo_tmp) as client:
+        return _run_demo_lesson(client, MEDIAN_LESSON, lesson_tmp)
+
+
+@pytest.fixture(scope="session")
+def rendered_perimeter(tmp_path_factory):
+    """Run the perimeter runbook once per session. See `rendered_median`."""
+    demo_tmp = tmp_path_factory.mktemp("demo-runbook-perimeter")
+    lesson_tmp = tmp_path_factory.mktemp("rendered-perimeter")
+    with _demo_env_and_client(demo_tmp) as client:
+        return _run_demo_lesson(client, PERIMETER_LESSON, lesson_tmp)
 
 
 @pytest.fixture

@@ -701,8 +701,12 @@ def test_update_fixture_rejects_edit_on_approved_draft_without_mutation(client):
         json={"params": {"n": 6}, "expected_result": {"answer": "6"}},
     )
 
-    assert response.status_code == 409
-    # The draft is no longer pending_review, so GET must now 404 it (the
+    # A guessable fixture id (`{draft_id}-fixture-{n}`) plus a reviewer token
+    # must not disclose the draft's internal status, so this endpoint 404s
+    # uniformly for a non-editable draft the same way `get_draft` does.
+    assert response.status_code == 404
+    assert "approved" not in response.text.lower()
+    # The draft is no longer pending_review, so GET must also 404 it (the
     # reviewer never sees non-pending drafts) -- check the no-mutation claim
     # against the database directly rather than through the review API.
     assert client.get(f"/meta/drafts/{draft.id}").status_code == 404
