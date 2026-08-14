@@ -229,6 +229,53 @@ def test_a_plan_may_not_stage_the_substitution_itself():
         TeachingPlanDocument.model_validate(payload)
 
 
+@pytest.mark.parametrize("strategy", ["unit_substitution", "unit_rate"])
+def test_a_plan_may_not_name_the_source_label_group(strategy):
+    """The unindexed part means "the km label on every box", which no plan can name.
+
+    Reaching the compiler instead it fails as `missing_semantic_index`, whose
+    "supply the part index" hint answers a different question: one index names
+    one box and drops the rest without saying so.
+    """
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    from pydantic import ValidationError
+
+    payload = _tape_plan(strategy=strategy).model_dump()
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "source_label", "index": None},
+    ]
+
+    with pytest.raises(ValidationError, match="source_label"):
+        TeachingPlanDocument.model_validate(payload)
+
+
+@pytest.mark.parametrize("strategy", ["unit_substitution", "unit_rate"])
+def test_a_plan_may_name_one_boxs_source_label(strategy):
+    """`source_label[i]` is a declared part like `box[i]`, and the guard leaves it alone.
+
+    Index 0 is always there to name: a tape needs a positive value, and
+    `unit_rate` is held to a full source unit besides.
+    """
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan(strategy=strategy).model_dump()
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "source_label", "index": 0},
+    ]
+
+    _compile(TeachingPlanDocument.model_validate(payload))
+
+
+def test_a_plan_may_name_the_whole_tape_where_it_wanted_the_source_labels():
+    """The other repair the message names, also one the plan can actually take."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan().model_dump()
+    payload["beats"][1]["targets"] = [{"visual_ref": "trail_tape"}]
+
+    _compile(TeachingPlanDocument.model_validate(payload))
+
+
 def test_the_tape_factory_never_runs_for_an_oversized_value():
     """The guard runs before the factory, as it does for `bar`."""
     from types import SimpleNamespace
