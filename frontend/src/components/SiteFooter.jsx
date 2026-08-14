@@ -8,6 +8,16 @@ export default function SiteFooter() {
         <span className="site-footer__lockup">
           Math problems in — verified animations out. Built for teachers.
         </span>
+        <span className="site-footer__credit">
+          Created by{' '}
+          <a
+            href="https://www.linkedin.com/in/johnn05/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            John Ng
+          </a>
+        </span>
       </div>
     </footer>
   )

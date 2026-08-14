@@ -323,6 +323,15 @@ a:hover { text-decoration: underline; }
   color: var(--ink-mute);
   font-size: var(--t-xs);
 }
+.site-footer__credit {
+  color: var(--ink-mute);
+  font-size: var(--t-xs);
+  margin-left: auto;
+}
+.site-footer__credit a {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
 
 /* ============================== LANDING ================================== */
 .landing {
