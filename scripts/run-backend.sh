@@ -18,4 +18,7 @@ export PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH"
 
 cd "$ROOT/backend"
 echo "Backend → http://localhost:8000"
-exec "$VENV/bin/uvicorn" app.main:app --port 8000 --reload
+# `--no-proxy-headers`: uvicorn otherwise rewrites the client from
+# X-Forwarded-For before app middleware sees it, and loopback (this whole
+# script's topology) is in its default trusted list. See Dockerfile.backend.
+exec "$VENV/bin/uvicorn" app.main:app --port 8000 --reload --no-proxy-headers

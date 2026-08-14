@@ -21,7 +21,11 @@ services:
     profiles: ["_disabled_in_dev"]
 
   backend:
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # `--no-proxy-headers` mirrors Dockerfile.backend's CMD -- see the comment
+    # there. Dev is where it matters most: the peer is loopback, which IS in
+    # uvicorn's default forwarded_allow_ips, so without the flag any caller
+    # can name themselves with an X-Forwarded-For header.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--no-proxy-headers"]
     # Publish the API on the host so vite (running on the host or in the
     # frontend-dev container) can proxy straight to it.
     ports:

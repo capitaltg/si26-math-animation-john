@@ -39,7 +39,19 @@ class Settings(BaseSettings):
 
     # Comma-separated CORS origins. Local dev default keeps Vite on :5173.
     # In prod, same-origin via nginx means CORS is optional; leave narrow.
+    # `*` is rejected — see `reject_wildcard_cors_origin`.
     cors_allow_origins: str = "http://localhost:5173"
+
+    #: Whether an inbound `X-Forwarded-For` may name the client. True suits the
+    #: shipped topology, where nginx (and Caddy in the TLS overlay) overwrite
+    #: the header with the connecting peer, so a client-supplied value never
+    #: survives to the app. Set false when the backend is reachable without
+    #: that edge in front, so `enforce_bedrock_quota` keys the per-IP cap off
+    #: the real socket instead of a header the caller controls.
+    #:
+    #: Depends on uvicorn running with `--no-proxy-headers`; see
+    #: `app.middleware.ClientIPMiddleware`.
+    trust_forwarded_for: bool = True
 
     # Meta-template generation is opt-in.
     meta_templates_enabled: bool = False
@@ -59,6 +71,33 @@ class Settings(BaseSettings):
     meta_approval_enabled: bool = False
     meta_dynamic_classifier_enabled: bool = False
     meta_reviewer_token: str | None = None
+    #: Whether a teacher approving their own draft publishes it to every
+    #: session on this box (ownerless row) or only to their own.
+    #:
+    #: True is the demo behaviour: the approved template survives the
+    #: approver's session being evicted and is visible to anyone else on the
+    #: box. It also means a caller holding nothing but an anonymous session
+    #: cookie reaches the same shared publication that every route in
+    #: `review_api` gates behind `meta_reviewer_token`. Set false to keep
+    #: teacher approvals private to the approving session; the token-gated
+    #: `POST /meta/versions/{id}/promote` is then the only way to share one.
+    meta_teacher_publish_shared: bool = True
+
+    @field_validator("cors_allow_origins", mode="after")
+    @classmethod
+    def reject_wildcard_cors_origin(cls, value: str) -> str:
+        # CORSMiddleware is mounted with allow_credentials=True (app/main.py),
+        # and Starlette answers a credentialed request under a "*" allow-list
+        # by reflecting the caller's own Origin back. That would let any site
+        # read this API with the visitor's session cookie attached, which is
+        # exactly what the narrow list exists to prevent. Fail at boot with a
+        # readable message rather than serve that combination.
+        if any(origin.strip() == "*" for origin in value.split(",")):
+            raise ValueError(
+                "CORS_ALLOW_ORIGINS cannot contain '*' because the API allows "
+                "credentials; list the exact origins instead"
+            )
+        return value
 
     @field_validator("meta_db_path", mode="after")
     @classmethod

@@ -10,6 +10,7 @@ from __future__ import annotations
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from app.config import get_settings
 from app.quota import client_ip_var
 
 
@@ -20,6 +21,23 @@ class ClientIPMiddleware(BaseHTTPMiddleware):
     (production topology), and falls back to `request.client.host` otherwise
     (local dev, direct hits). Only nginx is trusted to set XFF; the upstream
     LB/proxy chain is assumed to be one hop.
+
+    That trust is what `settings.trust_forwarded_for` makes explicit. It holds
+    for the shipped topology because nginx sets `X-Forwarded-For $remote_addr`
+    (not `$proxy_add_x_forwarded_for`) and Caddy overwrites it with
+    `{remote_host}`, so a client-supplied header never reaches here. Deploy the
+    backend without that edge and the header is caller-controlled: turn the
+    setting off so the socket peer is used instead.
+
+    Turning it off only works because uvicorn is started with
+    `--no-proxy-headers` at every launch site (Dockerfile.backend,
+    docker-compose.dev.yml, scripts/run-backend.sh, playwright.config.js).
+    uvicorn's own ProxyHeadersMiddleware defaults ON and rewrites
+    `scope["client"]` from `X-Forwarded-For` before this middleware runs
+    whenever the peer is in `forwarded_allow_ips` (default 127.0.0.1) -- which
+    would make the `request.client.host` fallback below return the forwarded
+    value, silently defeating the setting. `tests/test_middleware.py` guards
+    the flag.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -32,11 +50,12 @@ class ClientIPMiddleware(BaseHTTPMiddleware):
 
 
 def _extract_client_ip(request: Request) -> str | None:
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        first = xff.split(",", 1)[0].strip()
-        if first:
-            return first
+    if get_settings().trust_forwarded_for:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            first = xff.split(",", 1)[0].strip()
+            if first:
+                return first
     if request.client:
         return request.client.host
     return None

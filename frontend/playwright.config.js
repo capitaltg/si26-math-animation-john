@@ -21,7 +21,9 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: '.venv/bin/python -m uvicorn app.main:app --port 8000',
+      // --no-proxy-headers matches how the app is launched everywhere else;
+      // see Dockerfile.backend for why it is load-bearing.
+      command: '.venv/bin/python -m uvicorn app.main:app --port 8000 --no-proxy-headers',
       cwd: '../backend',
       url: 'http://localhost:8000/docs',
       reuseExistingServer: !CI,

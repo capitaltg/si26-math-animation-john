@@ -1606,7 +1606,7 @@ Expected: build succeeds.
 
 - [ ] **Step 6: Manual end-to-end verification**
 
-Use the `/run` skill (or start backend `uvicorn app.main:app` in `backend/` + `npm run dev` in `frontend/`) against a known-good PPTX. Verify: upload → candidates → options → **Review storyboard** shows thumbnails + detected line + source excerpt; edit a value → Save → thumbnail updates; enter an invalid value → field error shown, thumbnail unchanged; change grade → "(overridden)"; Retry re-renders; Approve highlights the card; **Render approved** → Results with download links; a rejected scene is absent from Results.
+Use the `/run` skill (or start backend `uvicorn app.main:app --no-proxy-headers` in `backend/` + `npm run dev` in `frontend/`) against a known-good PPTX. Verify: upload → candidates → options → **Review storyboard** shows thumbnails + detected line + source excerpt; edit a value → Save → thumbnail updates; enter an invalid value → field error shown, thumbnail unchanged; change grade → "(overridden)"; Retry re-renders; Approve highlights the card; **Render approved** → Results with download links; a rejected scene is absent from Results.
 
 - [ ] **Step 7: Commit**
 

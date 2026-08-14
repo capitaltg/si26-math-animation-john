@@ -42,4 +42,12 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=45s --retries=3 \
 # tini reaps zombies + forwards signals; the entrypoint script runs alembic
 # upgrade head, then execs the CMD so tini stays PID 1's child.
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/backend/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# `--no-proxy-headers` is load-bearing, not tidying. uvicorn's
+# ProxyHeadersMiddleware defaults ON and rewrites `scope["client"]` from
+# `X-Forwarded-For` BEFORE any app middleware runs, whenever the connecting
+# peer is in `forwarded_allow_ips` (default 127.0.0.1, and `*` if
+# FORWARDED_ALLOW_IPS says so). That would make `request.client.host` the
+# forwarded value, so `TRUST_FORWARDED_FOR=false` could never take effect.
+# With it off, app.middleware.ClientIPMiddleware is the single place that
+# decides whether the header may name the client.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
