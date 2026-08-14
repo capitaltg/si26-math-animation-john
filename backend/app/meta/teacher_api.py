@@ -528,13 +528,21 @@ def approve(
         # the shared predecessor, without touching other owners' private rows.
         # The new ownerless row survives session eviction, restart, or cookie
         # loss and is visible to every session on this box.
+        #
+        # That reach is why it is a setting. This route authorizes on the
+        # session cookie alone, so with sharing on, a caller holding nothing
+        # but an anonymous session reaches the same shared publication that
+        # every route in `review_api` gates behind the reviewer token. Turning
+        # `META_TEACHER_PUBLISH_SHARED` off keeps the approval private to this
+        # session and leaves the token-gated promote route as the only way to
+        # widen it.
         version = approve_draft_service(
             draft_id=draft_id,
             template_name=request.template_name,
             reviewer_label=f"teacher:{session.session_id}",
             math_semantics_confirmed=request.math_semantics_confirmed,
             owner_session_id=session.session_id,
-            publish_shared=True,
+            publish_shared=get_settings().meta_teacher_publish_shared,
         )
     except DraftNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

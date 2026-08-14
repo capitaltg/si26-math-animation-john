@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.config import get_settings
-from app.meta.artifacts import artifact_path
+from app.meta.artifacts import artifact_path, is_stored_digest
 from app.meta.db import meta_session
 from app.meta.models import (
     DRAFT_PENDING_REVIEW,
@@ -277,6 +277,13 @@ def get_generation_job(job_id: str):
 
 @router.get("/preview/{artifact_hash}", dependencies=[Depends(require_reviewer_token)])
 def get_preview(artifact_hash: str):
+    # The hash arrives straight off the URL and is the only artifact digest in
+    # this API that a caller chooses. Anything that is not a sha256 hexdigest
+    # was never written by `store_artifact`, so it can only be a probe -- 404
+    # it before it reaches the path join rather than letting the segment
+    # participate in building a filesystem path.
+    if not is_stored_digest(artifact_hash):
+        raise HTTPException(status_code=404, detail="Preview artifact not found")
     path = artifact_path(get_settings().meta_artifact_root, artifact_hash)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Preview artifact not found")
