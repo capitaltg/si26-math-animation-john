@@ -1,77 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import useElapsedSeconds, { formatClock } from './lib/useElapsedSeconds'
-import {
-  IconAlert,
-  IconCard,
-  IconCheck,
-  IconCross,
-  IconPending,
-  IconRedo,
-  IconSeedling,
-  IconWorking,
-} from './Icons'
+import useElapsedSeconds from './lib/useElapsedSeconds'
+import { IconAlert } from './Icons'
+import { PendingWorkshopCard, WorkshopBuildCard } from './components/TemplateWorkshopView'
 
-// How long a queued build may sit before we say so. The generator is a separate
-// process (scripts/meta_worker.py); a queue nobody is draining must not read as
-// progress, so past this point the band says nothing has picked the work up.
-const STALL_SECONDS = 60
 const POLL_MS = 4000
 
 const TERMINAL_STAGES = new Set([
   'ready', 'approved', 'failed', 'needs_manual', 'already_available',
 ])
 
-// Two of these end the build without anything having gone wrong: automatic
-// generation giving up leaves the labelled text card standing, and a template
-// this session can already reach was never a problem. A fallback is a success
-// state in this product and must not be styled as failure — only a genuine
-// failure earns `danger`.
-const BENIGN_ENDINGS = new Set(['needs_manual', 'already_available'])
-
-// The four stages a teacher watches. Discrete and countable, every one real and
-// reachable: there is no progress stream inside the worker's generation loop, so
-// a percentage or a bar here would be invented. Same rule the render dock obeys.
-const STAGES = [
-  { key: 'filed', label: 'Problem filed' },
-  { key: 'queued', label: 'Queued' },
-  { key: 'building', label: 'Writing the template' },
-  { key: 'ready', label: 'Ready for your approval' },
-]
-
-// Written out per stage rather than derived from an index, because two of these
-// rows are accomplished facts and two are work: being queued is *done* the
-// moment it is true, so at that point nothing is in progress — which is honest,
-// and is exactly the state the stall note below explains if it lasts.
-const STAGE_STATES = {
-  filed: ['active', 'todo', 'todo', 'todo'],
-  queued: ['done', 'done', 'todo', 'todo'],
-  building: ['done', 'done', 'active', 'todo'],
-  ready: ['done', 'done', 'done', 'done'],
-  approved: ['done', 'done', 'done', 'done'],
-  failed: ['done', 'failed', 'todo', 'todo'],
-  needs_manual: ['done', 'done', 'failed', 'todo'],
-}
-
-function stageStates(stage) {
-  const states = STAGE_STATES[stage] ?? STAGE_STATES.filed
-  return STAGES.map((entry, index) => ({ ...entry, state: states[index] }))
-}
-
-const STATE_WORDS = {
-  done: 'done',
-  active: 'in progress',
-  failed: 'failed',
-  todo: 'not started',
-}
-
-// 12.5 seconds, not 12.50; 8 seconds, not 8.0.
-function formatSeconds(seconds) {
-  return `${Number(seconds.toFixed(2))} seconds`
-}
-
-function capitalize(word) {
-  return word.charAt(0).toUpperCase() + word.slice(1)
-}
 
 async function responseJson(resp) {
   try {
@@ -83,195 +20,6 @@ async function responseJson(resp) {
 
 function errorFrom(data, fallback) {
   return typeof data?.detail === 'string' ? data.detail : fallback
-}
-
-function StageList({ stage }) {
-  const stages = stageStates(stage)
-  const done = stages.filter((entry) => entry.state === 'done').length
-  return (
-    <div>
-      <p className="stamps__count">{done} of {stages.length} stages complete</p>
-      <ul className="stamps">
-        {stages.map((entry) => (
-          <li className="stamp" key={entry.key} data-state={entry.state}>
-            <span className="stamp__mark">
-              {entry.state === 'done' ? <IconCheck size={16} />
-                : entry.state === 'active' ? <IconWorking size={16} />
-                : entry.state === 'failed' ? <IconAlert size={16} />
-                : <IconPending size={16} />}
-            </span>
-            {entry.label}
-            {/* The marks are decorative, so the state is carried in text too. */}
-            <span className="sr-only"> — {STATE_WORDS[entry.state]}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function Attempts({ attempts }) {
-  if (attempts.length === 0) return null
-  return (
-    <div className="workshop__history">
-      <p className="workshop__history-lead">
-        What you turned down before, oldest first.
-      </p>
-      <ul className="workshop__attempts" aria-label="Earlier attempts">
-        {attempts.map((attempt) => (
-          <li className="workshop__attempt" key={attempt.revision}>
-            <div>
-              <p className="workshop__attempt-title">Attempt {attempt.revision}</p>
-              {attempt.feedback && (
-                <p className="workshop__attempt-note">“{attempt.feedback}”</p>
-              )}
-            </div>
-            {attempt.preview_url && (
-              <div className="inset inset--thumb">
-                <img
-                  src={attempt.preview_url}
-                  alt={`First frame of attempt ${attempt.revision}`}
-                />
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function ClearAction({ build, busy, onClear }) {
-  return (
-    <div className="actions">
-      <button className="btn" disabled={busy} onClick={() => onClear(build)}>
-        <IconRedo size={16} />
-        Try this problem again
-      </button>
-    </div>
-  )
-}
-
-function ReadyBand({ draft, onApprove, onReject, busy, error }) {
-  const [name, setName] = useState(draft.suggested_template_name)
-  const [confirmed, setConfirmed] = useState(false)
-  const [rejecting, setRejecting] = useState(false)
-  const [feedback, setFeedback] = useState('')
-
-  const canApprove = Boolean(name.trim()) && confirmed && !busy
-
-  return (
-    <>
-      <Attempts attempts={draft.attempts} />
-
-      {/* With history above, the current attempt needs naming or it reads as a
-          continuation of the last rejected one. */}
-      {draft.attempts.length > 0 && (
-        <p className="workshop__current">Attempt {draft.revision} — the one to judge</p>
-      )}
-
-      <div className="workshop__grid">
-        <div className="inset">
-          {draft.preview_url ? (
-            <>
-              <img
-                src={draft.preview_url}
-                alt={`First frame of the visual built for this problem, attempt ${draft.revision}`}
-              />
-              <p className="inset__caption">First frame preview</p>
-            </>
-          ) : (
-            <div className="inset__empty">Preview unavailable</div>
-          )}
-        </div>
-
-        <div>
-          <p className="workshop__objective">{draft.learning_objective}</p>
-          <p className="workshop__caption">What it does, in order</p>
-          <ol className="workshop__beats">
-            {draft.beats.map((beat) => (
-              <li key={beat.id}>{capitalize(beat.kind)} · {beat.intent}</li>
-            ))}
-          </ol>
-          <p className="workshop__duration">
-            Runs for {formatSeconds(draft.total_duration_seconds)}
-          </p>
-        </div>
-      </div>
-
-      {error && (
-        <div className="notice notice--danger" role="alert">
-          <IconAlert />
-          <p className="notice__body">{error}</p>
-        </div>
-      )}
-
-      <label className="field workshop__name">
-        <span className="field__label">Name this visual</span>
-        <input
-          type="text"
-          value={name}
-          disabled={busy}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </label>
-
-      <label className="combine">
-        <input
-          type="checkbox"
-          checked={confirmed}
-          disabled={busy}
-          onChange={(event) => setConfirmed(event.target.checked)}
-        />
-        I have reviewed the preview frame and it teaches this correctly
-      </label>
-
-      <div className="actions">
-        <button
-          className="btn btn--ok"
-          disabled={!canApprove}
-          onClick={() => onApprove(name.trim())}
-        >
-          <IconCheck size={16} />
-          Looks right — use this
-        </button>
-        <button
-          className="btn btn--danger"
-          disabled={busy}
-          onClick={() => setRejecting((open) => !open)}
-        >
-          <IconCross size={16} />
-          Not right — try again
-        </button>
-      </div>
-
-      {rejecting && (
-        <div className="workshop__reject">
-          <label className="field">
-            <span className="field__label">What is wrong with it?</span>
-            <textarea
-              className="workshop__feedback"
-              rows={3}
-              value={feedback}
-              disabled={busy}
-              onChange={(event) => setFeedback(event.target.value)}
-            />
-          </label>
-          <p className="workshop__cost">
-            Another attempt takes a few minutes, and you have{' '}
-            {draft.attempts_remaining} attempts left.
-          </p>
-          <button
-            className="btn"
-            disabled={busy || !feedback.trim()}
-            onClick={() => onReject(feedback.trim())}
-          >
-            Try again with this note
-          </button>
-        </div>
-      )}
-    </>
-  )
 }
 
 export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, onApproved }) {
@@ -310,9 +58,9 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
 
   const loadBuilds = useCallback(async () => {
     try {
-      const resp = await fetch('/meta/my/builds', { credentials: 'include' })
-      const data = await responseJson(resp)
-      if (resp.ok && Array.isArray(data)) {
+      const response = await fetch('/meta/my/builds', { credentials: 'include' })
+      const data = await responseJson(response)
+      if (response.ok && Array.isArray(data)) {
         setBuilds(data)
         setPolledAt(Date.now())
       }
@@ -350,9 +98,9 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     if (wanted.length === 0) return
     let live = true
     Promise.all(wanted.map(async (draftId) => {
-      const resp = await fetch(`/meta/my/drafts/${draftId}`, { credentials: 'include' })
-      const data = await responseJson(resp)
-      return resp.ok && data ? [draftId, data] : null
+      const response = await fetch(`/meta/my/drafts/${draftId}`, { credentials: 'include' })
+      const data = await responseJson(response)
+      return response.ok && data ? [draftId, data] : null
     }))
       .then((loaded) => {
         if (!live) return
@@ -373,14 +121,14 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
       return next
     })
     try {
-      const resp = await fetch('/meta/my/builds', {
+      const response = await fetch('/meta/my/builds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_id: candidateId }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not start building a visual'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not start building a visual'))
       await loadBuilds()
     } catch (err) {
       setRequestError(err.message)
@@ -398,7 +146,7 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/drafts/${build.draft_id}/approve`, {
+      const response = await fetch(`/meta/my/drafts/${build.draft_id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -407,8 +155,8 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
           math_semantics_confirmed: true,
         }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not use this visual'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not use this visual'))
       let failed = false
       try {
         // The approval itself already succeeded below; a failure here only
@@ -433,12 +181,12 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/builds/${build.candidate_id}`, {
+      const response = await fetch(`/meta/my/builds/${build.candidate_id}`, {
         method: 'DELETE',
         credentials: 'include',
       })
-      if (!resp.ok) {
-        const data = await responseJson(resp)
+      if (!response.ok) {
+        const data = await responseJson(response)
         throw new Error(errorFrom(data, 'Could not clear this attempt'))
       }
       setBuilds((current) => current.filter((entry) => entry.candidate_id !== build.candidate_id))
@@ -453,14 +201,14 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
     setError(null)
     setBusy(true)
     try {
-      const resp = await fetch(`/meta/my/drafts/${build.draft_id}/reject`, {
+      const response = await fetch(`/meta/my/drafts/${build.draft_id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ feedback }),
       })
-      const data = await responseJson(resp)
-      if (!resp.ok) throw new Error(errorFrom(data, 'Could not ask for another attempt'))
+      const data = await responseJson(response)
+      if (!response.ok) throw new Error(errorFrom(data, 'Could not ask for another attempt'))
       if (data?.requeued === false) {
         setError(
           'Automatic generation has run out of attempts for this problem. The '
@@ -486,27 +234,12 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
       {pending.map((candidateId) => {
         const candidate = candidates.find((entry) => entry.candidate_id === candidateId)
         return (
-          <aside className="notice notice--teach workshop-card" key={candidateId}>
-            <IconSeedling />
-            <div className="workshop-card__body">
-              <h3 className="workshop-card__title">
-                {candidate ? candidate.one_line_summary : 'This problem'}
-              </h3>
-              <p className="workshop-card__caption">No built-in visual fits yet</p>
-              <p className="notice__body">
-                One can be built from this problem — you check it before anything uses it.
-              </p>
-              <div className="actions">
-                <button
-                  className="btn"
-                  disabled={requestingIds.has(candidateId)}
-                  onClick={() => requestBuild(candidateId)}
-                >
-                  {requestingIds.has(candidateId) ? 'Starting…' : 'Build one for this problem'}
-                </button>
-              </div>
-            </div>
-          </aside>
+          <PendingWorkshopCard
+            key={candidateId}
+            candidate={candidate}
+            requesting={requestingIds.has(candidateId)}
+            onRequest={() => requestBuild(candidateId)}
+          />
         )
       })}
 
@@ -521,90 +254,24 @@ export default function TemplateWorkshop({ candidates, unsupportedCandidateIds, 
         const draft = build.draft_id ? drafts[build.draft_id] : null
         const approvedName = approved[build.candidate_id]
         const elapsed = build.elapsed_seconds + sincePoll
-        const stalled = build.stage === 'queued' && elapsed >= STALL_SECONDS
+        const showElapsed = !TERMINAL_STAGES.has(build.stage)
         const candidate = candidates.find((entry) => entry.candidate_id === build.candidate_id)
         return (
-          <section className="workshop" key={build.candidate_id} aria-labelledby={`workshop-title-${build.candidate_id}`}>
-            <header className="workshop__head">
-              <p className="workshop__caption" aria-live="polite">
-                <span>{approvedName ? 'New visual ready to use' : 'Teaching a new visual'}</span>
-                {!TERMINAL_STAGES.has(build.stage) && (
-                  <span className="workshop__elapsed" aria-hidden="true">
-                    {formatClock(elapsed)}
-                  </span>
-                )}
-              </p>
-              <h3 className="workshop__title" id={`workshop-title-${build.candidate_id}`}>
-                {candidate ? candidate.one_line_summary : 'Untitled problem'}
-              </h3>
-            </header>
-
-            {approvedName ? (
-              <>
-                <p className="band__note">
-                  {refreshFailed[build.candidate_id] ? (
-                    <>
-                      “{approvedName}” is available in this session, but the
-                      option list did not refresh automatically. Ask for
-                      visualizations again to pick it up.
-                    </>
-                  ) : (
-                    <>
-                      “{approvedName}” is available in this session and has
-                      been added as an option for this problem.
-                    </>
-                  )}
-                </p>
-              </>
-            ) : build.stage === 'ready' && draft ? (
-              <ReadyBand
-                draft={draft}
-                busy={busy}
-                error={error}
-                onApprove={(name) => approveDraft(build, name)}
-                onReject={(feedback) => rejectDraft(build, feedback)}
-              />
-            ) : BENIGN_ENDINGS.has(build.stage) ? (
-              <>
-                <div className="notice notice--fallback">
-                  <IconCard />
-                  <p className="notice__body">
-                    {build.error || 'No new visual was built for this problem.'}
-                  </p>
-                </div>
-                <ClearAction build={build} busy={busy} onClear={clearBuild} />
-              </>
-            ) : build.stage === 'failed' ? (
-              <>
-                <div className="notice notice--danger" role="alert">
-                  <IconAlert />
-                  <p className="notice__body">
-                    {build.error || 'This visual could not be built.'}
-                  </p>
-                </div>
-                <ClearAction build={build} busy={busy} onClear={clearBuild} />
-              </>
-            ) : (
-              <>
-                <StageList stage={build.stage} />
-                <p className="workshop__wait">
-                  Writing a new visual takes minutes, not seconds — you can carry
-                  on with the rest of your deck below.
-                </p>
-                {stalled && (
-                  <p className="workshop__stalled">
-                    The generator has not started on this yet.
-                  </p>
-                )}
-                {error && (
-                  <div className="notice notice--danger" role="alert">
-                    <IconAlert />
-                    <p className="notice__body">{error}</p>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+          <WorkshopBuildCard
+            key={build.candidate_id}
+            build={build}
+            candidate={candidate}
+            draft={draft}
+            approvedName={approvedName}
+            refreshFailed={refreshFailed[build.candidate_id]}
+            elapsed={elapsed}
+            showElapsed={showElapsed}
+            busy={busy}
+            error={error}
+            onApprove={(name) => approveDraft(build, name)}
+            onReject={(feedback) => rejectDraft(build, feedback)}
+            onClear={clearBuild}
+          />
         )
       })}
     </>

@@ -128,7 +128,11 @@ class ApprovalConflictError(ApprovalError):
     """Lost a race with a concurrent approval (maps to HTTP 409)."""
 
 
-def _required_fixture_count(session, draft: TemplateDraft, owner_session_id: str | None) -> int:
+def _required_fixture_count(
+    session,
+    draft: TemplateDraft,
+    evidence_owner_session_id: str | None,
+) -> int:
     """How many verified real fixtures this approval demands.
 
     A shared version always demands the configured count. A session-scoped one
@@ -142,11 +146,184 @@ def _required_fixture_count(session, draft: TemplateDraft, owner_session_id: str
     generation can never lower the bar a draft is held to.
     """
     configured = get_settings().meta_required_fixture_count
-    if owner_session_id is None:
+    if evidence_owner_session_id is None:
         return configured
     job = session.get(GenerationJob, draft.job_id)
     built_from = len(json.loads(job.trigger_observation_ids)) if job else 0
     return min(configured, max(1, built_from))
+
+
+def _load_passing_report(raw_report: str | None, *, missing_message: str) -> dict:
+    report = json.loads(raw_report) if raw_report else None
+    if not report or report.get("passed") is not True:
+        raise ApprovalPreconditionError(missing_message)
+    return report
+
+
+def _require_current_artifact(
+    report: dict,
+    artifact_hash: str,
+    *,
+    stale_message: str,
+) -> None:
+    if report.get("artifact_hash") != artifact_hash:
+        raise ApprovalPreconditionError(stale_message)
+
+
+def _require_approvable_draft(session, draft_id: str) -> TemplateDraft:
+    draft = session.get(TemplateDraft, draft_id)
+    if draft is None:
+        raise DraftNotFoundError(f"Unknown draft {draft_id}")
+    if draft.status != DRAFT_PENDING_REVIEW:
+        raise DraftNotApprovableError(
+            f"Draft {draft_id} is not approvable in status {draft.status}"
+        )
+    return draft
+
+
+def _verified_fixture_count(session, draft_id: str) -> int:
+    return session.execute(
+        select(func.count(func.distinct(TemplateDraftFixture.observation_id)))
+        .select_from(TemplateDraftFixture)
+        .where(
+            TemplateDraftFixture.draft_id == draft_id,
+            TemplateDraftFixture.kind == "positive",
+            TemplateDraftFixture.observation_id.isnot(None),
+            TemplateDraftFixture.expected_result_json.isnot(None),
+            TemplateDraftFixture.structural_check_passed.is_(True),
+        )
+    ).scalar_one()
+
+
+def _require_publishable_draft(
+    session,
+    draft: TemplateDraft,
+    *,
+    math_semantics_confirmed: bool,
+    evidence_owner_session_id: str | None,
+) -> None:
+    if math_semantics_confirmed is not True:
+        raise ApprovalPreconditionError(
+            "Mathematical-semantics confirmation is required for approval"
+        )
+
+    report = _load_passing_report(
+        draft.validation_report_json,
+        missing_message="Draft has no passing validation report",
+    )
+    _require_current_artifact(
+        report,
+        draft.artifact_hash,
+        stale_message="Validation report is stale: artifact hash mismatch",
+    )
+    quality = _load_passing_report(
+        draft.quality_report_json,
+        missing_message="Draft has no passing pedagogical quality report",
+    )
+    _require_current_artifact(
+        quality,
+        draft.artifact_hash,
+        stale_message="Quality report is stale: artifact hash mismatch",
+    )
+
+    if (
+        report.get("compiler_version") != DSL_COMPILER_VERSION
+        or report.get("renderer_version") != DYNAMIC_RENDERER_VERSION
+    ):
+        raise ApprovalPreconditionError(
+            "Validation report is stale: runtime version mismatch"
+        )
+
+    predicate_count = len(json.loads(draft.guard_document_json)["predicates"])
+    if report.get("negative_predicate_coverage") != list(range(predicate_count)):
+        raise ApprovalPreconditionError(
+            "Validation report lacks complete negative-predicate coverage"
+        )
+
+    if _verified_fixture_count(session, draft.id) < _required_fixture_count(
+        session, draft, evidence_owner_session_id
+    ):
+        raise ApprovalPreconditionError(
+            "Draft has too few verified real fixtures to publish"
+        )
+
+
+def _require_available_template_name(
+    session,
+    draft: TemplateDraft,
+    template_name: str,
+    visibility_scope: str | None,
+) -> None:
+    if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+        raise TemplateNameConflictError(f"Invalid template name {template_name!r}")
+    if template_name in _STATIC_TEMPLATE_NAMES:
+        raise TemplateNameConflictError(
+            f"Template name {template_name!r} is reserved by a static template"
+        )
+    replaces_own = session.execute(
+        select(func.count())
+        .select_from(TemplateVersion)
+        .where(
+            TemplateVersion.template_name == template_name,
+            TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+            TemplateVersion.fingerprint_key == draft.fingerprint_key,
+            _same_owner(visibility_scope),
+        )
+    ).scalar_one()
+    if not replaces_own and _name_is_reserved(
+        session, template_name, visibility_scope
+    ):
+        raise TemplateNameConflictError(
+            f"Template name {template_name!r} is already in use"
+        )
+
+
+def _disable_replaced_versions(
+    session,
+    draft: TemplateDraft,
+    *,
+    owner_session_id: str | None,
+    publish_shared: bool,
+    now: datetime,
+) -> None:
+    # Shared publication replaces the shared row and this caller's private
+    # predecessor, while leaving every other owner's private rows isolated.
+    disable_scope = (
+        or_(
+            TemplateVersion.owner_session_id.is_(None),
+            _same_owner(owner_session_id),
+        )
+        if publish_shared
+        else _same_owner(owner_session_id)
+    )
+    session.execute(
+        update(TemplateVersion)
+        .where(
+            TemplateVersion.fingerprint_key == draft.fingerprint_key,
+            TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
+            disable_scope,
+        )
+        .values(status=TEMPLATE_VERSION_DISABLED, updated_at=now)
+    )
+
+
+def _new_template_version(
+    draft: TemplateDraft,
+    template_name: str,
+    owner_session_id: str | None,
+    now: datetime,
+) -> TemplateVersion:
+    return TemplateVersion(
+        id=uuid4().hex,
+        fingerprint_key=draft.fingerprint_key,
+        template_name=template_name,
+        draft_id=draft.id,
+        artifact_hash=draft.artifact_hash,
+        status=TEMPLATE_VERSION_ENABLED,
+        owner_session_id=owner_session_id,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def approve_draft_service(
@@ -159,112 +336,27 @@ def approve_draft_service(
 ) -> TemplateVersion:
     """Publish a reviewed draft as a live TemplateVersion.
 
-    ``owner_session_id`` gates the fixture-count threshold and the name/scoping
-    collision checks (a teacher approval uses the soft, built-from cap; an admin
-    approval uses the full configured count).
-
-    ``publish_shared=True`` writes ``owner_session_id=NULL`` on the version row
-    even when ``owner_session_id`` was passed for the threshold decision, so a
-    teacher approval survives their in-process session dropping and is visible
-    to every session on this box. Product is single-teacher today; the split
-    lets a future multi-tenant surface re-tighten visibility without moving the
-    threshold back at the same time.
+    A non-null ``owner_session_id`` selects private scope and the relaxed,
+    built-from fixture cap unless ``publish_shared`` is true. Ownerless and
+    shared publication use the full configured fixture count; ``publish_shared``
+    always writes ``owner_session_id=NULL`` on the version row.
     """
-    settings = get_settings()
     now = datetime.now(timezone.utc)
 
     try:
         with meta_session() as session:
-            draft = session.get(TemplateDraft, draft_id)
-
-            # --- Preconditions (checked in order, before any mutation) -----
-            # 1. Draft exists and is pending review.
-            if draft is None:
-                raise DraftNotFoundError(f"Unknown draft {draft_id}")
-            if draft.status != DRAFT_PENDING_REVIEW:
-                raise DraftNotApprovableError(
-                    f"Draft {draft_id} is not approvable in status {draft.status}"
-                )
-
-            # 2. The reviewer confirmed the mathematical semantics.
-            if math_semantics_confirmed is not True:
-                raise ApprovalPreconditionError(
-                    "Mathematical-semantics confirmation is required for approval"
-                )
-
-            # 3. A validation report exists and passed.
-            report = (
-                json.loads(draft.validation_report_json)
-                if draft.validation_report_json
-                else None
+            draft = _require_approvable_draft(session, draft_id)
+            published_owner_session_id = None if publish_shared else owner_session_id
+            # Evidence follows publication visibility, not caller identity: a
+            # shared row must satisfy the full fixture threshold.
+            _require_publishable_draft(
+                session,
+                draft,
+                math_semantics_confirmed=math_semantics_confirmed,
+                evidence_owner_session_id=published_owner_session_id,
             )
-            if not report or report.get("passed") is not True:
-                raise ApprovalPreconditionError(
-                    "Draft has no passing validation report"
-                )
 
-            # 4. The report validated the exact artifact currently on the draft.
-            if report.get("artifact_hash") != draft.artifact_hash:
-                raise ApprovalPreconditionError(
-                    "Validation report is stale: artifact hash mismatch"
-                )
-
-            # 5. A pedagogical quality report exists and passed.
-            quality = (
-                json.loads(draft.quality_report_json)
-                if draft.quality_report_json
-                else None
-            )
-            if not quality or quality.get("passed") is not True:
-                raise ApprovalPreconditionError(
-                    "Draft has no passing pedagogical quality report"
-                )
-            if quality.get("artifact_hash") != draft.artifact_hash:
-                raise ApprovalPreconditionError(
-                    "Quality report is stale: artifact hash mismatch"
-                )
-
-            # 6. The report ran against the active validation runtime.
-            if (
-                report.get("compiler_version") != DSL_COMPILER_VERSION
-                or report.get("renderer_version") != DYNAMIC_RENDERER_VERSION
-            ):
-                raise ApprovalPreconditionError(
-                    "Validation report is stale: runtime version mismatch"
-                )
-
-            # 7. Every guard predicate has a negative witness.
-            predicate_count = len(json.loads(draft.guard_document_json)["predicates"])
-            if report.get("negative_predicate_coverage") != list(range(predicate_count)):
-                raise ApprovalPreconditionError(
-                    "Validation report lacks complete negative-predicate coverage"
-                )
-
-            # 8. Enough real, human-confirmed positive fixtures.
-            verified_fixtures = session.execute(
-                select(func.count(func.distinct(TemplateDraftFixture.observation_id)))
-                .select_from(TemplateDraftFixture)
-                .where(
-                    TemplateDraftFixture.draft_id == draft.id,
-                    TemplateDraftFixture.kind == "positive",
-                    TemplateDraftFixture.observation_id.isnot(None),
-                    TemplateDraftFixture.expected_result_json.isnot(None),
-                    TemplateDraftFixture.structural_check_passed.is_(True),
-                )
-            ).scalar_one()
-            # The fixture bar tracks the row's effective visibility, not who
-            # is calling. A shared row is globally visible and must clear the
-            # full configured count -- the same invariant `promotion.py`
-            # enforces. Passing owner_session_id here would let a teacher
-            # slide a one-fixture draft under the soft cap into a shared
-            # publication.
-            effective_owner = None if publish_shared else owner_session_id
-            if verified_fixtures < _required_fixture_count(session, draft, effective_owner):
-                raise ApprovalPreconditionError(
-                    "Draft has too few verified real fixtures to publish"
-                )
-
-            # 9. No revoked live version for this fingerprint.
+            # Revocation remains a fingerprint-wide publishing veto.
             revoked = session.execute(
                 select(func.count())
                 .select_from(TemplateVersion)
@@ -278,50 +370,11 @@ def approve_draft_service(
                     f"Fingerprint {draft.fingerprint_key} has a revoked live version"
                 )
 
-            # 10. template_name is a valid slug and not owned by a different
-            #    fingerprint's enabled version.
-            if not _TEMPLATE_NAME_RE.fullmatch(template_name):
-                raise TemplateNameConflictError(
-                    f"Invalid template name {template_name!r}"
-                )
-            # A static (compiled-in) template already owns this name. The
-            # classifier resolves static names first, so publishing a dynamic
-            # version under a static name would be silently shadowed — never
-            # selectable. Reject at approval time so the collision cannot
-            # enter the DB.
-            if template_name in _STATIC_TEMPLATE_NAMES:
-                raise TemplateNameConflictError(
-                    f"Template name {template_name!r} is reserved by a static template"
-                )
-            # Scoped so that no session can end up seeing two live templates
-            # under one name; see _name_is_reserved for why this is asymmetric.
-            # The visibility scope is what governs collisions -- when publish_shared
-            # is set, the new row will be shared regardless of who is publishing,
-            # so both checks below use owner=None.
-            visibility_scope = None if publish_shared else owner_session_id
-            # Re-publishing the same fingerprint under its existing name is a
-            # replacement, not a collision, so it is excluded first.
-            replaces_own = session.execute(
-                select(func.count())
-                .select_from(TemplateVersion)
-                .where(
-                    TemplateVersion.template_name == template_name,
-                    TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
-                    TemplateVersion.fingerprint_key == draft.fingerprint_key,
-                    _same_owner(visibility_scope),
-                )
-            ).scalar_one()
-            if not replaces_own and _name_is_reserved(
-                session, template_name, visibility_scope
-            ):
-                raise TemplateNameConflictError(
-                    f"Template name {template_name!r} is already in use"
-                )
+            _require_available_template_name(
+                session, draft, template_name, published_owner_session_id
+            )
 
-            # --- Transaction (mutations begin here) ------------------------
-            # 1. Claim the draft with a conditional update. A zero row count
-            #    means a concurrent request already claimed it; bail out before
-            #    touching any version rows.
+            # Claim before touching version rows so concurrent approval loses cleanly.
             claimed = session.execute(
                 update(TemplateDraft)
                 .where(
@@ -335,55 +388,24 @@ def approve_draft_service(
                     "draft approval was claimed by another request"
                 )
 
-            # 2. Disable every prior enabled version for this fingerprint that
-            #    would collide with the new row's visibility, before inserting,
-            #    so the partial unique index never sees two enabled rows at
-            #    once.
-            #    - Private publish: this owner's prior private row. Another
-            #      session's private version and the shared one stay put.
-            #    - Shared publish: the prior shared row AND this owner's prior
-            #      private row (the caller's own history for this fingerprint,
-            #      which would otherwise haunt their next `_name_is_reserved`
-            #      check). Other sessions' private rows are still not ours to
-            #      touch.
-            disable_scope = (
-                or_(
-                    TemplateVersion.owner_session_id.is_(None),
-                    _same_owner(owner_session_id),
-                )
-                if publish_shared
-                else _same_owner(owner_session_id)
-            )
-            session.execute(
-                update(TemplateVersion)
-                .where(
-                    TemplateVersion.fingerprint_key == draft.fingerprint_key,
-                    TemplateVersion.status == TEMPLATE_VERSION_ENABLED,
-                    disable_scope,
-                )
-                .values(status=TEMPLATE_VERSION_DISABLED, updated_at=now)
+            # Disable replacements before insertion to satisfy enabled-row indexes.
+            _disable_replaced_versions(
+                session,
+                draft,
+                owner_session_id=owner_session_id,
+                publish_shared=publish_shared,
+                now=now,
             )
 
-            # 3. Insert the new enabled version. An IntegrityError from the
-            #    partial unique indexes means a concurrent approval beat us.
-            #    The scope-checking above used the passed-in owner_session_id;
-            #    the row itself carries NULL when publishing shared, so the
-            #    version stays visible after the teacher's session drops.
-            version = TemplateVersion(
-                id=uuid4().hex,
-                fingerprint_key=draft.fingerprint_key,
-                template_name=template_name,
-                draft_id=draft.id,
-                artifact_hash=draft.artifact_hash,
-                status=TEMPLATE_VERSION_ENABLED,
-                owner_session_id=None if publish_shared else owner_session_id,
-                created_at=now,
-                updated_at=now,
+            version = _new_template_version(
+                draft,
+                template_name,
+                published_owner_session_id,
+                now,
             )
             session.add(version)
             session.flush()
 
-            # 4. Record the durable approval decision.
             record_review(
                 session,
                 new_id=uuid4().hex,

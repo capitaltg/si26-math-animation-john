@@ -58,8 +58,8 @@ def _median_teaching_plan():
     # The same "identify the median of seven ordered values" plan validated
     # end-to-end in tests/render/test_dynamic_render_worker.py -- it compiles to
     # a scene program with a "median_callout" relation targeting
-    # values.item[3].bottom, which is exactly the item-specific anchor the
-    # Task 11 reuse test below checks resolves correctly for every params set.
+    # values.item[3].bottom, the item-specific anchor the reuse test below
+    # resolves for every parameter set.
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
         "learning_objective": "Identify the middle value in an ordered odd-sized set.",
@@ -313,10 +313,11 @@ def test_get_dynamic_template_rejects_a_tampered_hash_after_cache_is_populated(s
 
 
 def test_published_v3_template_resolves_layout_for_each_params_set(session):
-    """Task 11's reuse test: the same published template, resolved against two
-    different digit widths, must still produce a correctly item-specific anchor
-    (values.item[3].bottom) for its median callout -- layout is never cached or
-    baked in at publish time, it is resolved fresh for every params set."""
+    """Published layout resolves afresh for each params set.
+
+    Different digit widths must still produce the item-specific
+    ``values.item[3].bottom`` anchor; layout is never baked in at publication.
+    """
     from app.meta.dynamic_scene import resolve_dynamic_scene
     from app.meta.dynamic_templates import get_dynamic_template, resolve_dynamic_ref
 

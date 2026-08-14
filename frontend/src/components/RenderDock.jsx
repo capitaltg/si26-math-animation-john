@@ -4,16 +4,8 @@ import { templateLabel } from '../lib/templates'
 import useElapsedSeconds, { formatClock } from '../lib/useElapsedSeconds'
 import { IconAlert, IconCheck, IconPending, IconWorking } from '../Icons'
 
-// The dock is the in-place account of a render batch: it stands up the moment
-// POST /render is dispatched and stays up, on the page, until dismissed.
-//
-// It exists because `POST /render` is one blocking batch call that can run for
-// minutes with no progress stream. Before this, the only signal a render had
-// finished was a toast pushed at the very end — so the whole wait showed nothing
-// at all, and the one moment of feedback was a corner stack that is easy to miss
-// on a long queue. Per DESIGN.md: no percentage, no determinate bar, no ETA
-// (every one of those would be fabricated). Discrete per-scene marks and an
-// elapsed clock only.
+// POST /render has no progress stream, so the dock reports only observable
+// per-scene states and elapsed time; percentages and ETAs would be fabricated.
 const ROW_STATES = {
   rendering: { word: 'rendering', Mark: IconWorking },
   rendered: { word: 'rendered', Mark: IconCheck },

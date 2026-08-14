@@ -72,7 +72,7 @@ class UnitTapeProgramVisual(UnitTapeVisual):
 
 class CoordinatePlaneProgramVisual(CoordinatePlaneVisual):
     initial_role: StyleRole = "structure"
-    #: Populated by the compiler for the `rotation` strategy (M22). One
+    #: Populated by the compiler for the `rotation` strategy. One
     #: entry per iteration; entry k is the polygon's vertex list after
     #: iteration k+1 (so index 0 is iter-1, index N-1 is the final image).
     #: Floats are rounded to 12 decimal places at compile time so
@@ -198,7 +198,7 @@ class DistanceAnnotationAction(BaseModel):
 
 
 class RotateAction(BaseModel):
-    """One discrete polygon rotation step (M22).
+    """One discrete polygon rotation step.
 
     Compiler-emitted only for the `rotation` strategy — no `custom_action`
     counterpart, like `SignedHopArrowAction`. `iteration` addresses the
@@ -246,7 +246,7 @@ class SceneProgramDocument(BaseModel):
     style_recipe: StyleRecipeDocument
     #: The target that carries the lesson's answer when no `evaluated_answer`
     #: card is drawn. `None` means the answer is the card, as it is for every
-    #: strategy but `pair_elimination` and `rotation` (M22; the final rotated
+    #: strategy but `pair_elimination` and `rotation` (the final rotated
     #: image is the answer). Optional with a default so stored `scene_version`
     #: 3 programs deserialise unchanged.
     answer_anchor: TargetRef | None = None

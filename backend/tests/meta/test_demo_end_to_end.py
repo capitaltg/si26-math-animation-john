@@ -268,13 +268,8 @@ PERIMETER_LESSON = DemoLesson(
         "beats": [
             {"id": "show_rectangle", "kind": "reveal", "targets": [{"visual_ref": "rectangle"}],
              "intent": "show the rectangle whose boundary will be measured"},
-            # boundary_trace attaches the perimeter trace to the first
-            # organize/derive/focus beat, so the trace happens here. This beat
-            # used to also request callouts on the length_edge/width_edge parts
-            # to name the measured edges; `rectangle_measurement` now measures
-            # and draws those dimensions itself, from the length/width
-            # expressions, so such a callout is a duplicate label and
-            # `quality.check_duplicate_dimension_label` rejects it.
+            # `rectangle_measurement` owns dimension labels, so adding edge
+            # callouts here would duplicate them and fail quality validation.
             {"id": "trace_boundary", "kind": "organize", "targets": [{"visual_ref": "rectangle"}],
              "intent": "trace the whole boundary once to show what perimeter measures"},
             # The mandated derive beat: emphasize the two length edges, then the
@@ -310,7 +305,7 @@ PERIMETER_LESSON = DemoLesson(
     second_answer=28,
 )
 
-# M22: "Rotate a triangle 90 degrees about the origin, 3 times -- where
+# "Rotate a triangle 90 degrees about the origin, 3 times -- where
 # does it land?" The rotated image itself IS the answer (there is no derived
 # numeric result), so `answer_expression` and `params_document` carry a
 # decorative `turns` field -- referenced only by the answer statement, never
@@ -796,13 +791,10 @@ def test_demo_runbook_generates_reviews_publishes_and_reuses(lesson_fixture, req
     lesson, runbook = result.lesson, result.runbook
     detail = runbook["detail"]
 
-    # 1-3. The worker generated a candidate and validated it privately. A draft
-    # that fails any gate never reaches pending_review, so the presenter never
-    # walks a failed-validation draft.
+    # Failed validation never reaches the reviewer's pending queue.
     assert runbook["draft_status"] == models.DRAFT_PENDING_REVIEW
     assert runbook["pending_ids"] == [result.draft_id]
 
-    # 4. Review: teaching beats, a bounded duration, and passing evidence.
     beats = detail["teaching_plan"]["beats"]
     assert [beat["id"] for beat in beats] == lesson.expected_beat_ids
     assert 3 <= len(beats) <= 5
@@ -824,16 +816,13 @@ def test_demo_runbook_generates_reviews_publishes_and_reuses(lesson_fixture, req
     assert result.stored_quality_report["artifact_hash"] == detail["artifact_hash"]
     assert result.validation_report["artifact_hash"] == detail["artifact_hash"]
 
-    # The preview is a real, stored, non-blank PNG.
     assert runbook["preview_status"] == 200
     assert result.preview_bytes.startswith(b"\x89PNG")
 
-    # Only the grounded positive fixture is offered for verification.
     assert len(runbook["positive_fixtures"]) == 1
     assert runbook["positive_fixtures"][0]["source_excerpt"] == lesson.source_excerpt
 
-    # 4b. The reviewer confirms the known answer. Confirming it for unchanged
-    # params must not invalidate the evidence that makes the draft approvable.
+    # Confirming unchanged fixture params must preserve approval evidence.
     assert runbook["fixture_save_status"] == 200
     assert runbook["fixture_save"]["expected_result"] == {"answer": str(lesson.verified_answer)}
     assert runbook["fixture_save"]["structural_check_passed"] is True
@@ -841,22 +830,20 @@ def test_demo_runbook_generates_reviews_publishes_and_reuses(lesson_fixture, req
     assert runbook["detail_after_verify"]["quality_report"]["passed"] is True
     assert runbook["detail_after_verify"]["preview_url"]
 
-    # 5. Approve and publish; the decided draft leaves the reviewer's world.
     assert runbook["approval_status"] == 200, runbook["approval"]
     assert runbook["approval"]["status"] == "enabled"
     assert runbook["approval"]["template_name"] == lesson.template_name
     assert runbook["detail_status_after_approval"] == 404
     assert runbook["pending_ids_after_approval"] == []
 
-    # 6. The runtime carries the stored scene program verbatim -- it is not
+    # The runtime carries the stored scene program verbatim -- it is not
     # recompiled at load time -- and re-resolving and re-rendering that
     # published program reproduces the approved preview byte for byte.
     assert result.published_program == result.scene_program
     assert result.published_program.total_duration_seconds == detail["total_duration_seconds"]
     assert result.reprobed_artifact_hash == result.preview_artifact_hash
 
-    # 7. Reuse on slide 2: layout, anchors and the evaluated answer all
-    # re-resolve for the new parameter set.
+    # Reuse re-resolves layout, anchors, and the answer for new parameters.
     assert _answer_text(result.resolved["verified"]) == str(lesson.verified_answer)
     assert _answer_text(result.resolved["second"]) == str(lesson.second_answer)
     assert _geometry_signature(result.resolved["verified"], lesson.primary_visual_ref) != (

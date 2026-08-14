@@ -232,8 +232,7 @@ def test_stagger_lag_ratio_bounds_start_gap_by_stagger_seconds():
     # `lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)`.
     actual_gap = lag_ratio * duration_seconds / (1 + (count - 1) * lag_ratio)
     assert actual_gap == pytest.approx(stagger_seconds)
-    # Sanity: with the raw seconds passed through as the ratio (the previous
-    # behaviour), the gap balloons well past the requested cap.
+    # Treating seconds as a raw ratio would exceed the requested gap.
     naive_gap = stagger_seconds * duration_seconds / (1 + (count - 1) * stagger_seconds)
     assert naive_gap > stagger_seconds * 2
 

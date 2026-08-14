@@ -6,16 +6,16 @@ const STAGES = [
   { key:'clips', name:'Get clips' },
 ]
 export default function StageRail({ current }) {
-  const idx = STAGES.findIndex(s => s.key === current)
+  const currentIndex = STAGES.findIndex((stage) => stage.key === current)
   return (
     <ol className="rail" aria-label="Pipeline stages">
-      {STAGES.map((s, i) => {
-        const state = i < idx ? 'done' : i === idx ? 'active' : 'todo'
+      {STAGES.map((stage, index) => {
+        const state = index < currentIndex ? 'done' : index === currentIndex ? 'active' : 'todo'
         return (
-          <li key={s.key} className="rail__step" data-state={state}
+          <li key={stage.key} className="rail__step" data-state={state}
               aria-current={state === 'active' ? 'step' : undefined}>
-            <span className="rail__index" aria-hidden="true">{i + 1}</span>
-            <span className="rail__name">{s.name}</span>
+            <span className="rail__index" aria-hidden="true">{index + 1}</span>
+            <span className="rail__name">{stage.name}</span>
           </li>
         )
       })}

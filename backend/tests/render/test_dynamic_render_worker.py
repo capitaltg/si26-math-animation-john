@@ -11,16 +11,6 @@ from app.meta.v3.resolver import resolve_scene
 from app.render.dynamic_render_worker import _declared_state_events, _state_events
 from app.render.full_render import BACKEND_ROOT
 
-# `test_render_and_store_preview_raises_on_subprocess_failure` used to live
-# here. It exercised `preview_render.render_and_store_preview`, which wrote a v1
-# `AnimationDocument` and handed it to this worker as the first positional
-# argument -- an argument the worker has parsed as a `SceneProgramDocument`
-# since the v3 cutover, so the function would have raised if anything had
-# called it. Nothing did; its only test patched `subprocess.run`, so it could
-# never notice. Function and test are both deleted. The worker's real
-# subprocess behaviour is covered by the three tests below.
-
-
 def _median_plan():
     # Identify-the-median-of-seven plan: it compiles to a scene program with a
     # "median_callout" relation targeting values.item[3].bottom, giving both the
@@ -58,10 +48,8 @@ def _median_scene_program():
 
 
 def test_worker_thumbnail_mode_renders_a_real_png_from_stored_scene_program(tmp_path):
-    # Task 11: main()'s full/thumbnail branch was cut over from compiling a v1
-    # AnimationDocument to loading the stored v3 SceneProgramDocument directly
-    # (the same document a published TemplateVersion's draft persists) -- this
-    # exercises that branch end-to-end, distinct from the probe-mode test below.
+    # Thumbnail mode loads the persisted SceneProgramDocument directly; exercise
+    # that path end to end, separately from probe mode.
     program = _median_scene_program()
     program_path = tmp_path / "scene.json"
     fields_path = tmp_path / "fields.json"

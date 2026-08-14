@@ -303,12 +303,8 @@ def check_state_order(manifest: dict) -> QualityCheck:
     if not declared <= observed:
         return _failed("rendered_state_mismatch", "state_events", "a declared semantic state was not rendered")
 
-    # Keyed on the program's declared answer anchor. The previous form named the
-    # literal target `values.item[3]`, which is the demo fixture's ref and not
-    # the published template's -- so on that template the check fell straight
-    # through its own "no events" escape and never ran. It also required the
-    # anchored item to pass through `neutral`, which is only true of a
-    # collection that starts `neutral`.
+    # Use the program's declared answer anchor; literal fixture refs would skip
+    # this check for published templates. The anchor need not start `neutral`.
     anchor = manifest.get("answer_anchor")
     if anchor is None:
         return _passed("state_order_invalid", "state_events")
@@ -391,11 +387,8 @@ def check_rendered_conclusion_hold(manifest: dict) -> QualityCheck:
 def check_final_answer_persistence(manifest: dict) -> QualityCheck:
     if not manifest.get("final_answer_visible", False):
         return _failed("final_answer_not_persistent", "final_answer_visible", "evaluated answer is absent from the final frame")
-    # Present is not the same as resolved. This check used to end above, and passed
-    # on every lesson while the frame read "2.75 x 1000 = ? meters": the conclude
-    # beat's recolour and its `show_answer_stage(value)` were two competing
-    # transforms on one mobject, so the answer never resolved on screen. Hold the
-    # final frame to what the last staging action says it should say.
+    # Presence is insufficient: competing transforms can leave the unresolved
+    # placeholder visible. Match the final frame to the declared answer text.
     observed, declared = manifest.get("final_answer_text"), manifest.get("declared_answer_text")
     if declared is not None and observed != declared:
         return _failed(

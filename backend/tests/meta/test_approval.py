@@ -131,12 +131,8 @@ def _seed_draft(
         ))
     session.flush()
 
-    # Built directly from real DSL document models and TemplateDraft/
-    # TemplateDraftFixture rows (not via a draft-creation pipeline helper) --
-    # the v2 `create_generated_draft` this fixture used to call is gone in v3;
-    # persisting a candidate now requires a full ValidatedCandidate (real
-    # rendered-quality probe), which is more than this file's approval-
-    # precondition tests need or want to pay for.
+    # Build directly because pipeline persistence requires a rendered-quality
+    # probe unrelated to these approval preconditions.
     params_document = ParamsDocument(
         params_version=1,
         fields=[IntegerFieldSpec(name="n", label="N", description="", minimum=1, maximum=10)],
@@ -230,9 +226,6 @@ def _seed_draft(
     return draft
 
 
-# ---------------------------------------------------------------- happy path
-
-
 def test_approve_publishes_enabled_version_and_durable_review(engine, session):
     draft = _seed_draft(session, draft_id="draft-1", fingerprint_key="k1")
 
@@ -303,9 +296,6 @@ def test_approve_succeeds_with_a_validation_report_built_by_the_production_build
         reviewer_label="dev", math_semantics_confirmed=True,
     )
     assert version.status == TEMPLATE_VERSION_ENABLED
-
-
-# ------------------------------------------------ preconditions (in order)
 
 
 def test_unknown_draft_raises_not_found(engine, session):
@@ -486,20 +476,11 @@ def test_missing_expected_result_not_counted_raises_precondition(engine, session
 def test_unconfirmed_structural_check_not_counted_raises_precondition(
     engine, session, structural_state
 ):
-    """Precondition 8's ``structural_check_passed.is_(True)`` clause is the
-    security-relevant half of the Task 12.5 repair: ``update_fixture`` nulls
-    ``structural_check_passed`` when a reviewer changes a fixture's params, and
-    this clause is the *only* thing that then stops the draft from being
-    approvable. Nothing tested it -- the two tests that do produce that state
-    (``test_review_api.py``, ``test_review_api_v3.py``) simultaneously null
-    ``validation_report_json``, so approval stops at precondition 3 and never
-    reaches 8, and ``_seed_draft``'s ``structural_ok`` knob was never
-    overridden. Drop the clause and the suite stayed green, silently making
-    params-changed drafts approvable again.
+    """A params edit must not reuse structural approval earned by old params.
 
-    Both reports are left intact, passing and hash-matching, so this trips
-    precondition 8 and only precondition 8. ``None`` is the state
-    ``update_fixture`` actually writes; ``False`` is a failed structural check.
+    Both reports remain valid and hash-matching here, isolating precondition 8.
+    ``None`` is the state ``update_fixture`` writes after an edit; ``False`` is
+    an explicitly failed structural check.
     """
     draft = _seed_draft(session, draft_id="draft-1", structural_ok=structural_state)
     assert json.loads(draft.validation_report_json)["passed"] is True
@@ -596,9 +577,6 @@ def test_same_name_same_fingerprint_is_allowed(engine, session):
     assert version.status == TEMPLATE_VERSION_ENABLED
 
 
-# ------------------------------------------- supersede without deleting
-
-
 def test_second_draft_supersedes_first_without_deleting(engine, session):
     _seed_draft(session, draft_id="draft-1", job_id="job-1", fingerprint_key="k1")
     first = approve_draft_service(
@@ -616,17 +594,12 @@ def test_second_draft_supersedes_first_without_deleting(engine, session):
     check = _fresh(engine)
     versions = {v.id: v for v in check.query(models.TemplateVersion).filter_by(fingerprint_key="k1").all()}
     assert len(versions) == 2
-    # first retained (not deleted) but disabled; second enabled
     assert versions[first_id].status == TEMPLATE_VERSION_DISABLED
     assert versions[second.id].status == TEMPLATE_VERSION_ENABLED
     enabled = [v for v in versions.values() if v.status == TEMPLATE_VERSION_ENABLED]
     assert len(enabled) == 1
-    # prior version still independently loadable via its immutable draft link
     assert versions[first_id].draft_id == "draft-1"
     check.close()
-
-
-# ------------------------------------------------- concurrency race
 
 
 def test_concurrent_double_approve_yields_one_version_one_conflict(engine, session, monkeypatch):
@@ -686,9 +659,6 @@ def test_concurrent_double_approve_yields_one_version_one_conflict(engine, sessi
     assert len(reviews) == 1
     assert reviews[0].reviewer_label == "dev-a"
     check.close()
-
-
-# ------------------------------------------------- owner-scoped approval
 
 
 def test_owner_approval_publishes_a_session_scoped_version(engine, session):
@@ -752,6 +722,28 @@ def test_shared_approval_is_not_relaxed_by_a_small_build(engine, session):
             draft_id="draft-shared", template_name="shared_one",
             reviewer_label="dev", math_semantics_confirmed=True,
             owner_session_id=None,
+        )
+
+
+def test_teacher_shared_approval_uses_the_full_fixture_threshold(engine, session):
+    """A teacher's session ID must not relax evidence for a shared version."""
+    _seed_draft(
+        session,
+        draft_id="draft-teacher-shared",
+        fingerprint_key="k-teacher-shared",
+        positive_count=1,
+        trigger_count=1,
+        job_owner="session-a",
+    )
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
+        approve_draft_service(
+            draft_id="draft-teacher-shared",
+            template_name="teacher_shared_one",
+            reviewer_label="teacher",
+            math_semantics_confirmed=True,
+            owner_session_id="session-a",
+            publish_shared=True,
         )
 
 
@@ -853,9 +845,7 @@ def test_re_approving_for_one_owner_disables_that_owners_prior_version(engine, s
     )
 
 
-# ------------------------------- names across the shared/private boundary
-#
-# The invariant: for any session S, {shared versions} union {S's private
+# For any session S, {shared versions} union {S's private
 # versions} must have unique template_names. Anything else puts two identical
 # keys into one session's snapshot dict, where query order silently decides
 # which template that name resolves to.

@@ -1,16 +1,17 @@
-import { createContext, useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import StageRail from '../components/StageRail'
 import Queue from './Queue'
 import Focus from './Focus'
 import RenderToast from '../components/RenderToast'
 import RenderDock from '../components/RenderDock'
+import useRenderQueue from '../lib/useRenderQueue'
 
-async function responseJson(resp, fallbackMessage) {
+async function responseJson(response, fallbackMessage) {
   try {
-    return await resp.json()
+    return await response.json()
   } catch {
-    throw new Error(resp.ok ? 'Server returned an invalid response' : fallbackMessage)
+    throw new Error(response.ok ? 'Server returned an invalid response' : fallbackMessage)
   }
 }
 
@@ -41,12 +42,7 @@ export default function DemoShell() {
   const [drafts, setDrafts] = useState({})       // scene_id -> edited params
   const [fieldErrors, setFieldErrors] = useState({})  // scene_id -> [{loc,msg}]
   const [fileName, setFileName] = useState(null)
-  const [pendingRenders, setPendingRenders] = useState(new Set())
   const [toasts, setToasts] = useState([])
-  // The batch the render dock reports on: which scenes were dispatched, when the
-  // wait started, and how each one came back. Toasts are transient and easy to
-  // miss; this is the in-place record that stands until the teacher hides it.
-  const [renderJob, setRenderJob] = useState(null)  // {ids: string[], startedAt, results: {}}
 
   const pushToast = useCallback((toast) => {
     // Not crypto.randomUUID(): it is undefined outside a secure context, so on
@@ -61,146 +57,12 @@ export default function DemoShell() {
     setToasts((previous) => previous.filter((toast) => toast.id !== id))
   }, [])
 
-  const dismissRenderJob = useCallback(() => setRenderJob(null), [])
-
-  // Fire-once render dispatch, not polling: /render is a synchronous batch
-  // endpoint (POST only — there is no GET /storyboard/{id} to poll), so a
-  // pendingRenders change triggers exactly one POST /render whose response
-  // already carries the finished-or-failed status for every approved scene.
-  // A successful clip always carries a clip_url; error/timeout clips never
-  // do (see backend/app/routes.py _clip_result call sites), so clip_url
-  // truthiness — not a literal status string — is the success signal.
-  const renderInFlight = useRef(false)
-  const storyboardRef = useRef(storyboard)
-  useEffect(() => { storyboardRef.current = storyboard }, [storyboard])
-  // Read inside the effect's async tail so a scene approved *after* the POST
-  // went out is still recognised as requested when the response covers it.
-  const pendingRef = useRef(pendingRenders)
-  useEffect(() => { pendingRef.current = pendingRenders }, [pendingRenders])
-  const jobOpen = useRef(false)
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    mountedRef.current = true
-    return () => { mountedRef.current = false }
-  }, [])
-  // Drain-on-completion, not abort-on-change: if pendingRenders grows while a
-  // /render POST is in flight, we let the in-flight call finish rather than
-  // aborting it. Aborting mid-flight left queued scenes stranded — the abort
-  // fired the cleanup, but the effect re-run that triggered it had already
-  // early-returned on renderInFlight.current reading true, so nothing kicked
-  // off a follow-up POST once the aborted call's `finally` cleared the flag.
-  // Instead, on completion we subtract only the scene_ids the response
-  // actually covered, so any ids added mid-flight survive and the next
-  // pendingRenders-change re-fires the effect for just those.
-  useEffect(() => {
-    // An empty queue means the batch this job was reporting on is over: the
-    // dock stays up showing what it did, but the next approval opens a new job
-    // with its own clock rather than reviving this one.
-    if (!pendingRenders || pendingRenders.size === 0) {
-      jobOpen.current = false
-      return
-    }
-    if (renderInFlight.current) return
-    renderInFlight.current = true
-    // Stand the dock up now, not when the response lands — the wait is the part
-    // that needs reporting. A follow-up POST from the drain path joins the same
-    // open job (same clock, same rows) rather than starting a second one.
-    const dispatched = [...pendingRenders]
-    if (jobOpen.current) {
-      setRenderJob((previous) => (previous
-        ? { ...previous, ids: [...new Set([...previous.ids, ...dispatched])] }
-        : { ids: dispatched, startedAt: Date.now(), results: {} }))
-    } else {
-      jobOpen.current = true
-      setRenderJob({ ids: dispatched, startedAt: Date.now(), results: {} })
-    }
-    ;(async () => {
-      const processed = new Set()
-      try {
-        const resp = await fetch('/render', {
-          method: 'POST',
-          credentials: 'include',
-        })
-        if (!resp.ok) throw new Error(`Render request failed (HTTP ${resp.status})`)
-        const data = await resp.json()
-        const clips = Array.isArray(data.clips) ? data.clips : []
-        if (!mountedRef.current) return
-        const currentStoryboard = storyboardRef.current
-        // /render answers for *every* approved scene in the session, not just
-        // the ones this call queued, and it serves an unchanged scene straight
-        // from cache. Announcing all of them would re-toast clips the teacher
-        // was already told about on an earlier batch, so only scenes still
-        // waiting in the queue earn a notification — `processed` below still
-        // takes the full list, because draining is a different question.
-        const requested = pendingRef.current ?? new Set()
-        const results = {}
-        for (const clip of clips) {
-          processed.add(clip.scene_id)
-          // The dock tracks what the server last said about every scene in the
-          // batch, so a clip that comes back fine on a follow-up call corrects
-          // a row an earlier failure had marked failed. Only the notification
-          // is scoped — a corrected row is not news worth a second toast.
-          results[clip.scene_id] = clip.clip_url ? 'ok' : 'failed'
-          if (!requested.has(clip.scene_id)) continue
-          const scene = currentStoryboard?.find(s => s.scene_id === clip.scene_id)
-          const title = scene?.detected_summary || 'Scene'
-          if (clip.clip_url) {
-            pushToast({ sceneId: clip.scene_id, title, clipUrl: clip.clip_url, kind: 'ok' })
-          } else {
-            pushToast({ sceneId: clip.scene_id, title, kind: 'warn', message: 'Render failed — open the problem to retry.' })
-          }
-        }
-        setRenderJob((previous) => (previous
-          ? { ...previous, results: { ...previous.results, ...results } }
-          : previous))
-        setStoryboard(prev => prev?.map(s => {
-          const clip = clips.find(c => c.scene_id === s.scene_id)
-          if (!clip) return s
-          return { ...s, status: clip.clip_url ? 'rendered' : 'render_failed', clip_url: clip.clip_url }
-        }) ?? prev)
-        setPendingRenders(prev => {
-          const next = new Set(prev)
-          for (const id of processed) next.delete(id)
-          return next
-        })
-      } catch (err) {
-        if (!mountedRef.current) return
-        pushToast({ title: 'Render error', kind: 'warn', message: err.message })
-        // The dock must not read "finished" over rows that never resolved: this
-        // call failed as a unit, so every scene *it carried* failed. Scenes
-        // approved after it went out are untouched — nothing was attempted for
-        // them yet.
-        setRenderJob((previous) => {
-          if (!previous) return previous
-          // Merged, never rebuilt: a rebuild from `dispatched` alone erased the
-          // verdict on every scene this call did not carry, so a clip that had
-          // already rendered on an earlier call lost its result and its finished
-          // row fell back to "queued". Only ids with no verdict yet are failed —
-          // a scene that already rendered keeps that.
-          const failures = Object.fromEntries(
-            dispatched
-              .filter((id) => previous.results[id] === undefined)
-              .map((id) => [id, 'failed']),
-          )
-          return { ...previous, results: { ...previous.results, ...failures } }
-        })
-        // Drop only what this call carried, exactly as the success path does.
-        // Clearing the whole set used to strand any scene approved mid-flight:
-        // it was never attempted, yet it vanished from the queue and no
-        // follow-up call was ever made for it. Retaining just those cannot spin
-        // — the next call dispatches them, and if it fails too they are
-        // dispatched ids by then and get dropped here.
-        setPendingRenders(prev => {
-          const next = new Set(prev)
-          for (const id of dispatched) next.delete(id)
-          return next
-        })
-      } finally {
-        renderInFlight.current = false
-      }
-    })()
-    // NO cleanup — do NOT abort in flight; see comment above.
-  }, [pendingRenders])
+  const {
+    pendingRenders,
+    setPendingRenders,
+    renderJob,
+    dismissRenderJob,
+  } = useRenderQueue({ storyboard, setStoryboard, pushToast })
 
   async function handleUpload(event) {
     event.preventDefault()
@@ -216,13 +78,13 @@ export default function DemoShell() {
     const form = new FormData()
     form.append('file', file)
     try {
-      const resp = await fetch('/upload', {
+      const response = await fetch('/upload', {
         method: 'POST',
         body: form,
         credentials: 'include',
       })
-      const data = await responseJson(resp, 'Upload failed')
-      if (!resp.ok) throw new Error(responseError(data, 'Upload failed'))
+      const data = await responseJson(response, 'Upload failed')
+      if (!response.ok) throw new Error(responseError(data, 'Upload failed'))
       setCandidates(data.candidates)
       setSelected({})
       setFileName(file.name)
@@ -243,14 +105,14 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch('/options', {
+      const response = await fetch('/options', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_ids: candidateIds }),
       })
-      const data = await responseJson(resp, 'Could not get options')
-      if (!resp.ok) throw new Error(responseError(data, 'Could not get options'))
+      const data = await responseJson(response, 'Could not get options')
+      if (!response.ok) throw new Error(responseError(data, 'Could not get options'))
       const initialPicks = Object.fromEntries(
         data.options
           .filter((item) => item.templates.length > 0)
@@ -274,14 +136,14 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch('/options', {
+      const response = await fetch('/options', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ candidate_ids: [candidateId] }),
       })
-      const data = await responseJson(resp, 'Could not refresh visualizations')
-      if (!resp.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
+      const data = await responseJson(response, 'Could not refresh visualizations')
+      if (!response.ok) throw new Error(responseError(data, 'Could not refresh visualizations'))
       const refreshed = data.options[0]
       if (!refreshed) return
       // If the teacher has since left the visuals stage (e.g. "Back to
@@ -320,16 +182,16 @@ export default function DemoShell() {
         candidate_id: item.candidate_id,
         template: picks[item.candidate_id],
       }))
-      const resp = await fetch('/storyboard', {
+      const response = await fetch('/storyboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ picks: body }),
       })
-      const data = await responseJson(resp, 'Storyboard failed')
-      if (!resp.ok) throw new Error(responseError(data, 'Storyboard failed'))
+      const data = await responseJson(response, 'Storyboard failed')
+      if (!response.ok) throw new Error(responseError(data, 'Storyboard failed'))
       setStoryboard(data.scenes)
-      setDrafts(Object.fromEntries(data.scenes.map((s) => [s.scene_id, s.params])))
+      setDrafts(Object.fromEntries(data.scenes.map((scene) => [scene.scene_id, scene.params])))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -338,9 +200,11 @@ export default function DemoShell() {
   }
 
   function replaceScene(updated, { resetDraft = false } = {}) {
-    setStoryboard((prev) => prev.map((s) => (s.scene_id === updated.scene_id ? updated : s)))
+    setStoryboard((currentStoryboard) => currentStoryboard.map(
+      (scene) => (scene.scene_id === updated.scene_id ? updated : scene),
+    ))
     if (resetDraft) {
-      setDrafts((prev) => ({ ...prev, [updated.scene_id]: updated.params }))
+      setDrafts((currentDrafts) => ({ ...currentDrafts, [updated.scene_id]: updated.params }))
     }
   }
 
@@ -348,21 +212,21 @@ export default function DemoShell() {
     setError(null)
     setLoading(true)
     try {
-      const resp = await fetch(`/storyboard/${sceneId}${path}`, {
+      const response = await fetch(`/storyboard/${sceneId}${path}`, {
         credentials: 'include',
         ...options,
       })
-      const data = await responseJson(resp, 'Action failed')
-      if (resp.status === 422) {
+      const data = await responseJson(response, 'Action failed')
+      if (response.status === 422) {
         const errors = Array.isArray(data?.detail?.errors) ? data.detail.errors : []
         if (errors.length === 0) {
           throw new Error(responseError(data, 'Could not save edits'))
         }
-        setFieldErrors((prev) => ({ ...prev, [sceneId]: errors }))
+        setFieldErrors((currentErrors) => ({ ...currentErrors, [sceneId]: errors }))
         return
       }
-      if (!resp.ok) throw new Error(responseError(data, 'Action failed'))
-      setFieldErrors((prev) => ({ ...prev, [sceneId]: null }))
+      if (!response.ok) throw new Error(responseError(data, 'Action failed'))
+      setFieldErrors((currentErrors) => ({ ...currentErrors, [sceneId]: null }))
       replaceScene(data, { resetDraft })
     } catch (err) {
       setError(err.message)

@@ -209,10 +209,8 @@ def _seed_pending_review_draft(observation_id="obs-1", draft_id=None):
         )
 
 
-# A teaching plan with realistic beat text, used only by the v3 review-evidence
-# test (Step 1 of the brief): the first beat's id must be "reveal_values" so
-# `timeline[0].beat_id` proves the compiled timeline -- not just the teaching
-# plan -- made it through to the review payload.
+# The first beat id proves the compiled timeline, not only the teaching plan,
+# made it through to the review payload.
 def _evidence_plan():
     return TeachingPlanDocument.model_validate({
         "plan_version": 3,
@@ -670,8 +668,7 @@ def test_update_fixture_reordered_or_reformatted_params_count_as_unchanged(clien
 
 
 def test_update_fixture_changed_params_still_invalidates_approval_evidence(client, pending_v3_draft):
-    """The narrowed invalidation must keep Task 10's fail-closed behavior
-    exactly for an actual params change (not just widen it to never fire)."""
+    """An actual params change invalidates approval evidence fail-closed."""
     draft_id = pending_v3_draft.id
     fixture = client.get(f"/meta/drafts/{draft_id}").json()["fixtures"][0]
 
@@ -966,12 +963,8 @@ def test_approve_maps_each_service_exception_to_http_status(exc_cls, expected_st
     assert resp.json()["detail"] == "boom"
 
 
-# ----------------------------------------------------------------- revalidate
-#
-# Issue #63: `update_fixture` correctly clears approval evidence when a
-# reviewer actually changes a fixture's params, but until `/revalidate` existed
-# nothing could rebuild it, so the edited draft could never leave
-# pending_review and rejecting it discarded the correction.
+# Revalidation must rebuild evidence cleared by a real fixture edit so the
+# corrected draft can leave pending review without discarding the correction.
 
 
 @pytest.fixture
@@ -1040,10 +1033,11 @@ def _seed_revalidatable_draft(
 def test_revalidate_after_a_params_edit_restores_evidence_and_allows_approval(
     approval_client, monkeypatch, tmp_path, stubbed_render,
 ):
-    """The issue #63 end-to-end proof: a reviewer corrects a fixture's params,
-    which clears the approval evidence, and revalidation rebuilds it in place
-    so the corrected draft can be approved -- without regenerating and without
-    losing the correction."""
+    """A corrected fixture can be revalidated and approved in place.
+
+    Editing params clears approval evidence; revalidation rebuilds it without
+    regenerating the draft or losing the correction.
+    """
     monkeypatch.setenv("META_REQUIRED_FIXTURE_COUNT", "1")
     get_settings.cache_clear()
     draft_id = _seed_revalidatable_draft(

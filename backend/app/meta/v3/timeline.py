@@ -25,19 +25,12 @@ def schedule_beats(expanded_beats):
     total_weight = sum(beat.weight for beat in expanded_beats)
     cursor = 0.0
     entries = []
-    # The conclusion holds everything it does at one instant, so the final state
-    # the lesson leaves on screen reads as one thing rather than being assembled
-    # in pieces -- and so each of those actions can clear
-    # `MIN_CONCLUSION_HOLD_SECONDS`, which `quality.check_conclusion_hold`
+    # Co-start conclusion actions so the final state reads as one thing and each
+    # action can clear `MIN_CONCLUSION_HOLD_SECONDS`, which `check_conclusion_hold`
     # requires of every final-beat action individually.
     #
-    # Keyed on the last beat that ACTS, which is exactly the notion
-    # `check_conclusion_hold` reads off `program.timeline[-1].beat_id`: a beat
-    # with no actions contributes no timeline entry, so neither site can ever see
-    # it as the conclusion. This used to key on a beat containing a `reveal` of
-    # `evaluated_answer`, so the co-start was a side effect of the answer card --
-    # and a lesson whose answer is one of its own values, declaring no card, had
-    # its conclusion split into sequential slots the hold floor then rejected.
+    # Key on the last beat with actions, matching `check_conclusion_hold`'s use of
+    # `program.timeline[-1].beat_id`; actionless beats never enter the timeline.
     conclusion = next((beat for beat in reversed(expanded_beats) if beat.actions), None)
 
     for beat in expanded_beats:

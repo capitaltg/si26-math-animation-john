@@ -102,7 +102,6 @@ def test_extract_rejects_truncated_array_grid(mock_call):
     from app.pipeline.extraction import TemplateMismatchError, extract_params
     from app.templates.array_grid.params import ArrayGridParams
 
-    # Repro 1: model truncates 2.4 x 1.3 to a 2x2 grid.
     mock_call.return_value = ("report_params", {"rows": 2, "cols": 2})
 
     with pytest.raises(TemplateMismatchError):
@@ -132,7 +131,6 @@ def test_extract_rejects_invented_number_line_operation(mock_call):
     from app.pipeline.extraction import TemplateMismatchError, extract_params
     from app.templates.number_line.params import NumberLineParams
 
-    # Repro 2: fraction-equivalence proof, model invents start=1, subtract 1.
     mock_call.return_value = (
         "report_params",
         {"start": 1, "steps": [{"operation": "subtract", "amount": 1}]},

@@ -100,11 +100,8 @@ def load_enabled_snapshot(
         or version.fingerprint_key not in owned_fingerprints
     ]
 
-    # Shared first, then the caller's own, so an owned version always wins a
-    # name collision rather than whichever row the query happened to return
-    # last. approve_draft_service refuses to create such a collision in the
-    # first place; this keeps the resolution deterministic for rows written
-    # before that check existed, and for any future path that misses it.
+    # Shared first, then caller-owned, so collision resolution stays deterministic
+    # even for legacy rows or publication paths that bypass approval checks.
     entries: dict[str, DynamicSnapshotEntry] = {}
     for owned in (False, True):
         for version, classifier_bullet in visible:

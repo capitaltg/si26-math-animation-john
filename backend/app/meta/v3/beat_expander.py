@@ -71,7 +71,7 @@ _MAX_ELIMINATION_SECONDS = 12.0
 _REGROUP_PART = {"grid": "cell", "object_set": "item"}
 _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 
-# `signed_hop` and `distance_from_zero` (M6) each own one derive/focus beat on
+# `signed_hop` and `distance_from_zero` each own one derive/focus beat on
 # the primary number_line: `signed_hop` draws one directed arrow per
 # consecutive marker pair (see `signed_hop_beat_id`); `distance_from_zero`
 # draws a bracketed span from the origin to each nonzero marker, labelled with
@@ -79,7 +79,7 @@ _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 # still fires on the same beat, so the whole line reads as focused while the
 # arrow / annotation is drawn on top.
 #
-# `equivalence_align` and `common_denominator_bridge` (M2) carry a compile-time
+# `equivalence_align` and `common_denominator_bridge` carry a compile-time
 # shape (which supporting partitions must be declared and which must reveal)
 # AND their own beat-owned focus walks: the align beat highlights the shaded
 # parts of both partitions together, and the bridge beat highlights the LCD
@@ -89,7 +89,7 @@ _MAGNITUDE_PART = {"bar": "segment", "number_line": "marker"}
 _EQUIVALENCE_ALIGN_STRATEGY = "equivalence_align"
 _BRIDGE_STRATEGY = "common_denominator_bridge"
 
-# `rotation` (M22) stages one `RotateAction` per iteration on the plan's single
+# `rotation` stages one `RotateAction` per iteration on the plan's single
 # focus-or-derive beat. Unlike every strategy above -- which owns the FIRST
 # focus/derive beat naming its primary visual, tolerating later focus/derive
 # beats as ordinary role changes -- `rotation` requires there be exactly one
@@ -591,10 +591,8 @@ class BeatExpander:
             return actions
 
         if beat.kind == "organize" and plan.strategy == "pair_elimination":
-            # Iterate pairs, not indices. The middle item is never reached, so
-            # the old `if index == middle: continue` guard goes with the loop it
-            # guarded -- and emitting a pair adjacently is what lets the
-            # timeline batch both partners into one slot.
+            # Symmetric pairs skip the middle item and stay adjacent so the
+            # timeline can batch both partners into one slot.
             count = len(plan.primary_visual.values)
             actions = []
             for offset in range(count // 2):
@@ -802,7 +800,7 @@ class BeatExpander:
         return actions
 
     def _rotation_actions(self, plan):
-        """One `RotateAction` per iteration, in order 1..N (M22).
+        """One `RotateAction` per iteration, in order 1..N.
 
         `rotation_iterations` is read off the PLAN's `CoordinatePlaneVisual` --
         the one the plan author declared and `_validate_rotation_compatibility`
@@ -1305,7 +1303,7 @@ def signed_hop_beat_id(plan):
     that names the primary number_line owns the hops; later derive/focus beats
     fall through so a plan with two derive beats does not double-stage the
     arrows. Filtering by `beat.targets` also lets a focus beat that only
-    names a specific marker (a `focus_end` in the M6 fixtures) run its own
+    names a specific marker (such as `focus_end`) run its own
     generic role change without being commandeered by the arrow pass.
     """
     if plan.strategy != "signed_hop":

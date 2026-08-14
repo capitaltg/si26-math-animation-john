@@ -1,4 +1,4 @@
-"""End-to-end acceptance fixture for an approved dynamic template (Task 11).
+"""End-to-end acceptance fixture for an approved dynamic template.
 
 Drives a real request through the entire dynamic-template stack --
 classify_candidate -> resolve_dynamic_ref -> get_template -> extract_params ->
@@ -6,12 +6,8 @@ assemble_scene -> render_scene_to_mp4/thumbnail -- mocking only the two true
 external boundaries: Bedrock (`call_with_tool`, at both its classification.py
 and extraction.py call sites) and the render subprocess (`subprocess.run`).
 
-No shared tests/meta/conftest.py exists yet (see test_dynamic_templates.py's
-own comment on this), and this task's Code Organization instructions say to
-create only this one file, so the engine/session fixtures below duplicate the
-same local pattern used across tests/meta/ (test_approval.py,
-test_validation_pipeline.py, test_drafts.py, test_dynamic_templates.py, ...)
-rather than promoting anything to a new conftest.py.
+The local engine/session fixtures keep this end-to-end setup isolated from the
+different database lifecycles used by other meta test modules.
 """
 
 from unittest.mock import MagicMock, patch
