@@ -229,31 +229,45 @@ def test_a_plan_may_not_stage_the_substitution_itself():
         TeachingPlanDocument.model_validate(payload)
 
 
-@pytest.mark.parametrize("index", [None, 0])
 @pytest.mark.parametrize("strategy", ["unit_substitution", "unit_rate"])
-def test_a_plan_may_not_name_the_source_label(strategy, index):
-    """`source_label` is as unindexable as `target_label`, and says so here.
+def test_a_plan_may_not_name_the_source_label_group(strategy):
+    """The unindexed part means "the km label on every box", which no plan can name.
 
-    A plan naming it means "the km label on every box". Reaching the compiler
-    instead, the unindexed form fails as `missing_semantic_index` and the hint
-    ("supply the part index") asks for the indexed form -- which names one box
-    and leaves the rest, and which the range check cannot even reject when the
-    box count comes from a field ref rather than a literal.
+    Reaching the compiler instead it fails as `missing_semantic_index`, whose
+    "supply the part index" hint answers a different question: one index names
+    one box and drops the rest without saying so.
     """
     from app.meta.dsl.teaching_plan import TeachingPlanDocument
     from pydantic import ValidationError
 
     payload = _tape_plan(strategy=strategy).model_dump()
     payload["beats"][1]["targets"] = [
-        {"visual_ref": "trail_tape", "part": "source_label", "index": index},
+        {"visual_ref": "trail_tape", "part": "source_label", "index": None},
     ]
 
     with pytest.raises(ValidationError, match="source_label"):
         TeachingPlanDocument.model_validate(payload)
 
 
+@pytest.mark.parametrize("strategy", ["unit_substitution", "unit_rate"])
+def test_a_plan_may_name_one_boxs_source_label(strategy):
+    """`source_label[i]` is a declared part like `box[i]`, and the guard leaves it alone.
+
+    Index 0 is always there to name: a tape needs a positive value, and
+    `unit_rate` is held to a full source unit besides.
+    """
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan(strategy=strategy).model_dump()
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "source_label", "index": 0},
+    ]
+
+    _compile(TeachingPlanDocument.model_validate(payload))
+
+
 def test_a_plan_may_name_the_whole_tape_where_it_wanted_the_source_labels():
-    """The repair the message names has to be one the plan can actually take."""
+    """The other repair the message names, also one the plan can actually take."""
     from app.meta.dsl.teaching_plan import TeachingPlanDocument
 
     payload = _tape_plan().model_dump()
