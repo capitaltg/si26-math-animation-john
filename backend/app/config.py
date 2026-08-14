@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     #: survives to the app. Set false when the backend is reachable without
     #: that edge in front, so `enforce_bedrock_quota` keys the per-IP cap off
     #: the real socket instead of a header the caller controls.
+    #:
+    #: Depends on uvicorn running with `--no-proxy-headers`; see
+    #: `app.middleware.ClientIPMiddleware`.
     trust_forwarded_for: bool = True
 
     # Meta-template generation is opt-in.

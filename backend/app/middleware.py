@@ -28,6 +28,16 @@ class ClientIPMiddleware(BaseHTTPMiddleware):
     `{remote_host}`, so a client-supplied header never reaches here. Deploy the
     backend without that edge and the header is caller-controlled: turn the
     setting off so the socket peer is used instead.
+
+    Turning it off only works because uvicorn is started with
+    `--no-proxy-headers` at every launch site (Dockerfile.backend,
+    docker-compose.dev.yml, scripts/run-backend.sh, playwright.config.js).
+    uvicorn's own ProxyHeadersMiddleware defaults ON and rewrites
+    `scope["client"]` from `X-Forwarded-For` before this middleware runs
+    whenever the peer is in `forwarded_allow_ips` (default 127.0.0.1) -- which
+    would make the `request.client.host` fallback below return the forwarded
+    value, silently defeating the setting. `tests/test_middleware.py` guards
+    the flag.
     """
 
     async def dispatch(self, request: Request, call_next):
