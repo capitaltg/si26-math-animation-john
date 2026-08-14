@@ -725,6 +725,28 @@ def test_shared_approval_is_not_relaxed_by_a_small_build(engine, session):
         )
 
 
+def test_teacher_shared_approval_uses_the_full_fixture_threshold(engine, session):
+    """A teacher's session ID must not relax evidence for a shared version."""
+    _seed_draft(
+        session,
+        draft_id="draft-teacher-shared",
+        fingerprint_key="k-teacher-shared",
+        positive_count=1,
+        trigger_count=1,
+        job_owner="session-a",
+    )
+
+    with pytest.raises(ApprovalPreconditionError, match="too few verified real fixtures"):
+        approve_draft_service(
+            draft_id="draft-teacher-shared",
+            template_name="teacher_shared_one",
+            reviewer_label="teacher",
+            math_semantics_confirmed=True,
+            owner_session_id="session-a",
+            publish_shared=True,
+        )
+
+
 def test_one_owners_approval_leaves_another_owners_version_enabled(engine, session):
     _seed_draft(session, draft_id="draft-a", fingerprint_key="k1", job_owner="session-a")
     _seed_draft(session, draft_id="draft-b", fingerprint_key="k1", job_owner="session-b")

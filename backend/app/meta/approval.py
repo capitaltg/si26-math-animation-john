@@ -128,7 +128,11 @@ class ApprovalConflictError(ApprovalError):
     """Lost a race with a concurrent approval (maps to HTTP 409)."""
 
 
-def _required_fixture_count(session, draft: TemplateDraft, owner_session_id: str | None) -> int:
+def _required_fixture_count(
+    session,
+    draft: TemplateDraft,
+    evidence_owner_session_id: str | None,
+) -> int:
     """How many verified real fixtures this approval demands.
 
     A shared version always demands the configured count. A session-scoped one
@@ -142,7 +146,7 @@ def _required_fixture_count(session, draft: TemplateDraft, owner_session_id: str
     generation can never lower the bar a draft is held to.
     """
     configured = get_settings().meta_required_fixture_count
-    if owner_session_id is None:
+    if evidence_owner_session_id is None:
         return configured
     job = session.get(GenerationJob, draft.job_id)
     built_from = len(json.loads(job.trigger_observation_ids)) if job else 0
@@ -196,7 +200,7 @@ def _require_publishable_draft(
     draft: TemplateDraft,
     *,
     math_semantics_confirmed: bool,
-    effective_owner: str | None,
+    evidence_owner_session_id: str | None,
 ) -> None:
     if math_semantics_confirmed is not True:
         raise ApprovalPreconditionError(
@@ -237,7 +241,7 @@ def _require_publishable_draft(
         )
 
     if _verified_fixture_count(session, draft.id) < _required_fixture_count(
-        session, draft, effective_owner
+        session, draft, evidence_owner_session_id
     ):
         raise ApprovalPreconditionError(
             "Draft has too few verified real fixtures to publish"
@@ -337,19 +341,19 @@ def approve_draft_service(
     shared publication use the full configured fixture count; ``publish_shared``
     always writes ``owner_session_id=NULL`` on the version row.
     """
-    settings = get_settings()
     now = datetime.now(timezone.utc)
 
     try:
         with meta_session() as session:
             draft = _require_approvable_draft(session, draft_id)
-            # Sharing is ownerless evidence: require the full fixture threshold.
-            effective_owner = None if publish_shared else owner_session_id
+            published_owner_session_id = None if publish_shared else owner_session_id
+            # Evidence follows publication visibility, not caller identity: a
+            # shared row must satisfy the full fixture threshold.
             _require_publishable_draft(
                 session,
                 draft,
                 math_semantics_confirmed=math_semantics_confirmed,
-                effective_owner=effective_owner,
+                evidence_owner_session_id=published_owner_session_id,
             )
 
             # Revocation remains a fingerprint-wide publishing veto.
@@ -366,9 +370,8 @@ def approve_draft_service(
                     f"Fingerprint {draft.fingerprint_key} has a revoked live version"
                 )
 
-            visibility_scope = None if publish_shared else owner_session_id
             _require_available_template_name(
-                session, draft, template_name, visibility_scope
+                session, draft, template_name, published_owner_session_id
             )
 
             # Claim before touching version rows so concurrent approval loses cleanly.
@@ -397,7 +400,7 @@ def approve_draft_service(
             version = _new_template_version(
                 draft,
                 template_name,
-                effective_owner,
+                published_owner_session_id,
                 now,
             )
             session.add(version)
