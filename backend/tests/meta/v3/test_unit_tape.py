@@ -229,6 +229,39 @@ def test_a_plan_may_not_stage_the_substitution_itself():
         TeachingPlanDocument.model_validate(payload)
 
 
+@pytest.mark.parametrize("index", [None, 0])
+@pytest.mark.parametrize("strategy", ["unit_substitution", "unit_rate"])
+def test_a_plan_may_not_name_the_source_label(strategy, index):
+    """`source_label` is as unindexable as `target_label`, and says so here.
+
+    A plan naming it means "the km label on every box". Reaching the compiler
+    instead, the unindexed form fails as `missing_semantic_index` and the hint
+    ("supply the part index") asks for the indexed form -- which names one box
+    and leaves the rest, and which the range check cannot even reject when the
+    box count comes from a field ref rather than a literal.
+    """
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+    from pydantic import ValidationError
+
+    payload = _tape_plan(strategy=strategy).model_dump()
+    payload["beats"][1]["targets"] = [
+        {"visual_ref": "trail_tape", "part": "source_label", "index": index},
+    ]
+
+    with pytest.raises(ValidationError, match="source_label"):
+        TeachingPlanDocument.model_validate(payload)
+
+
+def test_a_plan_may_name_the_whole_tape_where_it_wanted_the_source_labels():
+    """The repair the message names has to be one the plan can actually take."""
+    from app.meta.dsl.teaching_plan import TeachingPlanDocument
+
+    payload = _tape_plan().model_dump()
+    payload["beats"][1]["targets"] = [{"visual_ref": "trail_tape"}]
+
+    _compile(TeachingPlanDocument.model_validate(payload))
+
+
 def test_the_tape_factory_never_runs_for_an_oversized_value():
     """The guard runs before the factory, as it does for `bar`."""
     from types import SimpleNamespace

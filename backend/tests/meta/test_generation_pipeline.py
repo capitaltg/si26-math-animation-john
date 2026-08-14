@@ -299,6 +299,38 @@ def test_generate_and_validate_revision_retries_off_schema_proposal_with_feedbac
     assert calls[-1]["prior_proposal"] is None
 
 
+def test_an_off_schema_attempt_is_logged_like_a_compile_failure(monkeypatch, engine, caplog):
+    """An attempt that never reaches the compiler still has to show up in the log.
+
+    Unlogged, a run whose budget goes mostly to off-schema proposals reads as a
+    run that made a single attempt, and the count is the first thing worth
+    knowing when a job lands in manual authoring.
+    """
+    import logging
+
+    from app.meta.generation_pipeline import generate_and_validate_revision
+
+    proposal = _proposal()
+    calls = []
+
+    def propose(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            _schema_violation()
+        return proposal
+
+    monkeypatch.setattr("app.meta.generation_pipeline.propose_template_draft", propose)
+    monkeypatch.setattr("app.meta.generation_pipeline.validate_candidate", lambda *a, **k: _candidate(proposal))
+    job, observations = _running_job_and_observations()
+
+    with caplog.at_level(logging.WARNING, logger="app.meta.generation_pipeline"):
+        generate_and_validate_revision(job=job, fingerprint=_fingerprint(), observations=observations)
+
+    records = [record for record in caplog.records if "tool schema" in record.getMessage()]
+    assert len(records) == 1
+    assert "draft_schema_invalid" in records[0].getMessage()
+
+
 def test_run_generation_job_marks_persistent_schema_failure_manual_not_generic_error(monkeypatch, engine):
     from app.meta.generation_pipeline import run_generation_job
 

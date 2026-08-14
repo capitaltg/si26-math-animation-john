@@ -109,6 +109,16 @@ def generate_and_validate_revision(
                 "path": last_failure.path,
                 "hint": last_failure.hint,
             }
+            # Logged at the same level as the compile-stage failure below. An
+            # attempt that dies here never reaches the compiler, so without this
+            # a run that spends most of its budget off-schema looks in the log
+            # like a run that only ever made one attempt.
+            logger.warning(
+                "Draft attempt failed the tool schema: code=%s path=%s hint=%s",
+                last_failure.code,
+                last_failure.path,
+                last_failure.hint,
+            )
             continue
         # Ungrounded-positive filtering runs BEFORE observation dedup so an
         # ungrounded fixture that happens to be ordered first for its

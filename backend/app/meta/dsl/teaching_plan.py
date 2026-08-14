@@ -754,6 +754,15 @@ class TeachingPlanDocument(BaseModel):
         box's label and would leave the rest unrevealed while still looking like
         an affordance. Same reasoning as `require_pair_elimination_shape`.
 
+        `source_label` is rejected for the indexing half of that reasoning alone:
+        the tape renders it alongside the boxes rather than deferring it, so a
+        plan naming it wants every box's unit label and hits the same
+        unindexable group part. Left unguarded the target reaches
+        `_validate_target` and fails as `missing_semantic_index`, whose "supply
+        the part index" hint points at a single box -- a repair that silently
+        drops the rest of the tape, and one the box count (a fixture param) may
+        not even admit.
+
         `unit_rate` reuses the same target_label group reveal to name the "per
         one" pairing in every box, so it inherits the same shape constraint.
         """
@@ -779,5 +788,11 @@ class TeachingPlanDocument(BaseModel):
                 raise ValueError(
                     f"beat {beat.id!r} names target_label, which {self.strategy} "
                     "stages on its own; remove the target or the custom action"
+                )
+            if any(target.part == "source_label" for target in targets):
+                raise ValueError(
+                    f"beat {beat.id!r} names source_label, which the tape already "
+                    "renders on every box; drop `part` to name the whole tape, or "
+                    "remove the target"
                 )
         return self
