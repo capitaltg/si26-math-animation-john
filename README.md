@@ -283,10 +283,18 @@ python3 -m venv ../.venv
 ../.venv/bin/pip install -e ".[dev]"
 
 # configure credentials (see Configuration below), then:
-PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH" ../.venv/bin/uvicorn app.main:app --port 8000 --reload
+PATH="/Library/TeX/texbin:/opt/homebrew/bin:$PATH" ../.venv/bin/uvicorn app.main:app --port 8000 --reload --no-proxy-headers
 ```
 
 Backend serves on `http://localhost:8000`; interactive API docs at `/docs`.
+
+`--no-proxy-headers` is not optional. uvicorn's proxy-header handling defaults to
+**on** and rewrites the client address from `X-Forwarded-For` before the app sees
+it, whenever the connecting peer is in `forwarded_allow_ips` — and the default
+allows loopback, which is exactly this setup. Without the flag any local caller
+can name themselves with a header, and `TRUST_FORWARDED_FOR=false` cannot take
+effect. `backend/tests/test_middleware.py` scans the repo and fails on any
+uvicorn launch command missing it.
 
 #### Single process only
 

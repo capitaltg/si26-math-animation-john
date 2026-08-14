@@ -8,6 +8,7 @@ setting silently does nothing. Both halves are tested here: the middleware's
 own contract, and the `--no-proxy-headers` flag that makes it reachable.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -69,32 +70,88 @@ def test_missing_client_yields_none(monkeypatch):
     assert _extract_client_ip(_request(peer=None, xff=SPOOFED)) is None
 
 
-#: Every place this app is started with uvicorn. `--no-proxy-headers` has to be
-#: on all of them, or `ClientIPMiddleware` is not the component that decides
-#: whether `X-Forwarded-For` may name the client -- uvicorn is, before it runs.
-_UVICORN_LAUNCH_SITES = (
-    "Dockerfile.backend",
-    "docker-compose.dev.yml",
-    "scripts/run-backend.sh",
-    "frontend/playwright.config.js",
-)
+# --------------------------------------------------------------------------
+# `--no-proxy-headers` must be on EVERY uvicorn launch command in the repo --
+# scripts, compose files, the Dockerfile, and any doc a developer copies from.
+# Miss one and `ClientIPMiddleware` is not the component deciding whether
+# `X-Forwarded-For` may name the client; uvicorn is, before it ever runs.
+#
+# Deliberately a repo scan rather than a list of known files. A list is an
+# inclusion filter: it fails open for the next launch site someone adds, which
+# is exactly how the README command was missed. Scanning defaults to deny, so a
+# new one has to opt IN to being correct.
+
+#: Pruned during the walk. Build output, dependencies and VCS internals hold no
+#: launch command anyone runs, and node_modules alone makes an unpruned walk
+#: take orders of magnitude longer.
+_SKIP_DIRS = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
+    ".worktrees", ".vite", "dist", "build", "htmlcov", "media", "var",
+    "playwright-report", "test-results", "blob-report", ".impeccable",
+})
+
+#: Binary assets: reading them wastes time and can only produce mojibake.
+_SKIP_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".woff", ".woff2",
+    ".ttf", ".otf", ".pptx", ".pdf", ".pyc", ".db", ".sqlite", ".ico", ".zip",
+})
+
+_THIS_FILE = Path(__file__).resolve()
 
 
-@pytest.mark.skipif(
+def _uvicorn_launch_lines() -> list[tuple[str, int, str]]:
+    """Every line in the repo that starts this app under uvicorn."""
+    found: list[tuple[str, int, str]] = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix.lower() in _SKIP_SUFFIXES:
+                continue
+            if path.resolve() == _THIS_FILE:
+                # This file spells out the pattern it searches for, so it would
+                # match itself on every run.
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for number, line in enumerate(text.splitlines(), start=1):
+                if "uvicorn" in line and "app.main:app" in line:
+                    relative = path.relative_to(REPO_ROOT).as_posix()
+                    found.append((relative, number, line.strip()))
+    return found
+
+
+requires_repo_root = pytest.mark.skipif(
     not (REPO_ROOT / "Dockerfile.backend").exists(),
     reason="repo root not checked out (the backend image copies only backend/)",
 )
-@pytest.mark.parametrize("relative_path", _UVICORN_LAUNCH_SITES)
-def test_uvicorn_is_launched_without_proxy_header_processing(relative_path):
-    lines = (REPO_ROOT / relative_path).read_text(encoding="utf-8").splitlines()
-    launches = [
-        line for line in lines if "uvicorn" in line and "app.main:app" in line
+
+
+@requires_repo_root
+def test_the_scan_actually_finds_launch_commands():
+    """Guards the guard.
+
+    If the walk breaks -- wrong root, over-eager prune, changed invocation
+    style -- the check below would find nothing to object to and pass forever.
+    """
+    assert _uvicorn_launch_lines(), (
+        "found no uvicorn launch command anywhere in the repo; the scan in "
+        "this module is broken, not the repo"
+    )
+
+
+@requires_repo_root
+def test_every_uvicorn_launch_site_disables_proxy_header_processing():
+    offenders = [
+        f"  {relative}:{number}\n      {line}"
+        for relative, number, line in _uvicorn_launch_lines()
+        if "--no-proxy-headers" not in line
     ]
-    assert launches, f"no uvicorn launch line found in {relative_path}"
-    for line in launches:
-        assert "--no-proxy-headers" in line, (
-            f"{relative_path} starts uvicorn without --no-proxy-headers, so "
-            f"uvicorn rewrites scope['client'] from X-Forwarded-For before "
-            f"ClientIPMiddleware runs and TRUST_FORWARDED_FOR=false cannot "
-            f"take effect:\n    {line.strip()}"
-        )
+    assert not offenders, (
+        "these start uvicorn without --no-proxy-headers, so uvicorn rewrites "
+        "scope['client'] from X-Forwarded-For before ClientIPMiddleware runs "
+        "and TRUST_FORWARDED_FOR=false cannot take effect:\n"
+        + "\n".join(offenders)
+    )
